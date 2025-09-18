@@ -141,7 +141,8 @@
 
         const colors = {
             'debug': '#ff6b6b',
-            'opt': '#4ecdc4'
+            'opt': '#4ecdc4',
+            'condprof': '#ffa500'
         };
 
         async function fetchData() {
@@ -163,14 +164,26 @@
                         else if (rawPlatform.includes('macos')) platform = 'mac';
                     }
 
-                    // Extract build type from name (opt or debug)
-                    const buildType = row.name.includes('/debug-') ? 'debug' : 'opt';
+                    // Extract build type from name (opt or debug) and check for condprof
+                    const isDebug = row.name.includes('/debug-');
+                    const isCondprof = row.name.includes('-condprof');
+                    let buildType;
+                    if (isCondprof) {
+                        buildType = 'condprof';
+                    } else if (isDebug) {
+                        buildType = 'debug';
+                    } else {
+                        buildType = 'opt';
+                    }
+
+                    // Extract suite from name (part after the last slash and before any numbers)
+                    const suite = row.name.split('/').pop().replace(/-\d+$/, '');
 
                     return {
                         ...row,
                         platform: platform,
                         build_type: buildType,
-                        suite: row.job_type,
+                        suite: suite,
                         date: row.start_time,
                         duration_seconds: row.time_seconds,
                         task_id: row.task_id,
@@ -210,7 +223,7 @@
             container.appendChild(anchor);
 
             const traces = [];
-            const buildTypes = ['debug', 'opt'];
+            const buildTypes = ['debug', 'opt', 'condprof'];
 
             buildTypes.forEach(buildType => {
                 const filteredData = platformData.filter(d => d.build_type === buildType);
@@ -221,7 +234,7 @@
                     y: filteredData.map(d => d.duration_seconds / 60), // Convert to minutes
                     mode: 'markers',
                     type: 'scatter',
-                    name: buildType.toUpperCase(),
+                    name: buildType.toUpperCase().replace('-', ' '),
                     marker: {
                         color: colors[buildType],
                         size: 8,
