@@ -34,15 +34,6 @@
         </div>
 
         <div class="charts-section">
-            <h2 id="shippable-builds">Shippable Builds</h2>
-            <div id="instrumented-shippable-chart" class="charts-grid">
-                <div class="chart-container">
-                    <div class="loading">Loading data...</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="charts-section">
             <h2 id="artifact-builds">Artifact Builds</h2>
             <div id="artifact-chart" class="charts-grid">
                 <div class="chart-container">
@@ -52,15 +43,29 @@
         </div>
 
         <div class="charts-section">
-            <h2 id="special-builds">Special Builds</h2>
-            <div id="nonunified-chart" class="charts-grid">
+            <h2 id="shippable-builds">Shippable Builds</h2>
+            <div id="shippable-chart" class="charts-grid">
                 <div class="chart-container">
-                    <div class="loading">Loading non-unified data...</div>
+                    <div class="loading">Loading shippable data...</div>
+                </div>
+            </div>
+            <div id="instrumented-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading instrumented data...</div>
                 </div>
             </div>
             <div id="nightlyasrelease-chart" class="charts-grid">
                 <div class="chart-container">
                     <div class="loading">Loading nightly as release data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="special-builds">Special Builds</h2>
+            <div id="nonunified-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading non-unified data...</div>
                 </div>
             </div>
             <div id="asan-chart" class="charts-grid">
@@ -149,6 +154,8 @@
                         } else if (row.name.includes('Decision Task for cron')) {
                             subType = 'cron';
                         }
+                    } else if (row.name.includes('geckoview-fat-aar-shippable')) {
+                        category = 'shippable';
                     } else if (row.name.includes('artifact') ||
                               row.name.includes('geckoview-fat-aar')) {
                         category = 'artifact';
@@ -167,11 +174,9 @@
                     } else if (row.name.includes('nightlyasrelease')) {
                         category = 'nightlyasrelease';
                     } else if (row.name.includes('instrumented')) {
-                        category = 'instrumented-shippable';
-                        subType = 'instrumented';
+                        category = 'instrumented';
                     } else if (row.name.includes('shippable')) {
-                        category = 'instrumented-shippable';
-                        subType = 'shippable';
+                        category = 'shippable';
                     } else if (row.name.includes('non-unified') || row.name.includes('-plain')) {
                         // Non-unified builds - all go to same category
                         category = 'nonunified';
@@ -224,12 +229,10 @@
 
             const traces = [];
 
-            if (category === 'instrumented-shippable' || category === 'nonunified' || category === 'decision') {
+            if (category === 'nonunified' || category === 'decision') {
                 // Special handling for builds with subtypes
                 let subTypes;
-                if (category === 'instrumented-shippable') {
-                    subTypes = ['instrumented', 'shippable'];
-                } else if (category === 'nonunified') {
+                if (category === 'nonunified') {
                     subTypes = ['debug', 'opt', 'plain'];
                 } else if (category === 'decision') {
                     subTypes = ['gecko', 'cron'];
@@ -357,8 +360,8 @@
 
         function renderCharts() {
             // Clear all charts
-            ['unified-opt', 'unified-debug', 'nonunified',
-             'instrumented-shippable', 'nightlyasrelease', 'asan', 'tsan',
+            ['unified-opt', 'unified-debug', 'shippable', 'instrumented',
+             'nightlyasrelease', 'nonunified', 'asan', 'tsan',
              'fuzzing', 'ccov', 'reproduced', 'gcc', 'artifact', 'decision'].forEach(id => {
                 const element = document.getElementById(`${id}-chart`);
                 if (element) element.innerHTML = '';
@@ -373,16 +376,17 @@
             const chartConfigs = [
                 { category: 'unified-opt', title: 'Unified Opt Builds' },
                 { category: 'unified-debug', title: 'Unified Debug Builds' },
-                { category: 'nonunified', title: 'Non-Unified Builds' },
-                { category: 'instrumented-shippable', title: 'Instrumented/Shippable Builds' },
+                { category: 'artifact', title: 'Artifact Builds' },
+                { category: 'shippable', title: 'Shippable Builds' },
+                { category: 'instrumented', title: 'Instrumented Builds' },
                 { category: 'nightlyasrelease', title: 'Nightly as Release Builds' },
+                { category: 'nonunified', title: 'Non-Unified Builds' },
                 { category: 'asan', title: 'ASAN Builds' },
                 { category: 'tsan', title: 'TSAN Builds' },
                 { category: 'fuzzing', title: 'Fuzzing Builds' },
                 { category: 'ccov', title: 'Code Coverage Builds' },
                 { category: 'reproduced', title: 'Reproduced Builds' },
                 { category: 'gcc', title: 'GCC Builds' },
-                { category: 'artifact', title: 'Artifact Builds' },
                 { category: 'decision', title: 'Decision Tasks' }
             ];
 
