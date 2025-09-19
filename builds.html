@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firefox Build Times Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Firefox Build Times Visualization</h1>
+
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div class="charts-section">
+            <h2 id="opt-builds">Opt Builds</h2>
+            <div id="unified-opt-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="debug-builds">Debug Builds</h2>
+            <div id="unified-debug-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="shippable-builds">Shippable Builds</h2>
+            <div id="instrumented-shippable-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="artifact-builds">Artifact Builds</h2>
+            <div id="artifact-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="special-builds">Special Builds</h2>
+            <div id="nonunified-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading non-unified data...</div>
+                </div>
+            </div>
+            <div id="nightlyasrelease-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading nightly as release data...</div>
+                </div>
+            </div>
+            <div id="asan-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading ASAN data...</div>
+                </div>
+            </div>
+            <div id="tsan-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading TSAN data...</div>
+                </div>
+            </div>
+            <div id="fuzzing-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading fuzzing data...</div>
+                </div>
+            </div>
+            <div id="ccov-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading code coverage data...</div>
+                </div>
+            </div>
+            <div id="reproduced-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading reproduced data...</div>
+                </div>
+            </div>
+            <div id="gcc-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading GCC data...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="decision-tasks">Decision Tasks</h2>
+            <div id="decision-chart" class="charts-grid">
+                <div class="chart-container">
+                    <div class="loading">Loading decision task data...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allData = null;
+
+        // Platform-based colors for builds
+        const platformColors = {
+            'android': '#2ca02c',       // Green
+            'linux': '#1f77b4',         // Blue
+            'windows': '#ff7f0e',       // Orange
+            'mac': '#9467bd',           // Purple
+            'unknown': '#7f7f7f'        // Gray
+        };
+
+        // Special type colors for instrumented/shippable, non-unified, and decision tasks
+        const specialColors = {
+            'instrumented': '#e377c2',  // Pink
+            'shippable': '#17becf',     // Cyan
+            'debug': '#ff6b6b',         // Red
+            'opt': '#4ecdc4',           // Teal
+            'plain': '#95a5a6',         // Gray
+            'gecko': '#d62728',         // Dark red
+            'cron': '#2ca02c'           // Green
+        };
+
+        async function fetchData() {
+            try {
+                const response = await fetch('https://sql.telemetry.mozilla.org/api/queries/110664/results.json?api_key=W73TRh5t1ZalwkeCcz5GeOnh6a1qNFk38YQPbi3D');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const result = await response.json();
+
+                // Process the data to extract platform and build type
+                const processedData = result.query_result.data.rows.map(row => {
+                    const platform = extractPlatform(row.name);
+
+                    // Categorize builds
+                    let category = '';
+                    let subType = '';
+
+                    if (row.name.includes('Decision Task')) {
+                        category = 'decision';
+                        if (row.name.includes('Gecko Decision Task')) {
+                            subType = 'gecko';
+                        } else if (row.name.includes('Decision Task for cron')) {
+                            subType = 'cron';
+                        }
+                    } else if (row.name.includes('artifact') ||
+                              row.name.includes('geckoview-fat-aar')) {
+                        category = 'artifact';
+                    } else if (row.name.includes('asan')) {
+                        category = 'asan';
+                    } else if (row.name.includes('tsan')) {
+                        category = 'tsan';
+                    } else if (row.name.includes('ccov')) {
+                        category = 'ccov';
+                    } else if (row.name.includes('fuzzing')) {
+                        category = 'fuzzing';
+                    } else if (row.name.includes('-reproduced')) {
+                        category = 'reproduced';
+                    } else if (row.name.includes('-gcc')) {
+                        category = 'gcc';
+                    } else if (row.name.includes('nightlyasrelease')) {
+                        category = 'nightlyasrelease';
+                    } else if (row.name.includes('instrumented')) {
+                        category = 'instrumented-shippable';
+                        subType = 'instrumented';
+                    } else if (row.name.includes('shippable')) {
+                        category = 'instrumented-shippable';
+                        subType = 'shippable';
+                    } else if (row.name.includes('non-unified') || row.name.includes('-plain')) {
+                        // Non-unified builds - all go to same category
+                        category = 'nonunified';
+                        if (row.name.includes('/debug')) {
+                            subType = 'debug';
+                        } else if (row.name.includes('/opt')) {
+                            subType = 'opt';
+                        } else {
+                            subType = 'plain';
+                        }
+                    } else {
+                        // Regular unified builds
+                        if (row.name.includes('/debug')) {
+                            category = 'unified-debug';
+                        } else if (row.name.includes('/opt')) {
+                            category = 'unified-opt';
+                        }
+                    }
+
+                    return {
+                        ...row,
+                        platform: platform,
+                        category: category,
+                        subType: subType,
+                        date: row.start_time,
+                        duration_seconds: row.time_seconds,
+                        task_id: row.task_id,
+                        retry_id: row.retry_id,
+                        name: row.name
+                    };
+                });
+
+                return processedData;
+            } catch (error) {
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                throw error;
+            }
+        }
+
+        function createBuildChart(data, category, title) {
+            const containerId = `${category}-chart`;
+            const containerElement = document.getElementById(containerId);
+            if (!containerElement || data.length === 0) return;
+
+            const container = document.createElement('div');
+            container.className = 'chart-container';
+            container.id = `chart-${category}`;
+            containerElement.appendChild(container);
+
+            const traces = [];
+
+            if (category === 'instrumented-shippable' || category === 'nonunified' || category === 'decision') {
+                // Special handling for builds with subtypes
+                let subTypes;
+                if (category === 'instrumented-shippable') {
+                    subTypes = ['instrumented', 'shippable'];
+                } else if (category === 'nonunified') {
+                    subTypes = ['debug', 'opt', 'plain'];
+                } else if (category === 'decision') {
+                    subTypes = ['gecko', 'cron'];
+                }
+
+                subTypes.forEach(subType => {
+                    const filteredData = data.filter(d => d.subType === subType);
+                    if (filteredData.length > 0) {
+                        const trace = {
+                            x: filteredData.map(d => new Date(d.date)),
+                            y: filteredData.map(d => d.duration_seconds / 60),
+                            mode: 'markers',
+                            type: 'scatter',
+                            name: subType.charAt(0).toUpperCase() + subType.slice(1),
+                            marker: {
+                                color: specialColors[subType],
+                                size: 8,
+                                opacity: 0.7
+                            },
+                            customdata: filteredData.map(d => ({
+                                name: d.name,
+                                taskId: d.task_id,
+                                retryId: d.retry_id,
+                                duration: d.duration_seconds,
+                                durationStr: formatDuration(d.duration_seconds),
+                                platform: d.platform,
+                                repository: d.repository
+                            })),
+                            hovertemplate: '<b>%{customdata.name}</b><br>' +
+                                           'Repository: %{customdata.repository}<br>' +
+                                           'Platform: %{customdata.platform}<br>' +
+                                           'Duration: %{customdata.durationStr}<br>' +
+                                           'Date: %{x|%Y-%m-%d %H:%M}<br>' +
+                                           '<i>Click to view profile</i><br>' +
+                                           '<extra></extra>'
+                        };
+                        traces.push(trace);
+                    }
+                });
+            } else {
+                // Group by platform for other categories
+                Object.keys(platformColors).forEach(platform => {
+                    const platformData = data.filter(d => d.platform === platform);
+                    if (platformData.length > 0) {
+                        const trace = {
+                            x: platformData.map(d => new Date(d.date)),
+                            y: platformData.map(d => d.duration_seconds / 60),
+                            mode: 'markers',
+                            type: 'scatter',
+                            name: platforms[platform] || platform,
+                            marker: {
+                                color: platformColors[platform],
+                                size: 8,
+                                opacity: 0.7
+                            },
+                            customdata: platformData.map(d => ({
+                                name: d.name,
+                                taskId: d.task_id,
+                                retryId: d.retry_id,
+                                duration: d.duration_seconds,
+                                durationStr: formatDuration(d.duration_seconds),
+                                repository: d.repository
+                            })),
+                            hovertemplate: '<b>%{customdata.name}</b><br>' +
+                                           'Repository: %{customdata.repository}<br>' +
+                                           'Duration: %{customdata.durationStr}<br>' +
+                                           'Date: %{x|%Y-%m-%d %H:%M}<br>' +
+                                           '<i>Click to view profile</i><br>' +
+                                           '<extra></extra>'
+                        };
+                        traces.push(trace);
+                    }
+                });
+            }
+
+            const layout = {
+                title: title,
+                xaxis: {
+                    title: 'Date',
+                    type: 'date',
+                    tickformat: '%Y-%m-%d'
+                },
+                yaxis: {
+                    title: 'Duration (minutes)',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'closest',
+                showlegend: true,
+                legend: {
+                    x: 1,
+                    y: 1,
+                    xanchor: 'right',
+                    bgcolor: 'rgba(255,255,255,0.9)',
+                    bordercolor: '#ccc',
+                    borderwidth: 1
+                },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 15,
+                        color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif'
+                    }
+                },
+                margin: {
+                    l: 60,
+                    r: 40,
+                    t: 60,
+                    b: 60
+                }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['lasso2d', 'select2d']
+            };
+
+            Plotly.newPlot(container.id, traces, layout, config);
+
+            // Add click handler using shared function
+            addClickHandler(container.id);
+        }
+
+        function renderCharts() {
+            // Clear all charts
+            ['unified-opt', 'unified-debug', 'nonunified',
+             'instrumented-shippable', 'nightlyasrelease', 'asan', 'tsan',
+             'fuzzing', 'ccov', 'reproduced', 'gcc', 'artifact', 'decision'].forEach(id => {
+                const element = document.getElementById(`${id}-chart`);
+                if (element) element.innerHTML = '';
+            });
+
+            if (!allData) return;
+
+            // Use all data from both repositories
+            const filteredData = allData;
+
+            // Create charts for each category
+            const chartConfigs = [
+                { category: 'unified-opt', title: 'Unified Opt Builds' },
+                { category: 'unified-debug', title: 'Unified Debug Builds' },
+                { category: 'nonunified', title: 'Non-Unified Builds' },
+                { category: 'instrumented-shippable', title: 'Instrumented/Shippable Builds' },
+                { category: 'nightlyasrelease', title: 'Nightly as Release Builds' },
+                { category: 'asan', title: 'ASAN Builds' },
+                { category: 'tsan', title: 'TSAN Builds' },
+                { category: 'fuzzing', title: 'Fuzzing Builds' },
+                { category: 'ccov', title: 'Code Coverage Builds' },
+                { category: 'reproduced', title: 'Reproduced Builds' },
+                { category: 'gcc', title: 'GCC Builds' },
+                { category: 'artifact', title: 'Artifact Builds' },
+                { category: 'decision', title: 'Decision Tasks' }
+            ];
+
+            chartConfigs.forEach(config => {
+                const categoryData = filteredData.filter(d => d.category === config.category);
+                if (categoryData.length > 0) {
+                    createBuildChart(categoryData, config.category, config.title);
+                }
+            });
+        }
+
+        async function initialize() {
+            try {
+                allData = await fetchData();
+                renderCharts();
+            } catch (error) {
+                console.error('Failed to initialize:', error);
+            }
+        }
+
+        // Setup window resize handler
+        setupWindowResize();
+
+        // Add click handler for h2 headers to update URL hash
+        document.addEventListener('click', function(event) {
+            if (event.target.tagName === 'H2' && event.target.id) {
+                window.location.hash = event.target.id;
+            }
+        });
+
+        initialize();
+    </script>
+</body>
+</html>
