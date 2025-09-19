@@ -142,7 +142,8 @@
         const colors = {
             'debug': '#ff6b6b',
             'opt': '#4ecdc4',
-            'condprof': '#ffa500'
+            'condprof': '#ffa500',
+            'debug-isolated-process': '#ffa500'
         };
 
         async function fetchData() {
@@ -164,12 +165,15 @@
                         else if (rawPlatform.includes('macos')) platform = 'mac';
                     }
 
-                    // Extract build type from name (opt or debug) and check for condprof
+                    // Extract build type from name (opt or debug) and check for special variants
                     const isDebug = row.name.includes('/debug-');
                     const isCondprof = row.name.includes('-condprof');
+                    const isIsolatedProcess = row.name.includes('-isolated-process');
                     let buildType;
                     if (isCondprof) {
                         buildType = 'condprof';
+                    } else if (isDebug && isIsolatedProcess) {
+                        buildType = 'debug-isolated-process';
                     } else if (isDebug) {
                         buildType = 'debug';
                     } else {
@@ -223,7 +227,7 @@
             container.appendChild(anchor);
 
             const traces = [];
-            const buildTypes = ['debug', 'opt', 'condprof'];
+            const buildTypes = ['debug', 'opt', 'condprof', 'debug-isolated-process'];
 
             buildTypes.forEach(buildType => {
                 const filteredData = platformData.filter(d => d.build_type === buildType);
