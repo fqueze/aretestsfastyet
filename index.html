@@ -66,6 +66,10 @@
         const colors = {
             'debug': '#ff6b6b',
             'opt': '#4ecdc4',
+            'asan': '#9467bd',
+            'tsan': '#8c564b',
+            'ccov': '#e377c2',
+            'msix': '#17becf',
             'condprof': '#ffa500',
             'debug-isolated-process': '#ffa500'
         };
@@ -83,10 +87,22 @@
 
                     // Extract build type from name (opt or debug) and check for special variants
                     const isDebug = row.name.includes('/debug-');
+                    const isAsan = row.name.includes('-asan');
+                    const isTsan = row.name.includes('-tsan');
+                    const isCcov = row.name.includes('-ccov');
+                    const isMsix = row.name.includes('-msix');
                     const isCondprof = row.name.includes('-condprof');
                     const isIsolatedProcess = row.name.includes('-isolated-process');
                     let buildType;
-                    if (isCondprof) {
+                    if (isAsan) {
+                        buildType = 'asan';
+                    } else if (isTsan) {
+                        buildType = 'tsan';
+                    } else if (isCcov) {
+                        buildType = 'ccov';
+                    } else if (isMsix) {
+                        buildType = 'msix';
+                    } else if (isCondprof) {
                         buildType = 'condprof';
                     } else if (isDebug && isIsolatedProcess) {
                         buildType = 'debug-isolated-process';
@@ -139,7 +155,7 @@
 
             document.getElementById('charts').appendChild(section);
 
-            const buildTypes = ['debug', 'opt', 'condprof', 'debug-isolated-process'];
+            const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
             createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
         }
 
