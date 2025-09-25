@@ -89,21 +89,21 @@ function createScatterPlot(container, platformData, platform, currentRepository,
             customdata: filteredData.map(d => {
                 return {
                     name: d.name,
-                    suite: d.suite,
                     taskId: d.task_id,
                     retryId: d.retry_id,
                     buildType: d.build_type,
                     duration: d.duration_seconds,
-                    durationStr: formatDuration(d.duration_seconds),
                     date: d.date,
-                    repository: d.repository
+                    repository: d.repository,
+                    machineRow: (d.machine_name && d.machine_name.trim() !== '') ? `Machine: ${d.machine_name}<br>` : ''
                 };
             }),
             hovertemplate: '<b>%{customdata.name}</b><br>' +
                            'Repository: %{customdata.repository}<br>' +
-                           'Duration: %{customdata.durationStr}<br>' +
+                           'Duration: %{formatDuration(customdata.durationStr)}<br>' +
                            'Date: %{x|%Y-%m-%d %H:%M}<br>' +
                            'Build: %{customdata.buildType}<br>' +
+                           '%{customdata.machineRow}' +
                            '<i>Click to view profile</i><br>' +
                            '<extra></extra>'
         };
