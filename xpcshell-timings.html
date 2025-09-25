@@ -309,6 +309,34 @@
             pointer-events: none;
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }
+
+        .copy-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 6px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+        }
+
+        .tree-row:hover .copy-button {
+            opacity: 1;
+        }
+
+        .copy-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .copy-button:active {
+            background-color: #007bff;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -436,6 +464,11 @@
         function generateChartHtml(testPath) {
             const chartIdBase = testPath.replace(/[\/\.]/g, '-');
             return `<div class="chart-expansion"><div id="chart-${chartIdBase}"></div><div id="chart-timeout-${chartIdBase}"></div></div>`;
+        }
+
+        // Generate copy button for test paths
+        function generateCopyButton(testPath) {
+            return `<button class="copy-button" onclick="copyTestName('${testPath}'); event.stopPropagation();" title="Copy test path">📋</button>`;
         }
 
         // Error display management (shared across all error scenarios)
@@ -1231,6 +1264,7 @@
                 html += `<span class="tree-indent" style="width: ${level * 20}px"></span>`;
                 html += `<span class="test-icon"></span>`;
                 html += `${testName}`;
+                html += generateCopyButton(testPath);
                 html += `</div>`;
                 html += `<div class="tree-stats">`;
                 const hasRuns = test.data.stats.runCount > 0;
@@ -1352,6 +1386,7 @@
                     html += `<div class="tree-name">`;
                     html += `<span class="test-icon"></span>`;
                     html += test.testPath;
+                    html += generateCopyButton(test.testPath);
                     html += `</div>`;
                     html += `<div class="tree-stats">`;
                     // Use avgDuration from test object, not recalculated
@@ -1432,6 +1467,7 @@
             treeName.innerHTML = `
                 <span class="test-icon"></span>
                 ${test.testPath}
+                ${generateCopyButton(test.testPath)}
             `;
 
             // Update the tree-stats content
@@ -1656,6 +1692,29 @@
                 // Render the chart
                 renderChart(path);
             }
+        }
+
+        // Copy test name to clipboard
+        function copyTestName(testPath) {
+            navigator.clipboard.writeText(testPath).then(() => {
+                // Visual feedback - briefly show success
+                const button = event.target;
+                const originalText = button.textContent;
+                button.textContent = '✓';
+                button.style.color = '#28a745';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.style.color = '';
+                }, 1000);
+            }).catch(() => {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = testPath;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            });
         }
 
         // Render scatter plots for a test
