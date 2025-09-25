@@ -507,7 +507,9 @@
             if (hash) {
                 window.location.hash = hash;
             } else {
-                history.replaceState(null, '', window.location.pathname);
+                // Preserve search parameters when clearing hash
+                const url = window.location.pathname + window.location.search;
+                history.replaceState(null, '', url);
             }
         }
 
@@ -1973,6 +1975,49 @@
             }
         }
 
+        // Load try revision data
+        async function loadTryRevision(revision = null) {
+            // If no revision provided, prompt for it
+            if (!revision) {
+                revision = prompt('Enter try revision hash:');
+                if (!revision || !revision.trim()) return;
+            }
+
+            setStatusText('Loading try revision...');
+            hideError();
+
+            try {
+                const file = `xpcshell-try-${revision}.json`;
+                const response = await fetch(`./xpcshell-data/${file}`);
+
+                if (!response.ok) {
+                    throw new Error(`Try revision data not found. Run: node fetch-xpcshell-data.js --try ${revision}`);
+                }
+
+                currentData = await response.json();
+
+                // Process raw data to create test entries and tree structure
+                aggregatedData = createTestEntries();
+                treeData = buildTreeStructure(aggregatedData);
+
+                // Clear date selector and show revision info
+                document.getElementById('date-select').value = '';
+                const jobCount = currentData.metadata.jobCount || 0;
+                setStatusText(`Try: ${revision.substring(0, 12)} (${jobCount.toLocaleString()} jobs)`);
+
+                // Update URL to include try parameter
+                const url = new URL(window.location);
+                url.searchParams.set('try', revision);
+                window.history.replaceState({}, '', url);
+
+                // Render the view
+                changeView();
+            } catch (error) {
+                showError(error.message);
+                setStatusText('');
+            }
+        }
+
         // Load data from cache
         async function loadData() {
             setStatusText('Loading data...');
@@ -2106,12 +2151,21 @@
             const searchBox = document.getElementById('search-box');
             const clearButton = document.getElementById('search-clear');
 
-            // Populate date selector first
-            await populateDateSelector();
+            // Check URL parameters for try revision
+            const urlParams = new URLSearchParams(window.location.search);
+            const tryRevision = urlParams.get('try');
 
-            // Then load data only if we have dates
-            if (document.getElementById('date-select').value) {
-                loadData();
+            if (tryRevision) {
+                // Load try revision from URL
+                await loadTryRevision(tryRevision);
+            } else {
+                // Populate date selector first
+                await populateDateSelector();
+
+                // Then load data only if we have dates
+                if (document.getElementById('date-select').value) {
+                    loadData();
+                }
             }
 
             // Set up search box with debouncing

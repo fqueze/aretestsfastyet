@@ -27,6 +27,62 @@ function getDateString(daysAgo = 0) {
 
 // Resource profile fetching moved to profile-worker.js
 
+// Fetch try commit push data from Treeherder API
+async function fetchTryCommitData(revision) {
+    console.log(`Fetching try commit data for revision ${revision}...`);
+
+    const response = await fetch(`https://treeherder.mozilla.org/api/project/try/push/?full=true&count=10&revision=${revision}`);
+
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.results || result.results.length === 0) {
+        throw new Error(`No push found for revision ${revision}`);
+    }
+
+    const pushId = result.results[0].id;
+    console.log(`Found push ID: ${pushId}`);
+    return pushId;
+}
+
+// Fetch jobs from try push
+async function fetchTryJobs(pushId) {
+    console.log(`Fetching jobs for push ID ${pushId}...`);
+
+    const response = await fetch(`https://treeherder.mozilla.org/api/jobs/?push_id=${pushId}`);
+
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    const allJobs = result.results || [];
+    const propertyNames = result.job_property_names || [];
+
+    // Get field indices dynamically
+    const jobTypeNameIndex = propertyNames.indexOf('job_type_name');
+    const taskIdIndex = propertyNames.indexOf('task_id');
+    const retryIdIndex = propertyNames.indexOf('retry_id');
+    const lastModifiedIndex = propertyNames.indexOf('last_modified');
+
+    // Filter for xpcshell jobs and convert to the expected format
+    const xpcshellJobs = allJobs
+        .filter(job => job[jobTypeNameIndex] && job[jobTypeNameIndex].includes('xpcshell'))
+        .map(job => ({
+            name: job[jobTypeNameIndex],
+            task_id: job[taskIdIndex],
+            retry_id: job[retryIdIndex] || 0,
+            start_time: job[lastModifiedIndex],
+            repository: 'try'
+        }));
+
+    console.log(`Found ${xpcshellJobs.length} xpcshell jobs out of ${allJobs.length} total jobs`);
+    return xpcshellJobs;
+}
+
 // Fetch xpcshell test data from Mozilla's Telemetry API for a specific date
 async function fetchXpcshellData(targetDate) {
     console.log(`Fetching xpcshell test data for ${targetDate}...`);
@@ -290,6 +346,152 @@ function createDataTables(jobResults) {
     };
 }
 
+// Common function to process jobs and create data structure
+async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, metadata) {
+    if (jobs.length === 0) {
+        console.log(`No jobs found for ${targetLabel}.`);
+        return null;
+    }
+
+    // Process jobs to extract test timings
+    const jobProcessingStart = Date.now();
+    const jobResults = await processJobsWithWorkers(jobs, debug, targetLabel);
+    const jobProcessingTime = Date.now() - jobProcessingStart;
+    console.log(`Successfully processed ${jobResults.length} jobs in ${jobProcessingTime}ms`);
+
+    // Create efficient data tables
+    const dataTablesStart = Date.now();
+    const dataStructure = createDataTables(jobResults);
+    const dataTablesTime = Date.now() - dataTablesStart;
+    console.log(`Created data tables in ${dataTablesTime}ms:`);
+
+    // Check if any test runs were extracted
+    const hasTestRuns = dataStructure.testRuns.length > 0;
+    if (!hasTestRuns) {
+        console.log(`No test run data extracted for ${targetLabel}`);
+        return null;
+    }
+
+    const totalRuns = dataStructure.testRuns.reduce((sum, testGroup) => {
+        if (!testGroup) return sum;
+        return sum + testGroup.reduce((testSum, statusGroup) => testSum + (statusGroup ? statusGroup.taskIdIds.length : 0), 0);
+    }, 0);
+    console.log(`  ${dataStructure.testInfo.testPathIds.length} tests, ${totalRuns} runs, ${dataStructure.tables.taskIds.length} tasks, ${dataStructure.tables.jobNames.length} job names, ${dataStructure.tables.statuses.length} statuses`);
+
+    // Convert absolute timestamps to relative and apply differential compression (in place)
+    for (const testGroup of dataStructure.testRuns) {
+        if (!testGroup) continue;
+
+        for (const statusGroup of testGroup) {
+            if (!statusGroup) continue;
+
+            // Convert timestamps to relative in place
+            for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                statusGroup.timestamps[i] = Math.floor(statusGroup.timestamps[i] / 1000) - startTime;
+            }
+
+            // Map to array of objects
+            const runs = statusGroup.timestamps.map((ts, i) => ({
+                timestamp: ts,
+                taskIdId: statusGroup.taskIdIds[i],
+                duration: statusGroup.durations[i]
+            }));
+
+            // Sort by timestamp
+            runs.sort((a, b) => a.timestamp - b.timestamp);
+
+            // Apply differential compression in place for timestamps
+            let previousTimestamp = 0;
+            for (const run of runs) {
+                const currentTimestamp = run.timestamp;
+                run.timestamp = currentTimestamp - previousTimestamp;
+                previousTimestamp = currentTimestamp;
+            }
+
+            // Update in place
+            statusGroup.taskIdIds = runs.map(run => run.taskIdId);
+            statusGroup.durations = runs.map(run => run.duration);
+            statusGroup.timestamps = runs.map(run => run.timestamp);
+        }
+    }
+
+    // Build output with metadata
+    return {
+        metadata: {
+            ...metadata,
+            startTime: startTime,
+            generatedAt: new Date().toISOString(),
+            jobCount: jobs.length,
+            processedJobCount: jobResults.length
+        },
+        tables: dataStructure.tables,
+        taskInfo: dataStructure.taskInfo,
+        testInfo: dataStructure.testInfo,
+        testRuns: dataStructure.testRuns
+    };
+}
+
+// Process try commit data
+async function processTryData(revision, forceRefetch = false, debug = false) {
+    const cacheFile = path.join(CACHE_DIR, `xpcshell-try-${revision}.json`);
+
+    // Check if we already have data for this revision
+    if (fs.existsSync(cacheFile) && !forceRefetch) {
+        console.log(`Data for try revision ${revision} already exists. Skipping.`);
+        return null;
+    }
+
+    if (forceRefetch) {
+        console.log(`Force flag detected, re-fetching data for try revision ${revision}...`);
+    }
+
+    try {
+        // Fetch push ID from revision
+        const pushId = await fetchTryCommitData(revision);
+
+        // Fetch jobs for the push
+        const jobs = await fetchTryJobs(pushId);
+
+        if (jobs.length === 0) {
+            console.log(`No xpcshell jobs found for try revision ${revision}.`);
+            return null;
+        }
+
+        // For try commits, use the last_modified time of the first job as start time
+        const startTime = jobs.length > 0 ? Math.floor(new Date(jobs[0].start_time).getTime() / 1000) : Math.floor(Date.now() / 1000);
+
+        // Process using common function
+        const output = await processJobsAndCreateData(
+            jobs,
+            debug,
+            `try-${revision}`,
+            startTime,
+            {
+                revision: revision,
+                pushId: pushId
+            }
+        );
+
+        if (!output) return null;
+
+        const jsonString = debug ? JSON.stringify(output, null, 2) : JSON.stringify(output);
+        fs.writeFileSync(cacheFile, jsonString);
+
+        // Get file size and format it
+        const stats = fs.statSync(cacheFile);
+        const fileSizeBytes = stats.size;
+        const fileSizeMB = Math.round(fileSizeBytes / (1024 * 1024));
+        const formattedBytes = fileSizeBytes.toLocaleString();
+
+        console.log(`Saved ${cacheFile} - ${fileSizeMB}MB (${formattedBytes} bytes)${debug ? ' (with formatting)' : ''}`);
+
+        return output;
+    } catch (error) {
+        console.error(`Error processing try revision ${revision}:`, error);
+        return null;
+    }
+}
+
 // Process data for a single date
 async function processDateData(targetDate, forceRefetch = false, debug = false) {
     const cacheFile = path.join(CACHE_DIR, `xpcshell-${targetDate}.json`);
@@ -313,86 +515,22 @@ async function processDateData(targetDate, forceRefetch = false, debug = false) 
             return null;
         }
 
-        // Process jobs to extract test timings
-        const jobProcessingStart = Date.now();
-        const jobResults = await processJobsWithWorkers(jobs, debug, targetDate);
-        const jobProcessingTime = Date.now() - jobProcessingStart;
-        console.log(`Successfully processed ${jobResults.length} jobs in ${jobProcessingTime}ms`);
-
-        // Create efficient data tables
-        const dataTablesStart = Date.now();
-        const dataStructure = createDataTables(jobResults);
-        const dataTablesTime = Date.now() - dataTablesStart;
-        console.log(`Created data tables in ${dataTablesTime}ms:`);
-
-        // Check if any test runs were extracted
-        const hasTestRuns = dataStructure.testRuns.length > 0;
-        if (!hasTestRuns) {
-            console.log(`No test run data extracted for ${targetDate}`);
-            return null;
-        }
-
-        const totalRuns = dataStructure.testRuns.reduce((sum, testGroup) => {
-            if (!testGroup) return sum;
-            return sum + testGroup.reduce((testSum, statusGroup) => testSum + (statusGroup ? statusGroup.taskIdIds.length : 0), 0);
-        }, 0);
-        console.log(`  ${dataStructure.testInfo.testPathIds.length} tests, ${totalRuns} runs, ${dataStructure.tables.taskIds.length} tasks, ${dataStructure.tables.jobNames.length} job names, ${dataStructure.tables.statuses.length} statuses`);
-
         // Calculate start of day timestamp for relative time calculation
         const startOfDay = new Date(targetDate + 'T00:00:00.000Z');
         const startTime = Math.floor(startOfDay.getTime() / 1000); // Convert to seconds
 
-        // Convert absolute timestamps to relative and apply differential compression (in place)
-        for (const testGroup of dataStructure.testRuns) {
-            if (!testGroup) continue;
-
-            for (const statusGroup of testGroup) {
-                if (!statusGroup) continue;
-
-                // Convert timestamps to relative in place
-                for (let i = 0; i < statusGroup.timestamps.length; i++) {
-                    statusGroup.timestamps[i] = Math.floor(statusGroup.timestamps[i] / 1000) - startTime;
-                }
-
-                // Map to array of objects
-                const runs = statusGroup.timestamps.map((ts, i) => ({
-                    timestamp: ts,
-                    taskIdId: statusGroup.taskIdIds[i],
-                    duration: statusGroup.durations[i]
-                }));
-
-                // Sort by timestamp
-                runs.sort((a, b) => a.timestamp - b.timestamp);
-
-                // Apply differential compression in place for timestamps
-                let previousTimestamp = 0;
-                for (const run of runs) {
-                    const currentTimestamp = run.timestamp;
-                    run.timestamp = currentTimestamp - previousTimestamp;
-                    previousTimestamp = currentTimestamp;
-                }
-
-                // Update in place
-                statusGroup.taskIdIds = runs.map(run => run.taskIdId);
-                statusGroup.durations = runs.map(run => run.duration);
-                statusGroup.timestamps = runs.map(run => run.timestamp);
+        // Process using common function
+        const output = await processJobsAndCreateData(
+            jobs,
+            debug,
+            targetDate,
+            startTime,
+            {
+                date: targetDate
             }
-        }
+        );
 
-        // Save to cache file
-        const output = {
-            metadata: {
-                date: targetDate,
-                startTime: startTime,
-                generatedAt: new Date().toISOString(),
-                jobCount: jobs.length,
-                processedJobCount: jobResults.length
-            },
-            tables: dataStructure.tables,
-            taskInfo: dataStructure.taskInfo,
-            testInfo: dataStructure.testInfo,
-            testRuns: dataStructure.testRuns
-        };
+        if (!output) return null;
 
         const jsonString = debug ? JSON.stringify(output, null, 2) : JSON.stringify(output);
         fs.writeFileSync(cacheFile, jsonString);
@@ -416,6 +554,23 @@ async function processDateData(targetDate, forceRefetch = false, debug = false) 
 async function main() {
     const forceRefetch = process.argv.includes('--force');
     const debug = process.argv.includes('--debug');
+
+    // Check for try commit option
+    const tryIndex = process.argv.findIndex(arg => arg === '--try');
+    if (tryIndex !== -1 && tryIndex + 1 < process.argv.length) {
+        const revision = process.argv[tryIndex + 1];
+        console.log(`Try mode: Fetching xpcshell test data for revision ${revision}`);
+        console.log(`=== Processing try revision ${revision} ===`);
+
+        const output = await processTryData(revision, forceRefetch, debug);
+
+        if (output) {
+            console.log('Successfully processed try commit data.');
+        } else {
+            console.log('\nNo data was successfully processed.');
+        }
+        return;
+    }
 
     if (debug) {
         // Debug mode: fetch only yesterday's data with formatted JSON
