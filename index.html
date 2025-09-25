@@ -33,27 +33,27 @@
 
         <div id="charts" class="charts-grid">
             <div class="charts-section">
-                <h2>Android Tests</h2>
+                <h2 id="autoland-android-tests">Android Tests</h2>
                 <div class="chart-container">
-                    <div class="loading">Loading Android test data...</div>
+                    <div class="loading">Loading...</div>
                 </div>
             </div>
             <div class="charts-section">
-                <h2>Linux Tests</h2>
+                <h2 id="autoland-linux-tests">Linux Tests</h2>
                 <div class="chart-container">
-                    <div class="loading">Loading Linux test data...</div>
+                    <div class="loading">Loading...</div>
                 </div>
             </div>
             <div class="charts-section">
-                <h2>Windows Tests</h2>
+                <h2 id="autoland-windows-tests">Windows Tests</h2>
                 <div class="chart-container">
-                    <div class="loading">Loading Windows test data...</div>
+                    <div class="loading">Loading...</div>
                 </div>
             </div>
             <div class="charts-section">
-                <h2>macOS Tests</h2>
+                <h2 id="autoland-mac-tests">macOS Tests</h2>
                 <div class="chart-container">
-                    <div class="loading">Loading macOS test data...</div>
+                    <div class="loading">Loading...</div>
                 </div>
             </div>
         </div>
@@ -152,20 +152,46 @@
             const container = document.createElement('div');
             container.className = 'chart-container';
             container.id = `chart-${platform}`;
-            section.appendChild(container);
 
+            // Check if this chart is targeted by URL hash
+            const hash = window.location.hash.substring(1);
+            const isTargeted = hash === `${currentRepository}-${platform}-tests`;
+
+            // Store platform data for lazy loading
+            container.dataset.platform = platform;
+
+            section.appendChild(container);
             document.getElementById('charts').appendChild(section);
 
-            const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
-            createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
+            if (isTargeted) {
+                // Load immediately for hash-targeted charts (after adding to DOM)
+                console.log('Loading chart immediately for platform:', platform, 'container id:', container.id);
+                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
+                createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
+                container.dataset.loaded = 'true';
+            } else {
+                // Add loading placeholder for lazy loading
+                container.innerHTML = '<div class="loading">Loading...</div>';
+                container.dataset.loaded = 'false';
+            }
         }
+
+        let chartObserver = null;
 
         function renderCharts() {
             document.getElementById('charts').innerHTML = '';
 
+            // Disconnect existing observer
+            if (chartObserver) {
+                chartObserver.disconnect();
+            }
+
             if (!allData) return;
 
             const filteredData = allData.filter(d => d.repository === currentRepository);
+
+            // Store filtered data for lazy loading
+            window.currentFilteredData = filteredData;
 
             Object.keys(platforms).forEach(platform => {
                 const platformData = filteredData.filter(d => d.platform === platform);
@@ -173,6 +199,46 @@
                     createTestScatterPlot(platformData, platform);
                 }
             });
+
+            // Set up intersection observer for lazy loading
+            setupChartObserver();
+        }
+
+        function setupChartObserver() {
+            const chartContainers = document.querySelectorAll('.chart-container[data-loaded="false"]');
+
+            if (chartContainers.length === 0) return;
+
+            chartObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting && entry.target.dataset.loaded === 'false') {
+                        loadChart(entry.target);
+                    }
+                });
+            }, {
+                rootMargin: '100px' // Start loading 100px before the chart comes into view
+            });
+
+            chartContainers.forEach(container => {
+                chartObserver.observe(container);
+            });
+        }
+
+        function loadChart(container) {
+            const platform = container.dataset.platform;
+            const platformData = window.currentFilteredData.filter(d => d.platform === platform);
+
+            if (platformData.length > 0) {
+                container.innerHTML = ''; // Remove loading placeholder
+                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
+                createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
+                container.dataset.loaded = 'true';
+
+                // Stop observing this container
+                if (chartObserver) {
+                    chartObserver.unobserve(container);
+                }
+            }
         }
 
         function switchRepository(repo, updateHash = true) {
@@ -184,6 +250,14 @@
             // Update platform link targets
             ['android', 'linux', 'windows', 'mac'].forEach(platform => {
                 document.getElementById(`${platform}-link`).href = `#${repo}-${platform}-tests`;
+            });
+
+            // Update placeholder IDs to match current repository
+            ['android', 'linux', 'windows', 'mac'].forEach(platform => {
+                const h2Element = document.querySelector(`h2[id$="-${platform}-tests"]`);
+                if (h2Element) {
+                    h2Element.id = `${repo}-${platform}-tests`;
+                }
             });
 
             renderCharts();
