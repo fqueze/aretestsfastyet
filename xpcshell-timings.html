@@ -449,6 +449,10 @@
             const passPercentageClass = stats.passPercentage < 100 && stats.runCount > 0 ? (stats.passPercentage === 0 ? 'fail' : '') : 'zero';
             html += generateStatItem('Pass %', `${stats.passPercentage}%`, passPercentageClass);
 
+            // Parallel failure percentage (only show if we have data)
+            const parallelTotalRuns = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0) + (stats.parallelPassCount || 0);
+            const parallelProblematicCount = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0);
+            const hasParallelData = parallelTotalRuns > 0;
             html += generateStatItem('Skips', formatNumber(stats.skipCount), 'skip', stats.skipCount > 0 ? 'lazy-tooltip' : '', '', stats.skipCount > 0 ? ` data-test-path="${testPath}" data-tooltip-type="skips"` : '');
 
             const failClass = stats.failCount > 0 ? 'fail' : 'zero';
@@ -561,6 +565,12 @@
             let passCount = 0;
             let maxDuration = 0;
             let totalDuration = 0;
+            let parallelFailCount = 0;
+            let parallelPassCount = 0;
+            let parallelTimeoutCount = 0;
+            let sequentialPassCount = 0;
+            let sequentialFailCount = 0;
+            let sequentialTimeoutCount = 0;
 
             // Process each status group within this test
             for (let statusId = 0; statusId < testGroup.length; statusId++) {
@@ -571,13 +581,20 @@
                 const runCount = statusGroup.taskIdIds.length;
 
                 const isSkip = status === 'SKIP';
-                const isTimeout = status === 'TIMEOUT';
-                const isFail = status && status !== 'PASS' && status !== 'SKIP' && status !== 'TIMEOUT' && status !== 'EXPECTED-FAIL';
+                const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
+                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
 
                 // Add counts for this status group
                 if (isSkip) {
                     skipCount += runCount;
+                } else if (status === 'TIMEOUT-PARALLEL') {
+                    timeoutCount += runCount;
+                    parallelTimeoutCount += runCount;
+                } else if (status === 'TIMEOUT-SEQUENTIAL') {
+                    timeoutCount += runCount;
+                    sequentialTimeoutCount += runCount;
                 } else if (isTimeout) {
+                    // Old TIMEOUT without parallel/sequential designation
                     timeoutCount += runCount;
                 } else if (status === 'UNKNOWN') {
                     // Split UNKNOWN by duration: skips, timeouts, or passes
@@ -594,10 +611,34 @@
                             }
                         }
                     }
+                } else if (status === 'FAIL-PARALLEL') {
+                    failCount += runCount;
+                    parallelFailCount += runCount;
+                } else if (status === 'FAIL-SEQUENTIAL') {
+                    failCount += runCount;
+                    sequentialFailCount += runCount;
+                } else if (status === 'PASS-PARALLEL') {
+                    passCount += runCount;
+                    parallelPassCount += runCount;
+                    for (const duration of statusGroup.durations) {
+                        totalDuration += duration;
+                        if (duration > maxDuration) {
+                            maxDuration = duration;
+                        }
+                    }
+                } else if (status === 'PASS-SEQUENTIAL') {
+                    passCount += runCount;
+                    sequentialPassCount += runCount;
+                    for (const duration of statusGroup.durations) {
+                        totalDuration += duration;
+                        if (duration > maxDuration) {
+                            maxDuration = duration;
+                        }
+                    }
                 } else if (isFail) {
                     failCount += runCount;
                 } else {
-                    // PASS or EXPECTED-FAIL
+                    // PASS or EXPECTED-FAIL (or old PASS without parallel/sequential designation)
                     passCount += runCount;
                     for (const duration of statusGroup.durations) {
                         totalDuration += duration;
@@ -610,12 +651,27 @@
 
             const runCount = skipCount + timeoutCount + failCount + passCount - skipCount; // Total minus skips
 
+            // Calculate parallel failure rate correctly:
+            // This is the percentage of parallel runs that failed or timed out
+            const parallelTotalRuns = parallelFailCount + parallelTimeoutCount + parallelPassCount;
+            const parallelProblematicCount = parallelFailCount + parallelTimeoutCount;
+            const parallelFailPercentage = parallelTotalRuns > 0
+                ? Math.round((parallelProblematicCount * 100) / parallelTotalRuns)
+                : 0;
+
             return {
                 runCount: runCount,
                 skipCount: skipCount,
                 passCount: passCount,
                 timeoutCount: timeoutCount,
                 failCount: failCount,
+                parallelFailCount: parallelFailCount,
+                parallelTimeoutCount: parallelTimeoutCount,
+                parallelPassCount: parallelPassCount,
+                sequentialPassCount: sequentialPassCount,
+                sequentialFailCount: sequentialFailCount,
+                sequentialTimeoutCount: sequentialTimeoutCount,
+                parallelFailPercentage: parallelFailPercentage,
                 passPercentage: calculatePassPercentage(passCount, runCount),
                 max: maxDuration,
                 totalDuration: totalDuration
@@ -698,9 +754,9 @@
                         taskIdString: taskIdString,
                         status: status,
                         timestamp: startTime + (decompressedTimestamps[i] * 1000), // Convert relative seconds to absolute ms
-                        isFail: status && status !== 'PASS' && status !== 'SKIP' && status !== 'TIMEOUT' && status !== 'EXPECTED-FAIL',
+                        isFail: status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status),
                         isSkip: status === 'SKIP',
-                        isTimeout: status === 'TIMEOUT' || (status === 'UNKNOWN' && duration > 300000)
+                        isTimeout: status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL' || (status === 'UNKNOWN' && duration > 300000)
                     });
                 }
             }
@@ -909,6 +965,50 @@
             changeView();
         }
 
+        // Calculate parallel platform breakdown for test data
+        function calculateParallelPlatformBreakdown(testData) {
+            const platforms = {};
+
+            if (currentData && currentData.testRuns && testData.testId !== undefined) {
+                const testGroup = currentData.testRuns[testData.testId];
+                if (testGroup) {
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const statusGroup = testGroup[statusId];
+                        if (!statusGroup) continue;
+
+                        const status = currentData.tables.statuses[statusId];
+
+                        // Only count parallel statuses
+                        if (!status || !status.includes('PARALLEL')) continue;
+
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const taskIdIndex = statusGroup.taskIdIds[i];
+                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                            const platform = extractPlatform(jobName) || 'unknown';
+
+                            if (!platforms[platform]) {
+                                platforms[platform] = {
+                                    parallelFails: 0,
+                                    parallelTimeouts: 0,
+                                    parallelPasses: 0
+                                };
+                            }
+
+                            if (status === 'FAIL-PARALLEL') {
+                                platforms[platform].parallelFails++;
+                            } else if (status === 'TIMEOUT-PARALLEL') {
+                                platforms[platform].parallelTimeouts++;
+                            } else if (status === 'PASS-PARALLEL') {
+                                platforms[platform].parallelPasses++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return platforms;
+        }
+
         // Calculate platform breakdown for test data
         function calculateTestPlatformBreakdown(testData) {
             const platforms = {};
@@ -925,8 +1025,8 @@
 
                         const status = currentData.tables.statuses[statusId];
                         const isSkip = status === 'SKIP';
-                        const isTimeout = status === 'TIMEOUT';
-                        const isFail = status && status !== 'PASS' && status !== 'SKIP' && status !== 'TIMEOUT' && status !== 'EXPECTED-FAIL';
+                        const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
+                        const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
 
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             const taskIdIndex = statusGroup.taskIdIds[i];
@@ -1026,7 +1126,7 @@
         }
 
         // Generate tooltip content for platform breakdown
-        function generateTooltipContent(platforms, type) {
+        function generateTooltipContent(platforms, type, testData, testPath) {
             const sortedPlatforms = Object.entries(platforms)
                 .filter(([platform, counts]) => counts[type] > 0)
                 .sort(([,a], [,b]) => b[type] - a[type]);
@@ -1039,6 +1139,7 @@
             const typeLabel = type === 'failures' ? 'Failures' : type === 'skips' ? 'Skips' : 'Timeouts';
 
             let content = `<strong>${typeLabel} by Platform:</strong><br/>`;
+
             sortedPlatforms.forEach(([platform, counts]) => {
                 const platformName = platforms[platform] || platform;
                 const percentage = ((counts[type] / total) * 100).toFixed(1);
@@ -1047,6 +1148,75 @@
                 content += `<span>${counts[type]} (${percentage}%)</span>`;
                 content += `</div>`;
             });
+
+            // Add parallel failure summary at the end for failures tooltip on individual tests
+            if (type === 'failures' && testData && testData.stats) {
+                const stats = testData.stats;
+                const parallelTotalRuns = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0) + (stats.parallelPassCount || 0);
+                const parallelProblematicCount = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0);
+                const parallelFailPercentage = stats.parallelFailPercentage || 0;
+
+                if (parallelTotalRuns > 0) {
+                    let tooltipDetails = [];
+                    if (stats.parallelFailCount > 0) tooltipDetails.push(`${stats.parallelFailCount} failures`);
+                    if (stats.parallelTimeoutCount > 0) tooltipDetails.push(`${stats.parallelTimeoutCount} timeouts`);
+
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                    content += `<strong>Parallel runs:</strong> ${parallelProblematicCount}/${parallelTotalRuns} had issues (${parallelFailPercentage}%)`;
+                    if (tooltipDetails.length > 0) {
+                        content += `<br/>${tooltipDetails.join(', ')}`;
+                    }
+                    if ((stats.sequentialPassCount || 0) > 0) {
+                        content += `<br/>${stats.sequentialPassCount} sequential passes`;
+                    }
+                    content += `</div>`;
+
+                    // Add per-platform parallel breakdown for tests with >= 10% parallel fail rate
+                    if (parallelFailPercentage >= 10 && testPath && typeof aggregatedData !== 'undefined' && aggregatedData[testPath]) {
+                        const platformBreakdown = calculateParallelPlatformBreakdown(aggregatedData[testPath]);
+                        const platforms = Object.entries(platformBreakdown)
+                            .filter(([platform, counts]) => (counts.parallelFails + counts.parallelTimeouts) > 0)
+                            .sort(([,a], [,b]) => (b.parallelFails + b.parallelTimeouts) - (a.parallelFails + a.parallelTimeouts));
+
+                        if (platforms.length > 0) {
+                            content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                            content += `<strong>Parallel issues by platform:</strong>`;
+                            platforms.forEach(([platform, counts]) => {
+                                const totalParallel = counts.parallelFails + counts.parallelTimeouts + counts.parallelPasses;
+                                const problemCount = counts.parallelFails + counts.parallelTimeouts;
+                                const percentage = totalParallel > 0 ? Math.round((problemCount * 100) / totalParallel) : 0;
+                                content += `<br/>${platform}: ${problemCount}/${totalParallel} (${percentage}%)`;
+                            });
+                            content += `</div>`;
+                        }
+                    }
+                }
+            }
+
+            // Add parallel/sequential breakdown for timeouts tooltip on individual tests
+            if (type === 'timeouts' && testData && testData.stats) {
+                const stats = testData.stats;
+                const parallelTimeouts = stats.parallelTimeoutCount || 0;
+                const sequentialTimeouts = stats.sequentialTimeoutCount || 0;
+                const totalTimeouts = stats.timeoutCount || 0;
+
+                if (parallelTimeouts > 0 || sequentialTimeouts > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                    content += `<strong>Breakdown:</strong>`;
+                    if (parallelTimeouts > 0) {
+                        content += `<br/>${parallelTimeouts} in parallel execution`;
+                    }
+                    if (sequentialTimeouts > 0) {
+                        content += `<br/>${sequentialTimeouts} in sequential execution`;
+                    }
+                    // Show unclassified timeouts if any
+                    const unclassified = totalTimeouts - parallelTimeouts - sequentialTimeouts;
+                    if (unclassified > 0) {
+                        content += `<br/>${unclassified} unclassified`;
+                    }
+                    content += `</div>`;
+                }
+            }
 
             return content;
         }
@@ -1551,6 +1721,7 @@
 
             // Determine the data source
             let platformBreakdown;
+            let testData = null;
             if (element.dataset.totalRoot) {
                 // Total row - calculate for entire tree
                 platformBreakdown = treeData ? calculateFolderPlatformBreakdown(treeData) : {};
@@ -1562,12 +1733,13 @@
             } else if (element.dataset.testPath) {
                 // Test - get the test data and calculate breakdown
                 const testPath = element.dataset.testPath;
-                const testData = aggregatedData[testPath];
+                testData = aggregatedData[testPath];
                 platformBreakdown = testData ? calculateTestPlatformBreakdown(testData) : {};
             }
 
             // Generate and show tooltip
-            const tooltipContent = generateTooltipContent(platformBreakdown, tooltipType);
+            const testPath = element.dataset.testPath || null;
+            const tooltipContent = generateTooltipContent(platformBreakdown, tooltipType, testData, testPath);
             if (tooltipContent) {
                 showTooltip(element, tooltipContent);
             }
@@ -1855,6 +2027,23 @@
                 }
             });
 
+            // Update trace names with counts
+            Object.keys(traces).forEach(traceKey => {
+                const trace = traces[traceKey];
+                const count = trace.x.length;
+                if (count > 0) {
+                    // Check if this is a failures trace by looking at the original name
+                    const isFail = trace.name.includes('(failures)');
+                    const platform = trace.name.replace(' (failures)', '');
+
+                    if (isFail) {
+                        trace.name = `${platform} (${count} failure${count !== 1 ? 's' : ''})`;
+                    } else {
+                        trace.name = `${platform} (${count} pass${count !== 1 ? 'es' : ''})`;
+                    }
+                }
+            });
+
             // Render main chart (without timeouts)
             const layout = {
                 title: `${testPath} - Run Times`,
@@ -1883,6 +2072,16 @@
 
             // Render timeout chart only if there are timeouts
             if (hasTimeouts && timeoutChartElement) {
+                // Update timeout trace names with counts
+                Object.keys(timeoutTraces).forEach(traceKey => {
+                    const trace = timeoutTraces[traceKey];
+                    const count = trace.x.length;
+                    if (count > 0) {
+                        const platform = trace.name.replace(' (timeout)', '');
+                        trace.name = `${platform} (${count} timeout${count !== 1 ? 's' : ''})`;
+                    }
+                });
+
                 const timeoutLayout = {
                     title: `${testPath} - Timeouts`,
                     xaxis: {

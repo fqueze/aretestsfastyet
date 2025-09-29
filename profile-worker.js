@@ -2,6 +2,39 @@ const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 
+// Extract parallel execution time ranges from markers
+function extractParallelRanges(markers, stringArray) {
+    const parallelRanges = [];
+
+    if (!markers || !markers.data) {
+        return parallelRanges;
+    }
+
+    for (let i = 0; i < markers.length; i++) {
+        const data = markers.data && markers.data[i];
+        // Look for markers with type: "Text" and text: "parallel"
+        if (data && data.type === "Text" && data.text === "parallel") {
+            parallelRanges.push({
+                start: markers.startTime[i],
+                end: markers.endTime[i]
+            });
+        }
+    }
+
+    return parallelRanges;
+}
+
+// Check if a test time overlaps with any parallel execution range
+function isInParallelRange(testStart, testEnd, parallelRanges) {
+    for (const range of parallelRanges) {
+        // Check if test overlaps with parallel range
+        if (testStart < range.end && testEnd > range.start) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Extract test timings from profile
 function extractTestTimings(profile, jobName) {
     if (!profile || !profile.threads || !profile.threads[0]) {
@@ -14,6 +47,9 @@ function extractTestTimings(profile, jobName) {
     if (!markers || !stringArray) {
         return [];
     }
+
+    // First, extract parallel execution ranges
+    const parallelRanges = extractParallelRanges(markers, stringArray);
 
     const testStringId = stringArray.indexOf("test");
     const timings = [];
@@ -41,6 +77,11 @@ function extractTestTimings(profile, jobName) {
             if (status === 'FAIL' && data.color === 'green') {
                 status = 'EXPECTED-FAIL';
             }
+            // Add execution context suffix to timeout, fail, and pass statuses
+            else if (['TIMEOUT', 'FAIL', 'PASS'].includes(status) && parallelRanges.length > 0) {
+                status += isInParallelRange(markers.startTime[i], markers.endTime[i], parallelRanges) ? '-PARALLEL' : '-SEQUENTIAL';
+            }
+            // Keep other statuses as-is
 
             // Extract the actual test file path from the test field
             // Format: "xpcshell-parent-process.toml:dom/indexedDB/test/unit/test_fileListUpgrade.js"
