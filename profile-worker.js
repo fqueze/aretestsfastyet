@@ -1,6 +1,7 @@
 const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 // Extract parallel execution time ranges from markers
 function extractParallelRanges(markers, stringArray) {
@@ -115,15 +116,16 @@ function extractTestTimings(profile, jobName) {
 
 // Fetch resource profile from TaskCluster with local caching
 async function fetchResourceProfile(taskId, retryId = 0) {
-    const cacheFile = path.join(workerData.profileCacheDir, `${taskId}-${retryId}.json`);
+    const cacheFileGz = path.join(workerData.profileCacheDir, `${taskId}-${retryId}.json.gz`);
 
-    // Check if we have a cached version
-    if (fs.existsSync(cacheFile)) {
+    // Check if we have a cached gzipped version
+    if (fs.existsSync(cacheFileGz)) {
         try {
-            const cachedData = fs.readFileSync(cacheFile, 'utf-8');
-            return JSON.parse(cachedData);
+            const compressedData = fs.readFileSync(cacheFileGz);
+            const decompressedData = zlib.gunzipSync(compressedData);
+            return JSON.parse(decompressedData.toString('utf-8'));
         } catch (error) {
-            console.warn(`Error reading cached profile ${taskId}: ${error.message}`);
+            console.warn(`Error reading cached gzipped profile ${taskId}: ${error.message}`);
             // Continue to fetch from network
         }
     }
@@ -138,9 +140,10 @@ async function fetchResourceProfile(taskId, retryId = 0) {
 
         const profile = await response.json();
 
-        // Cache the profile for future use
+        // Cache the profile for future use (gzipped)
         try {
-            fs.writeFileSync(cacheFile, JSON.stringify(profile));
+            const compressed = zlib.gzipSync(JSON.stringify(profile));
+            fs.writeFileSync(cacheFileGz, compressed);
         } catch (error) {
             console.warn(`Error caching profile ${taskId}: ${error.message}`);
         }
