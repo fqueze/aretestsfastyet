@@ -442,8 +442,9 @@
                 (stats.passCount > 0 ? stats.totalDuration / stats.passCount : 0);
 
             let html = '';
-            html += generateStatItem('Avg', formatDuration(avgDuration, hasRuns));
-            html += generateStatItem('Max', formatDuration(stats.max, hasRuns));
+            html += generateStatItem('Min', formatDuration(stats.min, hasRuns), '', stats.min > 0 ? 'lazy-tooltip' : '', '', stats.min > 0 ? ` data-test-path="${testPath}" data-tooltip-type="min"` : '');
+            html += generateStatItem('Avg', formatDuration(avgDuration, hasRuns), '', avgDuration > 0 ? 'lazy-tooltip' : '', '', avgDuration > 0 ? ` data-test-path="${testPath}" data-tooltip-type="avg"` : '');
+            html += generateStatItem('Max', formatDuration(stats.max, hasRuns), '', stats.max > 0 ? 'lazy-tooltip' : '', '', stats.max > 0 ? ` data-test-path="${testPath}" data-tooltip-type="max"` : '');
             html += generateStatItem('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDuration(stats.totalDuration, hasRuns)}`);
 
             const passPercentageClass = stats.passPercentage < 100 && stats.runCount > 0 ? (stats.passPercentage === 0 ? 'fail' : '') : 'zero';
@@ -555,6 +556,7 @@
                     timeoutCount: 0,
                     passPercentage: 0,
                     max: 0,
+                    min: 0,
                     avg: 0
                 };
             }
@@ -564,6 +566,7 @@
             let failCount = 0;
             let passCount = 0;
             let maxDuration = 0;
+            let minDuration = Infinity;
             let totalDuration = 0;
             let parallelFailCount = 0;
             let parallelPassCount = 0;
@@ -609,6 +612,9 @@
                             if (duration > maxDuration) {
                                 maxDuration = duration;
                             }
+                            if (duration < minDuration) {
+                                minDuration = duration;
+                            }
                         }
                     }
                 } else if (status === 'FAIL-PARALLEL') {
@@ -625,6 +631,9 @@
                         if (duration > maxDuration) {
                             maxDuration = duration;
                         }
+                        if (duration < minDuration) {
+                            minDuration = duration;
+                        }
                     }
                 } else if (status === 'PASS-SEQUENTIAL') {
                     passCount += runCount;
@@ -633,6 +642,9 @@
                         totalDuration += duration;
                         if (duration > maxDuration) {
                             maxDuration = duration;
+                        }
+                        if (duration < minDuration) {
+                            minDuration = duration;
                         }
                     }
                 } else if (isFail) {
@@ -644,6 +656,9 @@
                         totalDuration += duration;
                         if (duration > maxDuration) {
                             maxDuration = duration;
+                        }
+                        if (duration < minDuration) {
+                            minDuration = duration;
                         }
                     }
                 }
@@ -658,6 +673,9 @@
             const parallelFailPercentage = parallelTotalRuns > 0
                 ? Math.round((parallelProblematicCount * 100) / parallelTotalRuns)
                 : 0;
+
+            // Handle case where no durations were found
+            const finalMinDuration = minDuration === Infinity ? 0 : minDuration;
 
             return {
                 runCount: runCount,
@@ -674,6 +692,7 @@
                 parallelFailPercentage: parallelFailPercentage,
                 passPercentage: calculatePassPercentage(passCount, runCount),
                 max: maxDuration,
+                min: finalMinDuration,
                 totalDuration: totalDuration
             };
         }
@@ -936,7 +955,7 @@
 
             // Generate appropriate stats buttons based on view type
             const commonFields = [['runCount', 'Runs'], ['passPercentage', 'Pass %'], ['skipCount', 'Skips'], ['failCount', 'Failures'], ['timeoutCount', 'Timeouts']];
-            const specificFields = hasTests ? [['avg', 'Avg'], ['max', 'Max']] : [['testCount', 'Tests']];
+            const specificFields = hasTests ? [['min', 'Min'], ['avg', 'Avg'], ['max', 'Max']] : [['testCount', 'Tests']];
             const statsFields = [...specificFields, ...commonFields];
 
             const statsButtons = statsFields.map(getSortButton).join('');
@@ -1004,6 +1023,62 @@
                         }
                     }
                 }
+            }
+
+            return platforms;
+        }
+
+        // Calculate platform timing breakdown for test data
+        function calculateTestPlatformTimingBreakdown(testData) {
+            const platforms = {};
+
+            // Use global currentData to avoid creating run objects just for tooltips
+            if (testData.testId !== undefined) {
+                const testGroup = currentData.testRuns[testData.testId];
+
+                if (testGroup) {
+                    // Process each status group
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const statusGroup = testGroup[statusId];
+                        if (!statusGroup) continue;
+
+                        const status = currentData.tables.statuses[statusId];
+                        const isPass = status === 'PASS' || status === 'PASS-PARALLEL' || status === 'PASS-SEQUENTIAL';
+
+                        // Only track timing for passing tests
+                        if (isPass) {
+                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                const platform = extractPlatform(jobName) || 'unknown';
+                                const duration = statusGroup.durations[i];
+
+                                if (!platforms[platform]) {
+                                    platforms[platform] = {
+                                        durations: [],
+                                        min: Infinity,
+                                        max: 0,
+                                        total: 0,
+                                        count: 0
+                                    };
+                                }
+
+                                platforms[platform].durations.push(duration);
+                                platforms[platform].total += duration;
+                                platforms[platform].count++;
+                                platforms[platform].min = Math.min(platforms[platform].min, duration);
+                                platforms[platform].max = Math.max(platforms[platform].max, duration);
+                            }
+                        }
+                    }
+                }
+
+                // Calculate averages and handle edge cases
+                Object.keys(platforms).forEach(platform => {
+                    const p = platforms[platform];
+                    p.avg = p.count > 0 ? p.total / p.count : 0;
+                    if (p.min === Infinity) p.min = 0;
+                });
             }
 
             return platforms;
@@ -1127,6 +1202,33 @@
 
         // Generate tooltip content for platform breakdown
         function generateTooltipContent(platforms, type, testData, testPath) {
+            // Handle timing tooltips differently
+            if (['min', 'avg', 'max'].includes(type)) {
+                const sortedPlatforms = Object.entries(platforms)
+                    .filter(([platform, data]) => data.count > 0)
+                    .sort(([,a], [,b]) => b[type] - a[type]);
+
+                if (sortedPlatforms.length === 0) {
+                    return '';
+                }
+
+                const typeLabel = type === 'min' ? 'Minimum Time' : type === 'avg' ? 'Average Time' : 'Maximum Time';
+                let content = `<strong>${typeLabel} by Platform:</strong><br/>`;
+
+                sortedPlatforms.forEach(([platform, data]) => {
+                    const value = data[type];
+                    const formattedValue = formatDuration(value, true);
+                    const percentage = type === 'avg' ? '' : ` (${data.count} run${data.count !== 1 ? 's' : ''})`;
+                    content += `<div class="tooltip-platform">`;
+                    content += `<span class="tooltip-platform-name">${platform}:</span>`;
+                    content += `<span>${formattedValue}${percentage}</span>`;
+                    content += `</div>`;
+                });
+
+                return content;
+            }
+
+            // Handle regular count-based tooltips
             const sortedPlatforms = Object.entries(platforms)
                 .filter(([platform, counts]) => counts[type] > 0)
                 .sort(([,a], [,b]) => b[type] - a[type]);
@@ -1502,6 +1604,10 @@
                         valueA = a.stats.max || 0;
                         valueB = b.stats.max || 0;
                         break;
+                    case 'min':
+                        valueA = a.stats.min || 0;
+                        valueB = b.stats.min || 0;
+                        break;
                     case 'runCount':
                         valueA = a.stats.runCount || 0;
                         valueB = b.stats.runCount || 0;
@@ -1734,7 +1840,14 @@
                 // Test - get the test data and calculate breakdown
                 const testPath = element.dataset.testPath;
                 testData = aggregatedData[testPath];
-                platformBreakdown = testData ? calculateTestPlatformBreakdown(testData) : {};
+
+                if (['min', 'avg', 'max'].includes(tooltipType)) {
+                    // For timing tooltips, use the timing breakdown function
+                    platformBreakdown = testData ? calculateTestPlatformTimingBreakdown(testData) : {};
+                } else {
+                    // For other tooltips, use the regular breakdown function
+                    platformBreakdown = testData ? calculateTestPlatformBreakdown(testData) : {};
+                }
             }
 
             // Generate and show tooltip
