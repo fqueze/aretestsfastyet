@@ -555,6 +555,19 @@ async function main() {
     const forceRefetch = process.argv.includes('--force');
     const debug = process.argv.includes('--debug');
 
+    // Check for --days parameter
+    let numDays = 3; // Default to 3 days
+    const daysIndex = process.argv.findIndex(arg => arg === '--days');
+    if (daysIndex !== -1 && daysIndex + 1 < process.argv.length) {
+        const daysValue = parseInt(process.argv[daysIndex + 1]);
+        if (!isNaN(daysValue) && daysValue > 0 && daysValue <= 30) {
+            numDays = daysValue;
+        } else {
+            console.error('Error: --days must be a number between 1 and 30');
+            process.exit(1);
+        }
+    }
+
     // Check for try commit option
     const tryIndex = process.argv.findIndex(arg => arg === '--try');
     if (tryIndex !== -1 && tryIndex + 1 < process.argv.length) {
@@ -598,14 +611,13 @@ async function main() {
             console.log('\nNo data was successfully processed.');
         }
     } else {
-        // Normal mode: fetch data for the last 3 days
-        const dates = [
-            getDateString(1), // Yesterday
-            getDateString(2), // 2 days ago
-            getDateString(3)  // 3 days ago
-        ];
+        // Normal mode: fetch data for the specified number of days
+        const dates = [];
+        for (let i = 1; i <= numDays; i++) {
+            dates.push(getDateString(i));
+        }
 
-        console.log(`Fetching xpcshell test data for the last 3 days: ${dates.join(', ')}`);
+        console.log(`Fetching xpcshell test data for the last ${numDays} day${numDays > 1 ? 's' : ''}: ${dates.join(', ')}`);
 
         for (const date of dates) {
             console.log(`\n=== Processing ${date} ===`);
