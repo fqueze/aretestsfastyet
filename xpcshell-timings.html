@@ -310,7 +310,7 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }
 
-        .copy-button {
+        .action-button {
             background: none;
             border: none;
             cursor: pointer;
@@ -322,18 +322,21 @@
             transition: background-color 0.2s;
             opacity: 0;
             vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
         }
 
-        .tree-row:hover .copy-button {
+        .tree-row:hover .action-button,
+        .folder-row:hover .action-button {
             opacity: 1;
         }
 
-        .copy-button:hover {
+        .action-button:hover {
             background-color: #e9ecef;
             color: #333;
         }
 
-        .copy-button:active {
+        .action-button:active {
             background-color: #007bff;
             color: white;
         }
@@ -473,7 +476,24 @@
 
         // Generate copy button for test paths
         function generateCopyButton(testPath) {
-            return `<button class="copy-button" onclick="copyTestName('${testPath}'); event.stopPropagation();" title="Copy test path">📋</button>`;
+            return `<button class="action-button" onclick="copyTestName('${testPath}'); event.stopPropagation();" title="Copy test path">📋</button>`;
+        }
+
+        // Generate Searchfox button for test paths
+        function generateSearchfoxButton(testPath) {
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}`;
+            return `<a href="${searchfoxUrl}" class="action-button" target="_blank" onclick="event.stopPropagation();" title="Open in Searchfox">🔍</a>`;
+        }
+
+        // Generate both copy and Searchfox buttons for test paths
+        function generateTestButtons(testPath) {
+            return generateCopyButton(testPath) + generateSearchfoxButton(testPath);
+        }
+
+        // Generate Searchfox button for folder paths
+        function generateFolderButtons(folderPath) {
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${folderPath}`;
+            return `<a href="${searchfoxUrl}" class="action-button" target="_blank" onclick="event.stopPropagation();" title="Open folder in Searchfox">🔍</a>`;
         }
 
         // Error display management (shared across all error scenarios)
@@ -1492,6 +1512,7 @@
                 html += `<span class="tree-indent" style="width: ${level * 20}px"></span>`;
                 html += `<span class="folder-icon ${isExpanded ? 'expanded' : ''}"></span>`;
                 html += `<strong>${displayName}/</strong>`;
+                html += generateFolderButtons(folderPath);
                 html += `</div>`;
                 html += `<div class="tree-stats">`;
                 html += generateStatItem('Tests', formatNumber(folderStats.testCount));
@@ -1538,7 +1559,7 @@
                 html += `<span class="tree-indent" style="width: ${level * 20}px"></span>`;
                 html += `<span class="test-icon"></span>`;
                 html += `${testName}`;
-                html += generateCopyButton(testPath);
+                html += generateTestButtons(testPath);
                 html += `</div>`;
                 html += `<div class="tree-stats">`;
                 const hasRuns = test.data.stats.runCount > 0;
@@ -1664,7 +1685,7 @@
                     html += `<div class="tree-name">`;
                     html += `<span class="test-icon"></span>`;
                     html += test.testPath;
-                    html += generateCopyButton(test.testPath);
+                    html += generateTestButtons(test.testPath);
                     html += `</div>`;
                     html += `<div class="tree-stats">`;
                     // Use avgDuration from test object, not recalculated
@@ -1745,7 +1766,7 @@
             treeName.innerHTML = `
                 <span class="test-icon"></span>
                 ${test.testPath}
-                ${generateCopyButton(test.testPath)}
+                ${generateTestButtons(test.testPath)}
             `;
 
             // Update the tree-stats content
