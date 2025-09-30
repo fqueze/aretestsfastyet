@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPCShell Test Runtime Histograms</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .container {
+            margin: 0 auto;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .controls {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .date-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .date-selector label {
+            font-weight: 500;
+        }
+
+        .date-selector select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .status-text {
+            color: #666;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .no-data {
+            text-align: center;
+            color: #666;
+            font-size: 16px;
+            padding: 40px;
+        }
+
+        #chart-container {
+            margin-top: 20px;
+        }
+
+        .chart-item {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        #all-platforms-chart,
+        #mac-chart,
+        #linux-chart,
+        #windows-chart,
+        #android-chart {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 100% !important;
+            max-width: none !important;
+        }
+
+        /* Force Plotly charts to use full width */
+        .plotly-graph-div {
+            width: 100% !important;
+            max-width: none !important;
+        }
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .stats-item {
+            text-align: center;
+        }
+
+        .stats-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stats-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>XPCShell Test Runtime Histograms</h1>
+
+        <div class="controls">
+            <div class="date-selector">
+                <label for="date-select">Select Date: </label>
+                <select id="date-select" onchange="loadData()">
+                </select>
+                <span id="status-text" class="status-text">Loading data...</span>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="stats-summary" class="stats-summary" style="display: none;">
+            <div class="stats-item">
+                <div class="stats-value" id="total-tests">0</div>
+                <div class="stats-label">Total Test Jobs</div>
+            </div>
+            <div class="stats-item">
+                <div class="stats-value" id="total-runs">0</div>
+                <div class="stats-label">Total Runs</div>
+            </div>
+            <div class="stats-item">
+                <div class="stats-value" id="median-time">0s</div>
+                <div class="stats-label">Median Runtime</div>
+            </div>
+            <div class="stats-item">
+                <div class="stats-value" id="avg-time">0s</div>
+                <div class="stats-label">Average Runtime</div>
+            </div>
+        </div>
+
+        <div id="chart-container" style="display: none;">
+            <div id="all-platforms-chart"></div>
+            <div id="mac-chart"></div>
+            <div id="linux-chart"></div>
+            <div id="windows-chart"></div>
+            <div id="android-chart"></div>
+        </div>
+
+        <div id="no-data" class="no-data" style="display: none;">
+            No data available. Click "Fetch New Data" to fetch xpcshell test data.
+        </div>
+    </div>
+
+    <script>
+        let currentData = null;
+        let aggregatedData = null;
+
+        // Format duration in milliseconds to human readable
+        function formatDuration(ms, hasData = true) {
+            if (!hasData || ms === 0) {
+                return '—';
+            }
+            if (ms < 1000) {
+                return `${Math.round(ms)}ms`;
+            } else if (ms < 60000) {
+                return `${(ms / 1000).toFixed(1)}s`;
+            } else {
+                const minutes = Math.floor(ms / 60000);
+                const seconds = Math.floor((ms % 60000) / 1000);
+                if (seconds === 0) {
+                    return `${minutes}m`;
+                }
+                return `${minutes}m ${seconds}s`;
+            }
+        }
+
+        // Extract platform from job name
+        function extractPlatform(name) {
+            if (name.includes('android')) return 'android';
+            if (name.includes('linux')) return 'linux';
+            if (name.includes('win')) return 'windows';
+            if (name.includes('macos')) return 'mac';
+            return 'unknown';
+        }
+
+        // Process raw data to create test entries (matching original)
+        function createTestEntries() {
+            if (!currentData.testRuns || !currentData.tables || !currentData.taskInfo || !currentData.testInfo) {
+                return {};
+            }
+
+            const entries = {};
+            for (let testId = 0; testId < currentData.testRuns.length; testId++) {
+                const testGroup = currentData.testRuns[testId];
+                if (!testGroup) continue;
+
+                const testPath = currentData.tables.testPaths[currentData.testInfo.testPathIds[testId]];
+                const testName = currentData.tables.testNames[currentData.testInfo.testNameIds[testId]];
+                const fullPath = testPath ? `${testPath}/${testName}` : testName;
+
+                entries[fullPath] = { testId };
+            }
+            return entries;
+        }
+
+        // Get test runs for histogram (simplified version)
+        function getTestRunsForHistogram(testPath) {
+            const testData = aggregatedData[testPath];
+            if (!testData) return [];
+
+            const testGroup = currentData.testRuns[testData.testId];
+            const runs = [];
+
+            if (testGroup && testGroup.length > 0) {
+                // Process each status group within this test
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup || !statusGroup.taskIdIds) continue;
+
+                    const status = currentData.tables.statuses[statusId];
+                    if (!status || status.includes('SKIP')) continue;
+
+                    // Process each task in this status group
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        const taskIdIndex = statusGroup.taskIdIds[i];
+                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                        const duration = statusGroup.durations[i];
+
+                        if (duration > 0) {
+                            runs.push({
+                                duration,
+                                jobName,
+                                status
+                            });
+                        }
+                    }
+                }
+            }
+            return runs;
+        }
+
+        // Render separate histograms for each platform
+        function renderHistogram() {
+            const platformData = {};
+            const allDurations = [];
+
+            // Platform colors
+            const platformColors = {
+                'android': '#8e44ad',
+                'linux': '#1f77b4',
+                'windows': '#ff7f0e',
+                'mac': '#9467bd',
+                'unknown': '#7f7f7f'
+            };
+
+            // Process all test data
+            Object.keys(aggregatedData).forEach(testPath => {
+                const runs = getTestRunsForHistogram(testPath);
+
+                runs.forEach(run => {
+                    const platform = extractPlatform(run.jobName) || 'unknown';
+                    let durationSeconds = run.duration / 1000;
+
+                    // Cap durations above 300s to exactly 300s (single bucket)
+                    if (durationSeconds > 300) {
+                        durationSeconds = 300;
+                    }
+
+                    if (!platformData[platform]) {
+                        platformData[platform] = [];
+                    }
+
+                    platformData[platform].push(durationSeconds);
+                    allDurations.push(durationSeconds);
+                });
+            });
+
+            // Calculate summary statistics
+            if (allDurations.length > 0) {
+                allDurations.sort((a, b) => a - b);
+                const median = allDurations[Math.floor(allDurations.length / 2)];
+                const average = allDurations.reduce((a, b) => a + b, 0) / allDurations.length;
+                const totalTestPaths = Object.keys(aggregatedData).length;
+                const totalTestJobs = currentData.metadata?.jobCount || 0;
+                const totalRuns = allDurations.length;
+
+                document.getElementById('total-tests').textContent = totalTestJobs.toLocaleString();
+                document.getElementById('total-runs').textContent = totalRuns.toLocaleString();
+                document.getElementById('median-time').textContent = formatDuration(median * 1000);
+                document.getElementById('avg-time').textContent = formatDuration(average * 1000);
+                document.getElementById('stats-summary').style.display = 'grid';
+            }
+
+            // Show chart container first so Plotly can calculate proper width
+            document.getElementById('chart-container').style.display = 'block';
+
+            // Common chart configuration
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                toImageButtonOptions: {
+                    format: 'png',
+                    height: 500,
+                    width: 1400,
+                    scale: 1
+                }
+            };
+
+            // Pre-sort data for percentile calculations (only once per platform)
+            const sortedAllDurations = [...allDurations].sort((a, b) => a - b);
+            const platformSortedData = {};
+            Object.keys(platformData).forEach(platform => {
+                platformSortedData[platform] = [...platformData[platform]].sort((a, b) => a - b);
+            });
+
+            // More efficient percentile calculation using binary search
+            function calculatePercentileFast(duration, sortedDurations) {
+                let left = 0;
+                let right = sortedDurations.length - 1;
+
+                while (left <= right) {
+                    const mid = Math.floor((left + right) / 2);
+                    if (sortedDurations[mid] < duration) {
+                        left = mid + 1;
+                    } else {
+                        right = mid - 1;
+                    }
+                }
+
+                return (left / sortedDurations.length) * 100;
+            }
+
+            // Calculate percentile for a specific duration value
+            function getPercentileForDuration(duration, sortedDurations) {
+                return calculatePercentileFast(duration, sortedDurations);
+            }
+
+            // Create "All Platforms" histogram
+            if (allDurations.length > 0) {
+                const allTrace = [{
+                    x: allDurations,
+                    type: 'histogram',
+                    name: `All Platforms (${allDurations.length.toLocaleString()} runs)`,
+                    marker: {
+                        color: '#2ca02c',
+                        opacity: 0.7
+                    },
+                    autobinx: true,
+                    histnorm: 'count',
+                    hovertemplate: '<b>Test Duration:</b> %{x:.2f}s<br><b>Test Count:</b> %{y}<br><b>Platform:</b> All<extra></extra>'
+                }];
+
+                const allLayout = {
+                    title: 'XPCShell Test Runtime Distribution - All Platforms',
+                    xaxis: {
+                        title: 'Duration (seconds)'
+                    },
+                    yaxis: {
+                        title: 'Number of Test Runs'
+                    },
+                    height: 500,
+                    autosize: true,
+                    hovermode: 'closest'
+                };
+
+                config.toImageButtonOptions.filename = 'xpcshell-runtime-all-platforms';
+                Plotly.newPlot('all-platforms-chart', allTrace, allLayout, config).then(() => {
+                    // Calculate completion percentages at specific time intervals
+                    setTimeout(() => {
+                        calculateAndDisplayCompletionStats('all-platforms', allDurations);
+                    }, 500);
+                });
+            }
+
+            // Create individual platform histograms
+            Object.keys(platformData).forEach(platform => {
+                const durations = platformData[platform];
+                if (durations.length === 0) return;
+
+                const chartId = `${platform}-chart`;
+                const chartElement = document.getElementById(chartId);
+                if (!chartElement) return;
+
+                const trace = [{
+                    x: durations,
+                    type: 'histogram',
+                    name: `${platform} (${durations.length.toLocaleString()} runs)`,
+                    marker: {
+                        color: platformColors[platform],
+                        opacity: 0.7
+                    },
+                    autobinx: true,
+                    histnorm: 'count',
+                    hovertemplate: `<b>Test Duration:</b> %{x:.2f}s<br><b>Test Count:</b> %{y}<br><b>Platform:</b> ${platform}<extra></extra>`
+                }];
+
+                const layout = {
+                    title: `XPCShell Test Runtime Distribution - ${platform.toUpperCase()}`,
+                    xaxis: {
+                        title: 'Duration (seconds)'
+                    },
+                    yaxis: {
+                        title: 'Number of Test Runs'
+                    },
+                    height: 500,
+                    autosize: true,
+                    hovermode: 'closest'
+                };
+
+                config.toImageButtonOptions.filename = `xpcshell-runtime-${platform}`;
+                Plotly.newPlot(chartId, trace, layout, config).then(() => {
+                    // Calculate completion percentages for this platform
+                    setTimeout(() => {
+                        calculateAndDisplayCompletionStats(platform, durations);
+                    }, 600 + Math.random() * 200); // Slight stagger for multiple platforms
+                });
+            });
+
+        }
+
+        // Calculate and display completion percentages as a line chart
+        function calculateAndDisplayCompletionStats(platformName, durations) {
+            const timeIntervals = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120];
+            const totalTests = durations.length;
+            const sortedDurations = [...durations].sort((a, b) => a - b);
+
+            const completionStats = timeIntervals.map(seconds => {
+                const completedCount = sortedDurations.filter(duration => duration <= seconds).length;
+                const percentage = (completedCount / totalTests * 100);
+                return { seconds, percentage, count: completedCount };
+            });
+
+            // Find the chart element directly
+            const chartId = platformName === 'all-platforms' ? 'all-platforms-chart' : `${platformName}-chart`;
+            const chartElement = document.getElementById(chartId);
+
+            if (chartElement) {
+                // Remove existing stats if any
+                const existingStatsChart = chartElement.parentElement?.querySelector(`#${chartId}-completion`);
+                if (existingStatsChart) {
+                    existingStatsChart.remove();
+                }
+
+                // Create new completion chart container
+                const completionChartDiv = document.createElement('div');
+                completionChartDiv.id = `${chartId}-completion`;
+                completionChartDiv.style.cssText = `
+                    margin-top: 0px;
+                    margin-bottom: 30px;
+                    padding: 15px;
+                    background-color: white;
+                    border-radius: 8px;
+                    border: 1px solid #dee2e6;
+                    height: 300px;
+                `;
+
+                // Insert after the chart element
+                chartElement.parentElement.insertBefore(completionChartDiv, chartElement.nextSibling);
+
+                // Create the completion rate line chart
+                const title = platformName === 'all-platforms' ? 'All Platforms' : platformName.toUpperCase();
+
+                const trace = {
+                    x: completionStats.map(stat => stat.seconds),
+                    y: completionStats.map(stat => stat.percentage),
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: `${title} Completion Rate`,
+                    line: {
+                        color: platformName === 'all-platforms' ? '#2ca02c' : getColorForPlatform(platformName),
+                        width: 3
+                    },
+                    marker: {
+                        size: 6
+                    },
+                    hovertemplate: '<b>Time:</b> %{x}s<br><b>Completed:</b> %{y:.1f}%<extra></extra>'
+                };
+
+                const layout = {
+                    title: `${title} - Test Completion Rate Over Time`,
+                    xaxis: {
+                        title: 'Time Threshold (seconds)',
+                        range: [0, 120]
+                    },
+                    yaxis: {
+                        title: 'Percentage of Tests Completed (%)',
+                        range: [0, 100]
+                    },
+                    height: 280,
+                    margin: { l: 60, r: 30, t: 50, b: 50 },
+                    font: { size: 12 }
+                };
+
+                const config = {
+                    responsive: true,
+                    displayModeBar: true,
+                    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                    toImageButtonOptions: {
+                        format: 'png',
+                        height: 300,
+                        width: 800,
+                        scale: 1,
+                        filename: `${platformName}-completion-rate`
+                    }
+                };
+
+                Plotly.newPlot(completionChartDiv.id, [trace], layout, config);
+            }
+        }
+
+        // Helper function to get colors for platforms
+        function getColorForPlatform(platform) {
+            const colors = {
+                'android': '#8e44ad',
+                'linux': '#1f77b4',
+                'windows': '#ff7f0e',
+                'mac': '#9467bd'
+            };
+            return colors[platform] || '#7f7f7f';
+        }
+
+        // Load data for a specific date
+        async function loadData() {
+            const selectedDate = document.getElementById('date-select').value;
+            if (!selectedDate) return;
+
+            const statusText = document.getElementById('status-text');
+            statusText.textContent = 'Loading data...';
+
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('chart-container').style.display = 'none';
+            document.getElementById('stats-summary').style.display = 'none';
+            document.getElementById('no-data').style.display = 'none';
+
+            try {
+                const response = await fetch(`xpcshell-data/xpcshell-${selectedDate}.json`);
+                if (!response.ok) {
+                    throw new Error(`Failed to load data: ${response.status}`);
+                }
+
+                currentData = await response.json();
+
+                // Process raw data to create test entries
+                aggregatedData = createTestEntries();
+
+                // Update status
+                const testCount = Object.keys(aggregatedData).length;
+                statusText.textContent = `Loaded ${testCount.toLocaleString()} individual tests`;
+
+                if (testCount === 0) {
+                    document.getElementById('no-data').style.display = 'block';
+                } else {
+                    renderHistogram();
+                }
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                document.getElementById('error').style.display = 'block';
+                statusText.textContent = 'Error loading data';
+            }
+        }
+
+        // Initialize the page
+        async function init() {
+            try {
+                // Populate date selector using index.json
+                const response = await fetch('xpcshell-data/index.json');
+                const indexData = await response.json();
+
+                const dateSelect = document.getElementById('date-select');
+                const dates = indexData.dates || [];
+
+                dates.forEach(date => {
+                    const option = document.createElement('option');
+                    option.value = date;
+                    option.textContent = date;
+                    dateSelect.appendChild(option);
+                });
+
+                if (dates.length > 0) {
+                    dateSelect.value = dates[0];
+                    await loadData();
+                } else {
+                    document.getElementById('no-data').style.display = 'block';
+                    document.getElementById('status-text').textContent = 'No data files found';
+                }
+            } catch (error) {
+                console.error('Error initializing:', error);
+                document.getElementById('error').textContent = `Error initializing: ${error.message}`;
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('status-text').textContent = 'Error initializing';
+            }
+        }
+
+        // Start initialization when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
