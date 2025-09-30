@@ -1,0 +1,12 @@
+# Backup files created by editors
+*~
+
+# Profile cache directory
+profile-cache/
+
+# XPCShell test data directory
+xpcshell-data/
+
+# V8 profiling logs
+isolate-*.log
+jit-*.dump
