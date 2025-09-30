@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Are Tests Green Yet?</title>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .charts-section .stats-grid {
+            margin-top: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .charts-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .chart-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .chart-card h2 {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+
+        .data-table {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .table-header {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .table-header h2 {
+            font-size: 18px;
+            color: #2c3e50;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            border-bottom: 2px solid #dee2e6;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        thead th:hover {
+            background: #e9ecef;
+        }
+
+        tbody tr {
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        tbody td {
+            padding: 12px;
+            font-size: 14px;
+        }
+
+        .test-name {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+
+        .fail-rate {
+            font-weight: bold;
+        }
+
+        .fail-rate.high {
+            color: #dc3545;
+        }
+
+        .fail-rate.medium {
+            color: #ffc107;
+        }
+
+        .fail-rate.low {
+            color: #28a745;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .sort-arrow {
+            display: inline-block;
+            margin-left: 5px;
+            font-size: 10px;
+        }
+
+        .trend {
+            display: inline-block;
+            margin-left: 10px;
+            font-size: 12px;
+        }
+
+        .trend.up {
+            color: #dc3545;
+        }
+
+        .trend.down {
+            color: #28a745;
+        }
+
+        .trend.stable {
+            color: #6c757d;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+            transition: width 0.3s ease;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        #chart-container {
+            min-height: 400px;
+        }
+
+        .test-type-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 5px;
+        }
+
+        .test-type-badge.xpcshell {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .test-type-badge.mochitest {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .test-type-badge.reftest {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .test-type-badge.web-platform-tests {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .bug-table {
+            margin-top: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .bug-table-header {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            border-bottom: 1px solid #dee2e6;
+            font-weight: 600;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .bug-table table {
+            width: 100%;
+            font-size: 12px;
+        }
+
+        .bug-table th {
+            background: #f8f9fa;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .bug-table td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #f1f3f4;
+        }
+
+        .bug-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .bug-link {
+            color: #1976d2;
+            text-decoration: none;
+        }
+
+        .bug-link:hover {
+            text-decoration: underline;
+        }
+
+        .bug-count {
+            font-weight: 600;
+            text-align: right;
+        }
+
+        .bug-table tbody tr {
+            cursor: pointer;
+        }
+
+        .bug-table tbody tr:hover {
+            background: #e3f2fd !important;
+        }
+
+        .bug-table tbody tr.selected {
+            background: #bbdefb !important;
+        }
+
+        .expandable-row {
+            display: none;
+        }
+
+        .expandable-row.expanded {
+            display: table-row;
+        }
+
+        .expandable-content {
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-left: 3px solid #007bff;
+        }
+
+        .expand-icon {
+            display: inline-block;
+            margin-right: 8px;
+            font-size: 12px;
+            transition: transform 0.2s ease;
+            cursor: pointer;
+        }
+
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+
+        .job-details-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .job-details-table th {
+            background: #f8f9fa;
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .job-details-table td {
+            padding: 10px;
+            border-bottom: 1px solid #f1f3f4;
+            font-size: 14px;
+        }
+
+        .job-details-table tbody tr {
+            cursor: pointer;
+        }
+
+        .job-details-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        .platform-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .platform-badge.linux {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .platform-badge.windows {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .platform-badge.macos {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+
+        .platform-badge.android {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .platform-badge.unknown {
+            background: #f5f5f5;
+            color: #616161;
+        }
+
+        /* Modal styles for detailed failure list */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 800px;
+            max-height: 80%;
+            overflow-y: auto;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .modal-header h2 {
+            color: #2c3e50;
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: #000;
+        }
+
+        .failure-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .failure-item {
+            padding: 10px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .failure-item:last-child {
+            border-bottom: none;
+        }
+
+        .failure-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .failure-platform {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .failure-time {
+            color: #888;
+            font-size: 12px;
+        }
+
+        .failure-link {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .failure-link:hover {
+            color: #0056b3;
+            text-decoration: underline;
+        }
+
+        .latest-failure-link {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .latest-failure-link:hover {
+            color: #0056b3;
+            text-decoration: underline;
+        }
+
+    </style>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Test Health Dashboard</h1>
+            <div class="subtitle">Monitoring test failure rates across Mozilla repositories (Last 21 days)</div>
+        </header>
+
+        <div class="controls">
+            <div style="display: flex; align-items: center; gap: 30px;">
+                <div class="btn-group">
+                    <button id="autoland-btn" class="active" onclick="switchRepository('autoland')">Autoland</button>
+                    <button id="mozilla-central-btn" onclick="switchRepository('mozilla-central')">Mozilla Central</button>
+                </div>
+
+                <div class="platform-links" style="display: flex; align-items: center;">
+                    <span style="margin-right: 15px; color: #666;">Jump to:</span>
+                    <a href="#mochitest-section" style="margin-right: 15px;">Mochitest</a>
+                    <a href="#xpcshell-section" style="margin-right: 15px;">XPCShell</a>
+                    <a href="#reftest-section" style="margin-right: 15px;">Reftest</a>
+                    <a href="#web-platform-tests-section">Web Platform Tests</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <h3>Total Test Jobs</h3>
+                <div class="stat-value" id="total-tests">-</div>
+                <div class="stat-label">All job runs across test types</div>
+            </div>
+            <div class="stat-card">
+                <h3>Overall Failure Rate</h3>
+                <div class="stat-value" id="overall-fail-rate">-</div>
+                <div class="stat-label">Failed runs / total runs</div>
+            </div>
+            <div class="stat-card">
+                <h3>Jobs with Failures</h3>
+                <div class="stat-value" id="failing-tests">-</div>
+                <div class="stat-label">Total failed job runs</div>
+            </div>
+            <div class="stat-card">
+                <h3>Most Problematic</h3>
+                <div class="stat-value" id="worst-test-type">-</div>
+                <div class="stat-label">Test type with highest failure rate</div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <h2 id="all-test-types">All Test Types</h2>
+            <div class="chart-card">
+                <div id="chart-failures-by-push"></div>
+                <div id="bug-table-all-types"></div>
+            </div>
+        </div>
+
+        <div class="charts-container" id="test-type-charts">
+            <!-- Individual test type charts will be generated here -->
+        </div>
+
+    </div>
+
+
+    <script>
+        let testData = [];
+        let pushData = new Map();
+        let filteredData = [];
+        let globalJobDetails = new Map(); // Global storage for job details by bug
+        let currentSelectedBug = null;
+        let currentChartType = null;
+
+        async function fetchData() {
+            try {
+                const response = await fetch('data.json');
+                const json = await response.json();
+
+
+                // Check the structure and process the data
+                let rows = [];
+                if (json.query_result && json.query_result.data && json.query_result.data.rows) {
+                    rows = json.query_result.data.rows;
+                } else if (json.rows) {
+                    rows = json.rows;
+                } else if (Array.isArray(json)) {
+                    rows = json;
+                } else {
+                    console.error('Unexpected API response structure:', json);
+                    showError('Unexpected API response format. Check console for details.');
+                    return;
+                }
+
+
+                // Process the data
+                const processedData = processTestData(rows);
+                testData = processedData.testData;
+                pushData = processedData.pushData;
+                filteredData = [...testData];
+
+
+                updateDisplay();
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                showError('Failed to load test data. Please try again later.');
+            }
+        }
+
+        function processTestData(rows) {
+            if (!rows || rows.length === 0) {
+                return { testData: [], pushData: new Map() };
+            }
+
+
+            // Group by test name and calculate statistics for the table
+            const testMap = new Map();
+            // Group by push time for the charts
+            const pushData = new Map();
+
+            rows.forEach((row, index) => {
+                // Extract data from the actual structure we saw
+                const time = row.time;
+                const repository = row.repo;
+                const testName = row.name;
+                const taskId = row.task;
+                const count = row.count || 1;
+
+                // Determine test type from the name
+                let testType = 'unknown';
+                let platform = 'unknown';
+
+                if (testName && typeof testName === 'string') {
+                    if (testName.includes('xpcshell')) {
+                        testType = 'xpcshell';
+                    } else if (testName.includes('mochitest')) {
+                        testType = 'mochitest';
+                    } else if (testName.includes('web-platform-tests') || testName.includes('wpt')) {
+                        testType = 'web-platform-tests';
+                    } else if (testName.includes('reftest')) {
+                        testType = 'reftest';
+                    }
+
+                    // Extract platform information
+                    if (testName.includes('linux')) {
+                        platform = 'linux';
+                    } else if (testName.includes('windows')) {
+                        platform = 'windows';
+                    } else if (testName.includes('macosx') || testName.includes('osx')) {
+                        platform = 'macos';
+                    } else if (testName.includes('android')) {
+                        platform = 'android';
+                    }
+                }
+
+                if (!testName) {
+                    return;
+                }
+
+                // Clean up test name by removing platform/build specifics
+                const cleanTestName = testName.replace(/^test-[^/]+\/[^-]+-/, '').replace(/-\d+$/, '');
+
+                // Track bug numbers and job details for ALL failures
+                const bugData = row.bug;
+                if (bugData && taskId !== null) {
+                    // Store job details globally (not tied to push time)
+                    if (!globalJobDetails.has(bugData)) {
+                        globalJobDetails.set(bugData, []);
+                    }
+
+                    // Parse task format: task_id.retry_id
+                    let parsedTaskId = taskId;
+                    let retryId = 0;
+                    if (taskId && taskId.includes('.')) {
+                        const parts = taskId.split('.');
+                        parsedTaskId = parts[0];
+                        retryId = parseInt(parts[1]) || 0;
+                    }
+
+                    globalJobDetails.get(bugData).push({
+                        time: time,
+                        testName: testName,
+                        testType: testType,
+                        platform: platform,
+                        repository: repository,
+                        taskId: parsedTaskId,
+                        retryId: retryId,
+                        originalTaskId: taskId,
+                        count: count
+                    });
+                }
+
+                // Process both successes and failures for the push-based charts
+                if (time) {
+                    const pushKey = `${time}-${repository}`;
+
+                    if (!pushData.has(pushKey)) {
+                        pushData.set(pushKey, {
+                            time: time,
+                            repository: repository,
+                            testTypes: new Map(), // Still tracks failures for chart display
+                            platforms: new Map(),
+                            bugs: new Map(),
+                            bugsByTestType: new Map(),
+                            totalJobs: new Map() // Track total jobs (successes + failures) by test type
+                        });
+                    }
+
+                    const push = pushData.get(pushKey);
+
+                    // Track total jobs by test type (both successes and failures)
+                    const currentTotalJobs = push.totalJobs.get(testType) || 0;
+                    push.totalJobs.set(testType, currentTotalJobs + count);
+
+                    // Only track failures for chart display (keeps existing chart logic intact)
+                    if (taskId !== null) {
+                        const currentCount = push.testTypes.get(testType) || 0;
+                        push.testTypes.set(testType, currentCount + count);
+                    }
+
+                    // Track failures by platform within test type (only for failures)
+                    if (taskId !== null) {
+                        const platformKey = `${testType}|${platform}`; // Use | as separator to avoid conflicts
+                        const currentPlatformCount = push.platforms.get(platformKey) || 0;
+                        push.platforms.set(platformKey, currentPlatformCount + count);
+                    }
+
+                    // Track bug numbers for frequency tables
+                    if (bugData) {
+                        // Overall bug tracking
+                        const currentBugCount = push.bugs.get(bugData) || 0;
+                        push.bugs.set(bugData, currentBugCount + count);
+
+                        // Bug tracking by test type (use a delimiter that won't appear in bug data)
+                        const testTypeBugKey = `${testType}|||${bugData}`;
+                        const currentTestTypeBugCount = push.bugsByTestType.get(testTypeBugKey) || 0;
+                        push.bugsByTestType.set(testTypeBugKey, currentTestTypeBugCount + count);
+                    }
+                }
+
+                // Continue with the original test-based processing for the table
+                const key = `${cleanTestName}-${testType}-${repository}`;
+
+                if (!testMap.has(key)) {
+                    testMap.set(key, {
+                        test_name: cleanTestName,
+                        test_type: testType,
+                        repository: repository || 'unknown',
+                        total_runs: 0,
+                        failed_runs: 0,
+                        dates: new Map()
+                    });
+                }
+
+                const test = testMap.get(key);
+
+                // If task is null, this is a successful job (count = number of successes)
+                // If task is not null, this is a failed job (count = 1 failure)
+                if (taskId === null) {
+                    // Successful jobs
+                    test.total_runs += count;
+                } else {
+                    // Failed jobs
+                    test.total_runs += count;
+                    test.failed_runs += count;
+                }
+
+                // Track daily data for trend analysis
+                if (time) {
+                    const date = time.split('T')[0]; // Extract date part
+                    const existing = test.dates.get(date) || { total: 0, failed: 0 };
+
+                    if (taskId === null) {
+                        existing.total += count;
+                    } else {
+                        existing.total += count;
+                        existing.failed += count;
+                    }
+
+                    test.dates.set(date, existing);
+                }
+            });
+
+
+            // Job details are already stored directly in globalJobDetails during processing
+
+            // Calculate failure rates and trends for test data
+            const processedTestData = Array.from(testMap.values()).map(test => {
+                test.failure_rate = test.total_runs > 0
+                    ? (test.failed_runs / test.total_runs * 100)
+                    : 0;
+
+                // Calculate trend (simplified - compare first half vs second half)
+                const dates = Array.from(test.dates.keys()).sort();
+                if (dates.length > 7) {
+                    const midPoint = Math.floor(dates.length / 2);
+                    let firstHalf = { total: 0, failed: 0 };
+                    let secondHalf = { total: 0, failed: 0 };
+
+                    dates.slice(0, midPoint).forEach(date => {
+                        const data = test.dates.get(date);
+                        firstHalf.total += data.total;
+                        firstHalf.failed += data.failed;
+                    });
+
+                    dates.slice(midPoint).forEach(date => {
+                        const data = test.dates.get(date);
+                        secondHalf.total += data.total;
+                        secondHalf.failed += data.failed;
+                    });
+
+                    const firstRate = firstHalf.total > 0 ? firstHalf.failed / firstHalf.total : 0;
+                    const secondRate = secondHalf.total > 0 ? secondHalf.failed / secondHalf.total : 0;
+
+                    if (secondRate > firstRate * 1.1) {
+                        test.trend = 'up';
+                    } else if (secondRate < firstRate * 0.9) {
+                        test.trend = 'down';
+                    } else {
+                        test.trend = 'stable';
+                    }
+                } else {
+                    test.trend = 'stable';
+                }
+
+                return test;
+            });
+
+            return { testData: processedTestData, pushData: pushData };
+        }
+
+        function updateDisplay() {
+            applyFilters();
+            updateStats();
+            updateCharts();
+        }
+
+        let currentRepository = 'autoland';
+
+        function switchRepository(repo) {
+            currentRepository = repo;
+
+            // Update button states
+            document.getElementById('autoland-btn').classList.toggle('active', repo === 'autoland');
+            document.getElementById('mozilla-central-btn').classList.toggle('active', repo === 'mozilla-central');
+
+            // Update display
+            updateDisplay();
+        }
+
+        function applyFilters() {
+            filteredData = testData.filter(test => {
+                if (currentRepository !== 'all' && test.repository !== currentRepository) return false;
+                return true;
+            });
+        }
+
+        function updateStats() {
+            const totalTestTypes = filteredData.length;
+            const totalJobRuns = filteredData.reduce((sum, test) => sum + test.total_runs, 0);
+            const failingTestTypes = filteredData.filter(t => t.failure_rate > 0).length;
+            const totalFailedJobs = filteredData.reduce((sum, test) => sum + test.failed_runs, 0);
+            const overallFailRate = totalJobRuns > 0 ? (totalFailedJobs / totalJobRuns) * 100 : 0;
+
+            // Find worst test type
+            const typeStats = {};
+            filteredData.forEach(test => {
+                if (!typeStats[test.test_type]) {
+                    typeStats[test.test_type] = { total: 0, failed: 0 };
+                }
+                typeStats[test.test_type].total += test.total_runs;
+                typeStats[test.test_type].failed += test.failed_runs;
+            });
+
+            let worstType = '-';
+            let worstRate = 0;
+            Object.entries(typeStats).forEach(([type, stats]) => {
+                const rate = stats.total > 0 ? stats.failed / stats.total * 100 : 0;
+                if (rate > worstRate) {
+                    worstRate = rate;
+                    worstType = type;
+                }
+            });
+
+            document.getElementById('total-tests').textContent = totalJobRuns.toLocaleString();
+            document.getElementById('overall-fail-rate').textContent = overallFailRate.toFixed(1) + '%';
+            document.getElementById('failing-tests').textContent = totalFailedJobs.toLocaleString();
+            document.getElementById('worst-test-type').textContent = worstType;
+        }
+
+        function updateCharts() {
+
+            // Filter push data based on repository and job count (for autoland)
+            const filteredPushData = Array.from(pushData.values()).filter(push => {
+                // Repository filter
+                if (currentRepository !== 'all' && push.repository !== currentRepository) {
+                    return false;
+                }
+
+                // For autoland repository, ignore pushes with less than 1000 total jobs
+                if (push.repository === 'autoland') {
+                    // Calculate total job count for this push (sum of all test type job counts)
+                    let totalJobs = 0;
+                    push.totalJobs.forEach(count => {
+                        totalJobs += count;
+                    });
+
+                    // Filter out pushes with less than 1000 jobs (likely incomplete job sets)
+                    if (totalJobs < 1000) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            // Chart 1: Failures per push (all test types)
+            updateFailuresByPushChart(filteredPushData);
+
+            // Chart 2+: Individual charts per test type showing platform breakdown
+            updateTestTypeCharts(filteredPushData);
+        }
+
+        function updateFailuresByPushChart(filteredPushData) {
+            if (filteredPushData.length === 0) {
+                document.getElementById('chart-failures-by-push').innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No data available</div>';
+                return;
+            }
+
+            // Sort by time
+            filteredPushData.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+            // Define colors for test types
+            const testTypeColors = {
+                'xpcshell': '#1976d2',
+                'mochitest': '#7b1fa2',
+                'reftest': '#388e3c',
+                'web-platform-tests': '#f57c00',
+                'unknown': '#666666'
+            };
+
+            // Get all unique test types
+            const allTestTypes = new Set();
+            filteredPushData.forEach(push => {
+                push.testTypes.forEach((count, testType) => {
+                    allTestTypes.add(testType);
+                });
+            });
+
+            const traces = Array.from(allTestTypes).map(testType => {
+                return {
+                    x: filteredPushData.map(push => push.time),
+                    y: filteredPushData.map(push => push.testTypes.get(testType) || 0),
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: testType,
+                    line: { color: testTypeColors[testType] || '#666666', width: 2 },
+                    marker: { size: 4 },
+                    stackgroup: 'one'
+                };
+            });
+
+            const layout = {
+                title: '',
+                xaxis: {
+                    title: 'Push Time',
+                    type: 'date'
+                },
+                yaxis: { title: 'Number of Failures' },
+                margin: { t: 20, b: 60, l: 60, r: 20 },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        color: 'white',
+                        size: 14
+                    }
+                },
+                legend: {
+                    orientation: 'h',
+                    y: -0.2
+                }
+            };
+
+            Plotly.newPlot('chart-failures-by-push', traces, layout, {responsive: true});
+
+            // Generate bug table for all types
+            generateBugTable('bug-table-all-types', filteredPushData, 'All Test Types');
+        }
+
+        function updateTestTypeCharts(filteredPushData) {
+            const chartsContainer = document.getElementById('test-type-charts');
+            chartsContainer.innerHTML = '';
+
+            if (filteredPushData.length === 0) {
+                chartsContainer.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No data available</div>';
+                return;
+            }
+
+            // Sort by time
+            filteredPushData.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+            // Define colors for platforms
+            const platformColors = {
+                'linux': '#e74c3c',
+                'windows': '#3498db',
+                'macos': '#f39c12',
+                'android': '#9b59b6',
+                'unknown': '#95a5a6'
+            };
+
+            // Get all test types that have data
+            const testTypesWithData = new Set();
+            filteredPushData.forEach(push => {
+                push.testTypes.forEach((count, testType) => {
+                    if (count > 0) testTypesWithData.add(testType);
+                });
+            });
+
+            // Define preferred order for test types
+            const testTypeOrder = ['mochitest', 'xpcshell', 'reftest', 'web-platform-tests'];
+            const sortedTestTypes = testTypeOrder.filter(testType => testTypesWithData.has(testType))
+                .concat(Array.from(testTypesWithData).filter(testType => !testTypeOrder.includes(testType)));
+
+            sortedTestTypes.forEach(testType => {
+                // Get all platforms for this test type
+                const platformsForType = new Set();
+                filteredPushData.forEach(push => {
+                    push.platforms.forEach((count, platformKey) => {
+                        const [type, platform] = platformKey.split('|'); // Use | separator
+                        if (type === testType && count > 0) {
+                            platformsForType.add(platform);
+                        }
+                    });
+                });
+
+                if (platformsForType.size === 0) {
+                    return;
+                }
+
+                // Capitalize and format test type name
+                const formatTestTypeName = (testType) => {
+                    return testType.split('-').map(word =>
+                        word.charAt(0).toUpperCase() + word.slice(1)
+                    ).join(' ');
+                };
+
+                // Create section container
+                const sectionDiv = document.createElement('div');
+                sectionDiv.className = 'charts-section';
+                sectionDiv.id = `${testType}-section`;
+
+                // Add header outside of chart-card
+                const header = document.createElement('h2');
+                header.id = `${testType}-header`;
+                header.textContent = `${formatTestTypeName(testType)} Tests`;
+                sectionDiv.appendChild(header);
+
+                // Calculate stats for this test type
+                const testTypeStats = filteredData.filter(test => test.test_type === testType);
+                const totalJobRuns = testTypeStats.reduce((sum, test) => sum + test.total_runs, 0);
+                const totalFailedJobs = testTypeStats.reduce((sum, test) => sum + test.failed_runs, 0);
+                const actualFailRate = totalJobRuns > 0 ? (totalFailedJobs / totalJobRuns) * 100 : 0;
+
+                // Add stats grid for this test type
+                const statsGrid = document.createElement('div');
+                statsGrid.className = 'stats-grid';
+                statsGrid.innerHTML = `
+                    <div class="stat-card">
+                        <h3>Total ${formatTestTypeName(testType)} Jobs</h3>
+                        <div class="stat-value">${totalJobRuns.toLocaleString()}</div>
+                        <div class="stat-label">Job runs for this test type</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failure Rate</h3>
+                        <div class="stat-value">${actualFailRate.toFixed(1)}%</div>
+                        <div class="stat-label">Failed runs / total runs</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failed Jobs</h3>
+                        <div class="stat-value">${totalFailedJobs.toLocaleString()}</div>
+                        <div class="stat-label">Failed ${formatTestTypeName(testType).toLowerCase()} runs</div>
+                    </div>
+                `;
+                sectionDiv.appendChild(statsGrid);
+
+                // Create chart container
+                const chartDiv = document.createElement('div');
+                chartDiv.className = 'chart-card';
+                chartDiv.innerHTML = `
+                    <div id="chart-${testType}"></div>
+                    <div id="bug-table-${testType}"></div>
+                `;
+                sectionDiv.appendChild(chartDiv);
+                chartsContainer.appendChild(sectionDiv);
+
+                // Create traces for each platform
+                const traces = Array.from(platformsForType).map(platform => {
+                    return {
+                        x: filteredPushData.map(push => push.time),
+                        y: filteredPushData.map(push => push.platforms.get(`${testType}|${platform}`) || 0),
+                        type: 'scatter',
+                        mode: 'lines+markers',
+                        name: platform,
+                        line: { color: platformColors[platform] || '#666666', width: 2 },
+                        marker: { size: 4 },
+                        stackgroup: 'one'
+                    };
+                });
+
+                const layout = {
+                    title: '',
+                    xaxis: {
+                        title: 'Push Time',
+                        type: 'date'
+                    },
+                    yaxis: { title: 'Number of Failures' },
+                    margin: { t: 20, b: 60, l: 60, r: 20 },
+                    hoverlabel: {
+                        bgcolor: '#2a2a2a',
+                        bordercolor: '#2a2a2a',
+                        font: {
+                            color: 'white',
+                            size: 14
+                        }
+                    },
+                    legend: {
+                        orientation: 'h',
+                        y: -0.2
+                    }
+                };
+
+                Plotly.newPlot(`chart-${testType}`, traces, layout, {responsive: true});
+
+                // Generate bug table for this test type
+                generateBugTable(`bug-table-${testType}`, filteredPushData, testType);
+            });
+        }
+
+        function generateBugTable(containerId, filteredPushData, testType) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            // Aggregate bug data across all pushes
+            const bugCounts = new Map();
+
+            filteredPushData.forEach(push => {
+                if (testType === 'All Test Types') {
+                    // For all types, use the overall bugs map
+                    push.bugs.forEach((count, bugId) => {
+                        const currentCount = bugCounts.get(bugId) || 0;
+                        bugCounts.set(bugId, currentCount + count);
+                    });
+                } else {
+                    // For specific test types, filter by test type
+                    push.bugsByTestType.forEach((count, key) => {
+                        const [type, bugId] = key.split('|||');
+                        if (type === testType) {
+                            const currentCount = bugCounts.get(bugId) || 0;
+                            bugCounts.set(bugId, currentCount + count);
+                        }
+                    });
+                }
+            });
+
+            if (bugCounts.size === 0) {
+                container.innerHTML = '<div class="bug-table"><div class="bug-table-header">No bugs found for this period</div></div>';
+                return;
+            }
+
+            // Sort bugs by frequency
+            const sortedBugs = Array.from(bugCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10); // Show top 10 bugs
+
+            let tableHtml = `
+                <div class="bug-table">
+                    <div class="bug-table-header">Top Bugs (${testType})</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Bug</th>
+                                <th>Occurrences</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            sortedBugs.forEach(([bugData, count], index) => {
+
+                // Parse bug format: "number:summary"
+                let bugNumber = bugData;
+                let bugSummary = '';
+
+                if (bugData && bugData.includes(':')) {
+                    const parts = bugData.split(':');
+                    bugNumber = parts[0];
+                    bugSummary = parts.slice(1).join(':').trim(); // Handle summaries with colons
+                }
+
+                const bugUrl = `https://bugzilla.mozilla.org/show_bug.cgi?id=${bugNumber}`;
+                const linkText = bugSummary ? `${bugNumber} - ${bugSummary}` : `Bug ${bugNumber}`;
+                const expandRowId = `expand-${containerId}-${index}`;
+
+                // Main bug row
+                tableHtml += `
+                    <tr data-bug="${escapeHtml(bugData)}" data-test-type="${testType}" class="bug-row" data-expand-target="${expandRowId}">
+                        <td>
+                            <span class="expand-icon">▶</span>
+                            <a href="${bugUrl}" target="_blank" class="bug-link" onclick="event.stopPropagation()">${escapeHtml(linkText)}</a>
+                        </td>
+                        <td class="bug-count">${count}</td>
+                    </tr>
+                `;
+
+                // Expandable row for job details
+                tableHtml += `
+                    <tr id="${expandRowId}" class="expandable-row">
+                        <td colspan="2" class="expandable-content">
+                            <div class="job-details-loading">Loading job details...</div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tableHtml += `
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            container.innerHTML = tableHtml;
+
+            // Add click handlers to bug rows
+            container.querySelectorAll('.bug-row').forEach(row => {
+                row.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const bugData = row.dataset.bug;
+                    const testType = row.dataset.testType;
+                    const expandTargetId = row.dataset.expandTarget;
+                    const expandIcon = row.querySelector('.expand-icon');
+                    const expandRow = document.getElementById(expandTargetId);
+
+                    // Update selected state
+                    container.querySelectorAll('.bug-row').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+
+                    // Toggle expansion
+                    if (expandRow.classList.contains('expanded')) {
+                        // Collapse
+                        expandRow.classList.remove('expanded');
+                        expandIcon.classList.remove('expanded');
+                        clearChartHighlight();
+                    } else {
+                        // Collapse all other rows first
+                        container.querySelectorAll('.expandable-row.expanded').forEach(r => {
+                            r.classList.remove('expanded');
+                        });
+                        container.querySelectorAll('.expand-icon.expanded').forEach(icon => {
+                            icon.classList.remove('expanded');
+                        });
+
+                        // Expand this row
+                        expandRow.classList.add('expanded');
+                        expandIcon.classList.add('expanded');
+
+                        // Load job details
+                        loadJobDetails(expandTargetId, bugData, testType);
+
+                        // Highlight chart
+                        highlightChartForBug(bugData, testType);
+                    }
+                });
+            });
+        }
+
+        function loadJobDetails(expandRowId, bugData, testType) {
+            const expandRow = document.getElementById(expandRowId);
+            const contentCell = expandRow.querySelector('.expandable-content');
+
+
+            let jobs = globalJobDetails.get(bugData) || [];
+            const currentRepo = currentRepository;
+
+
+            // If no jobs found, try to find the full bug string (in case of truncation)
+            if (jobs.length === 0) {
+                const bugStart = bugData.split(':')[0] + ':'; // Get "1976612:" part
+                const matchingBugs = Array.from(globalJobDetails.keys()).filter(key =>
+                    key.startsWith(bugStart) && key.length > bugData.length
+                );
+
+
+                if (matchingBugs.length > 0) {
+                    // Use the longest matching bug (most complete)
+                    const fullBugData = matchingBugs.reduce((a, b) => a.length > b.length ? a : b);
+                    jobs = globalJobDetails.get(fullBugData) || [];
+                }
+            }
+
+            // Filter jobs by test type and repository
+            let filteredJobs = jobs;
+
+            if (testType !== 'All Test Types') {
+                filteredJobs = filteredJobs.filter(job => job.testType === testType);
+            }
+
+            if (currentRepo !== 'all') {
+                filteredJobs = filteredJobs.filter(job => job.repository === currentRepo);
+            }
+
+            if (filteredJobs.length === 0) {
+                // Debug info to help understand why no jobs were found
+                const debugInfo = [];
+                debugInfo.push(`Bug: ${bugData}`);
+                debugInfo.push(`Test Type Filter: ${testType}`);
+                debugInfo.push(`Repository Filter: ${currentRepo}`);
+                debugInfo.push(`Total jobs for this bug: ${jobs.length}`);
+
+                if (jobs.length > 0) {
+                    const repositories = [...new Set(jobs.map(j => j.repository))];
+                    const testTypes = [...new Set(jobs.map(j => j.testType))];
+                    debugInfo.push(`Available repositories: ${repositories.join(', ')}`);
+                    debugInfo.push(`Available test types: ${testTypes.join(', ')}`);
+                }
+
+                contentCell.innerHTML = `
+                    <div style="text-align: center; color: #666;">
+                        <div>No job details found</div>
+                        <details style="margin-top: 10px; text-align: left; font-size: 12px;">
+                            <summary style="cursor: pointer;">Debug info</summary>
+                            <pre style="margin-top: 5px;">${debugInfo.join('\n')}</pre>
+                        </details>
+                    </div>
+                `;
+                return;
+            }
+
+            // Group jobs by test name (removing the last -<number> suffix)
+            const groupedJobs = new Map();
+            filteredJobs.forEach(job => {
+                // Remove the last -<number> suffix from test name
+                const cleanTestName = job.testName.replace(/-\d+$/, '');
+
+                if (!groupedJobs.has(cleanTestName)) {
+                    groupedJobs.set(cleanTestName, {
+                        testName: cleanTestName,
+                        count: 0,
+                        platforms: new Set(),
+                        latestTime: job.time,
+                        jobs: []
+                    });
+                }
+
+                const group = groupedJobs.get(cleanTestName);
+                group.count += job.count;
+                group.platforms.add(job.platform);
+                group.jobs.push(job);
+
+                // Keep track of the most recent failure time
+                if (new Date(job.time) > new Date(group.latestTime)) {
+                    group.latestTime = job.time;
+                }
+            });
+
+            // Convert to array and sort by count (descending)
+            const sortedGroups = Array.from(groupedJobs.values())
+                .sort((a, b) => b.count - a.count);
+
+            let jobsHtml = `
+                <div style="margin-bottom: 10px;"><strong>${sortedGroups.length}</strong> unique test jobs, <strong>${filteredJobs.length}</strong> total failures</div>
+                <table class="job-details-table">
+                    <thead>
+                        <tr>
+                            <th>Test Name</th>
+                            <th>Platforms</th>
+                            <th>Failure Count</th>
+                            <th>Latest Failure</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            sortedGroups.forEach(group => {
+                const formattedTime = new Date(group.latestTime).toLocaleString();
+                const platformsArray = Array.from(group.platforms).sort();
+                const platformBadges = platformsArray.map(platform =>
+                    `<span class="platform-badge ${platform}">${platform}</span>`
+                ).join(' ');
+
+                // Find the job with the latest failure time for the profile link
+                const latestJob = group.jobs.reduce((latest, current) =>
+                    new Date(current.time) > new Date(latest.time) ? current : latest
+                );
+
+                // Create profile link for the latest failure
+                const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${latestJob.taskId}/runs/${latestJob.retryId || 0}/artifacts/public/test_info/profile_resource-usage.json`;
+                const encodedUrl = encodeURIComponent(baseUrl);
+                const profileName = `${group.testName} (${latestJob.taskId}.${latestJob.retryId || 0})`;
+                const encodedName = encodeURIComponent(profileName);
+                const profilerUrl = `https://profiler.firefox.com/from-url/${encodedUrl}?profileName=${encodedName}`;
+
+                jobsHtml += `
+                    <tr class="job-row" data-task-id="${latestJob.taskId}" data-retry-id="${latestJob.retryId || 0}" data-test-name="${escapeHtml(group.testName)}">
+                        <td>${escapeHtml(group.testName)}</td>
+                        <td>${platformBadges}</td>
+                        <td>${group.count}</td>
+                        <td><a href="${profilerUrl}" target="_blank" class="latest-failure-link" onclick="event.stopPropagation()">${formattedTime}</a></td>
+                    </tr>
+                `;
+            });
+
+            jobsHtml += `
+                    </tbody>
+                </table>
+            `;
+
+            contentCell.innerHTML = jobsHtml;
+
+            // Add click handlers to job rows
+            contentCell.querySelectorAll('.job-row').forEach(row => {
+                row.addEventListener('click', (e) => {
+                    // Don't show failure list if clicking on the latest failure link
+                    if (e.target.classList.contains('latest-failure-link')) {
+                        return; // Let the link handle itself
+                    }
+
+                    const testName = row.dataset.testName;
+
+                    // Find all jobs for this test name from the current bug data
+                    const currentRepo = currentRepository;
+                    // The bug data is passed to loadJobDetails and used in the table creation
+                    const currentBugData = bugData; // Use the bugData from the closure
+                    const currentTestType = testType; // Use the testType from the closure
+
+                    // Get jobs for this bug and filter by test name
+                    let jobs = globalJobDetails.get(currentBugData) || [];
+
+                    if (currentTestType !== 'All Test Types') {
+                        jobs = jobs.filter(job => job.testType === currentTestType);
+                    }
+                    if (currentRepo !== 'all') {
+                        jobs = jobs.filter(job => job.repository === currentRepo);
+                    }
+
+                    // Filter to just this specific test
+                    // testName from the row is already cleaned (suffix removed)
+                    const matchingJobs = jobs.filter(job => {
+                        // Clean the job name the same way it was cleaned when creating groups
+                        const cleanJobName = job.testName.replace(/-\d+$/, '');
+                        return cleanJobName === testName;
+                    });
+
+                    // Show detailed failure list
+                    showDetailedFailureList(testName, matchingJobs);
+                });
+            });
+        }
+
+        function showDetailedFailureList(testName, jobs) {
+            if (jobs.length === 0) {
+                alert('No failure details found for this test.');
+                return;
+            }
+
+            // Sort jobs by time (most recent first)
+            jobs.sort((a, b) => new Date(b.time) - new Date(a.time));
+
+            // Use the existing modal
+            const modal = document.getElementById('failureModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const failureList = document.getElementById('failureList');
+
+            // Update modal title
+            modalTitle.textContent = `Failure Details: ${testName}`;
+
+            // Create list items for failures
+            const listHtml = jobs.map(job => {
+                const formattedTime = new Date(job.time).toLocaleString();
+                const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${job.taskId}/runs/${job.retryId || 0}/artifacts/public/test_info/profile_resource-usage.json`;
+                const encodedUrl = encodeURIComponent(baseUrl);
+                const profileName = `${testName} (${job.taskId}.${job.retryId || 0})`;
+                const encodedName = encodeURIComponent(profileName);
+                const profilerUrl = `https://profiler.firefox.com/from-url/${encodedUrl}?profileName=${encodedName}`;
+
+                return `
+                    <li class="failure-item">
+                        <div>
+                            <div>${escapeHtml(job.testName)}</div>
+                            <div class="failure-platform">${job.platform} • ${job.repository} • ${job.testType}</div>
+                            <div class="failure-time">${formattedTime}</div>
+                        </div>
+                        <a href="${profilerUrl}" target="_blank" class="failure-link">View Profile</a>
+                    </li>
+                `;
+            }).join('');
+
+            failureList.innerHTML = listHtml;
+
+            // Show the modal
+            modal.style.display = 'block';
+        }
+
+        function highlightChartForBug(bugData, testType) {
+            // Store current selection for chart highlighting
+            currentSelectedBug = bugData;
+            currentChartType = testType;
+
+            // Get the times when this bug occurred
+            const bugTimes = [];
+            globalJobDetails.get(bugData)?.forEach(job => {
+                if (testType === 'All Test Types' || job.testType === testType) {
+                    bugTimes.push(job.time);
+                }
+            });
+
+            // Highlight the chart points
+            if (testType === 'All Test Types') {
+                highlightChart('chart-failures-by-push', bugTimes);
+            } else {
+                highlightChart(`chart-${testType}`, bugTimes);
+            }
+        }
+
+        function highlightChart(chartId, highlightTimes) {
+            const chartDiv = document.getElementById(chartId);
+            if (!chartDiv || !chartDiv.data) return;
+
+            // Create a set of highlight times for efficient lookup
+            const highlightSet = new Set(highlightTimes);
+
+            // Update chart to fade out non-highlighted points
+            const update = {
+                'marker.opacity': chartDiv.data.map(trace =>
+                    trace.x.map(time => highlightSet.has(time) ? 1.0 : 0.3)
+                ),
+                'line.opacity': chartDiv.data.map(() => 0.3)
+            };
+
+            Plotly.restyle(chartId, update);
+        }
+
+        function clearChartHighlight() {
+            // Reset all charts to full opacity
+            ['chart-failures-by-push'].forEach(chartId => {
+                const chartDiv = document.getElementById(chartId);
+                if (chartDiv && chartDiv.data) {
+                    const update = {
+                        'marker.opacity': chartDiv.data.map(() => 1.0),
+                        'line.opacity': chartDiv.data.map(() => 1.0)
+                    };
+                    Plotly.restyle(chartId, update);
+                }
+            });
+
+            // Reset test type charts
+            document.querySelectorAll('[id^="chart-"]').forEach(chartDiv => {
+                if (chartDiv.id !== 'chart-failures-by-push' && chartDiv.data) {
+                    const update = {
+                        'marker.opacity': chartDiv.data.map(() => 1.0),
+                        'line.opacity': chartDiv.data.map(() => 1.0)
+                    };
+                    Plotly.restyle(chartDiv.id, update);
+                }
+            });
+
+            // Clear selections
+            document.querySelectorAll('.bug-row.selected').forEach(row => {
+                row.classList.remove('selected');
+            });
+
+            currentSelectedBug = null;
+            currentChartType = null;
+        }
+
+
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Event listeners
+        // Repository switching is handled by onclick in the buttons
+
+        // Modal event listeners - set up after DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            const modal = document.getElementById('failureModal');
+            const closeBtn = modal.querySelector('.close');
+
+            closeBtn.addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+
+            window.addEventListener('click', (event) => {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+
+            // Add click handler for h2 headers to update URL hash
+            document.addEventListener('click', function(event) {
+                if (event.target.tagName === 'H2' && event.target.id) {
+                    window.location.hash = event.target.id;
+                }
+            });
+        });
+
+
+
+        // Initialize
+        fetchData();
+    </script>
+
+    <!-- Modal for detailed failure list -->
+    <div id="failureModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Test Failures</h2>
+                <span class="close">&times;</span>
+            </div>
+            <ul id="failureList" class="failure-list">
+                <!-- Failure items will be populated here -->
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
