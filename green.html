@@ -569,15 +569,19 @@
 
                 <div class="platform-links" style="display: flex; align-items: center;">
                     <span style="margin-right: 15px; color: #666;">Jump to:</span>
-                    <a href="#mochitest-section" style="margin-right: 15px;">Mochitest</a>
-                    <a href="#xpcshell-section" style="margin-right: 15px;">XPCShell</a>
-                    <a href="#reftest-section" style="margin-right: 15px;">Reftest</a>
-                    <a href="#web-platform-tests-section">Web Platform Tests</a>
+                    <a href="#mochitest" style="margin-right: 15px;">Mochitest</a>
+                    <a href="#xpcshell" style="margin-right: 15px;">XPCShell</a>
+                    <a href="#reftest" style="margin-right: 15px;">Reftest</a>
+                    <a href="#web-platform-tests">Web Platform Tests</a>
                 </div>
             </div>
         </div>
 
-        <div class="stats-grid" id="stats-grid">
+        <div id="loading-indicator" class="loading" style="display: block;">
+            Loading test data...
+        </div>
+
+        <div class="stats-grid" id="stats-grid" style="display: none;">
             <div class="stat-card">
                 <h3>Total Test Jobs</h3>
                 <div class="stat-value" id="total-tests">-</div>
@@ -600,8 +604,7 @@
             </div>
         </div>
 
-        <div class="charts-section">
-            <h2 id="all-test-types">All Test Types</h2>
+        <div class="charts-section" id="all-section" style="display: none;">
             <div class="chart-card">
                 <div id="chart-failures-by-push"></div>
                 <div id="bug-table-all-types"></div>
@@ -625,7 +628,7 @@
 
         async function fetchData() {
             try {
-                const response = await fetch('data.json');
+                const response = await fetch('https://sql.telemetry.mozilla.org/api/queries/110912/results.json?api_key=nspk9okIFFXZO7x2Ue9FuMAjIkFBuk5BzjwY6Na5');
                 const json = await response.json();
 
 
@@ -651,9 +654,15 @@
                 filteredData = [...testData];
 
 
+                // Hide loading indicator and show content
+                document.getElementById('loading-indicator').style.display = 'none';
+                document.getElementById('stats-grid').style.display = 'grid';
+                document.getElementById('all-section').style.display = 'block';
+
                 updateDisplay();
             } catch (error) {
                 console.error('Error fetching data:', error);
+                document.getElementById('loading-indicator').style.display = 'none';
                 showError('Failed to load test data. Please try again later.');
             }
         }
@@ -1099,12 +1108,11 @@
                 // Create section container
                 const sectionDiv = document.createElement('div');
                 sectionDiv.className = 'charts-section';
-                sectionDiv.id = `${testType}-section`;
 
                 // Add header outside of chart-card
                 const header = document.createElement('h2');
-                header.id = `${testType}-header`;
-                header.textContent = `${formatTestTypeName(testType)} Tests`;
+                header.id = testType;
+                header.textContent = formatTestTypeName(testType);
                 sectionDiv.appendChild(header);
 
                 // Calculate stats for this test type
