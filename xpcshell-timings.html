@@ -2002,27 +2002,58 @@
             }
         }
 
+        // Show visual feedback for successful copy
+        function showCopySuccess(button) {
+            const originalText = button.textContent;
+            button.textContent = '✓';
+            button.style.color = '#28a745';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.color = '';
+            }, 1000);
+        }
+
         // Copy test name to clipboard
         function copyTestName(testPath) {
-            navigator.clipboard.writeText(testPath).then(() => {
-                // Visual feedback - briefly show success
-                const button = event.target;
-                const originalText = button.textContent;
-                button.textContent = '✓';
-                button.style.color = '#28a745';
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.style.color = '';
-                }, 1000);
-            }).catch(() => {
-                // Fallback for older browsers
-                const textArea = document.createElement('textarea');
-                textArea.value = testPath;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-            });
+            const button = event.target;
+
+            // Check if clipboard API is available (requires HTTPS or localhost)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(testPath).then(() => {
+                    showCopySuccess(button);
+                }).catch(() => {
+                    // Fallback for clipboard API errors
+                    fallbackCopyToClipboard(testPath, button);
+                });
+            } else {
+                // Fallback when clipboard API is not available (HTTP, older browsers)
+                fallbackCopyToClipboard(testPath, button);
+            }
+        }
+
+        // Fallback copy function for non-HTTPS environments
+        function fallbackCopyToClipboard(text, button) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    showCopySuccess(button);
+                } else {
+                    console.log('Copy command returned false');
+                }
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            document.body.removeChild(textArea);
         }
 
         // Render scatter plots for a test
