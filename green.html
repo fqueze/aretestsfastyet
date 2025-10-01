@@ -625,6 +625,7 @@
         let globalJobDetails = new Map(); // Global storage for job details by bug
         let currentSelectedBug = null;
         let currentChartType = null;
+        let currentTimeFilter = null; // Store active time filter from zoom { start: Date, end: Date, chartType: string }
 
         async function fetchData() {
             try {
@@ -900,6 +901,9 @@
         function switchRepository(repo) {
             currentRepository = repo;
 
+            // Clear time filter when switching repositories
+            currentTimeFilter = null;
+
             // Update button states
             document.getElementById('autoland-btn').classList.toggle('active', repo === 'autoland');
             document.getElementById('mozilla-central-btn').classList.toggle('active', repo === 'mozilla-central');
@@ -915,22 +919,73 @@
             });
         }
 
-        function updateStats() {
-            const totalTestTypes = filteredData.length;
-            const totalJobRuns = filteredData.reduce((sum, test) => sum + test.total_runs, 0);
-            const failingTestTypes = filteredData.filter(t => t.failure_rate > 0).length;
-            const totalFailedJobs = filteredData.reduce((sum, test) => sum + test.failed_runs, 0);
+        function updateStats(preFilteredPushData) {
+            let totalJobRuns, totalFailedJobs;
+
+            // If there's a time filter for "All Test Types", recalculate based on time range
+            if (currentTimeFilter && currentTimeFilter.chartType === 'All Test Types' && preFilteredPushData) {
+                // Filter push data by time range
+                const startMs = currentTimeFilter.start.getTime();
+                const endMs = currentTimeFilter.end.getTime();
+
+                const filteredPushes = preFilteredPushData.filter(push => {
+                    const pushTime = new Date(push.time);
+                    const pushMs = pushTime.getTime();
+                    return pushMs >= startMs && pushMs <= endMs;
+                });
+
+                totalJobRuns = 0;
+                totalFailedJobs = 0;
+
+                filteredPushes.forEach(push => {
+                    // Sum all test types
+                    push.totalJobs.forEach(count => {
+                        totalJobRuns += count;
+                    });
+                    push.testTypes.forEach(count => {
+                        totalFailedJobs += count;
+                    });
+                });
+            } else {
+                // No time filter, use full data
+                totalJobRuns = filteredData.reduce((sum, test) => sum + test.total_runs, 0);
+                totalFailedJobs = filteredData.reduce((sum, test) => sum + test.failed_runs, 0);
+            }
+
             const overallFailRate = totalJobRuns > 0 ? (totalFailedJobs / totalJobRuns) * 100 : 0;
 
             // Find worst test type
             const typeStats = {};
-            filteredData.forEach(test => {
-                if (!typeStats[test.test_type]) {
-                    typeStats[test.test_type] = { total: 0, failed: 0 };
-                }
-                typeStats[test.test_type].total += test.total_runs;
-                typeStats[test.test_type].failed += test.failed_runs;
-            });
+            if (currentTimeFilter && currentTimeFilter.chartType === 'All Test Types' && preFilteredPushData) {
+                // Filter push data by time range (use same filtered pushes from above)
+                const startMs = currentTimeFilter.start.getTime();
+                const endMs = currentTimeFilter.end.getTime();
+
+                const filteredPushes = preFilteredPushData.filter(push => {
+                    const pushTime = new Date(push.time);
+                    const pushMs = pushTime.getTime();
+                    return pushMs >= startMs && pushMs <= endMs;
+                });
+
+                filteredPushes.forEach(push => {
+                    push.totalJobs.forEach((totalCount, testType) => {
+                        if (!typeStats[testType]) {
+                            typeStats[testType] = { total: 0, failed: 0 };
+                        }
+                        typeStats[testType].total += totalCount;
+                        const failedCount = push.testTypes.get(testType) || 0;
+                        typeStats[testType].failed += failedCount;
+                    });
+                });
+            } else {
+                filteredData.forEach(test => {
+                    if (!typeStats[test.test_type]) {
+                        typeStats[test.test_type] = { total: 0, failed: 0 };
+                    }
+                    typeStats[test.test_type].total += test.total_runs;
+                    typeStats[test.test_type].failed += test.failed_runs;
+                });
+            }
 
             let worstType = '-';
             let worstRate = 0;
@@ -942,6 +997,7 @@
                 }
             });
 
+            const suffix = (currentTimeFilter && currentTimeFilter.chartType === 'All Test Types') ? ' (filtered)' : '';
             document.getElementById('total-tests').textContent = totalJobRuns.toLocaleString();
             document.getElementById('overall-fail-rate').textContent = overallFailRate.toFixed(1) + '%';
             document.getElementById('failing-tests').textContent = totalFailedJobs.toLocaleString();
@@ -1044,6 +1100,12 @@
 
             Plotly.newPlot('chart-failures-by-push', traces, layout, {responsive: true});
 
+            // Add zoom event listener
+            const chartDiv = document.getElementById('chart-failures-by-push');
+            chartDiv.on('plotly_relayout', (eventData) => {
+                handleChartZoom(eventData, 'All Test Types', filteredPushData, chartDiv);
+            });
+
             // Generate bug table for all types
             generateBugTable('bug-table-all-types', filteredPushData, 'All Test Types');
         }
@@ -1097,13 +1159,6 @@
                 if (platformsForType.size === 0) {
                     return;
                 }
-
-                // Capitalize and format test type name
-                const formatTestTypeName = (testType) => {
-                    return testType.split('-').map(word =>
-                        word.charAt(0).toUpperCase() + word.slice(1)
-                    ).join(' ');
-                };
 
                 // Create section container
                 const sectionDiv = document.createElement('div');
@@ -1191,19 +1246,199 @@
 
                 Plotly.newPlot(`chart-${testType}`, traces, layout, {responsive: true});
 
+                // Add zoom event listener to this chart
+                const testTypeChartDiv = document.getElementById(`chart-${testType}`);
+                testTypeChartDiv.on('plotly_relayout', (eventData) => {
+                    handleChartZoom(eventData, testType, filteredPushData, testTypeChartDiv);
+                });
+
                 // Generate bug table for this test type
                 generateBugTable(`bug-table-${testType}`, filteredPushData, testType);
             });
+        }
+
+        function handleChartZoom(eventData, testType, fullPushData, chartDiv) {
+            // Check if this is a reset/autoscale event
+            if (eventData['xaxis.autorange'] === true) {
+                // User clicked "Autoscale" or double-clicked to reset
+                if (currentTimeFilter && currentTimeFilter.chartType === testType) {
+                    currentTimeFilter = null;
+                    regenerateStatsAndTable(testType, fullPushData);
+                }
+                return;
+            }
+
+            // Check if there's an x-axis range change
+            let startTime = null;
+            let endTime = null;
+
+            // Helper function to parse Plotly date strings as UTC
+            const parsePlotlyDate = (dateStr) => {
+                // Plotly sends dates like "2025-09-15 16:23:32.2408" without timezone
+                // But our data is in UTC, so we need to parse these as UTC
+                // Replace space with 'T' and add 'Z' for ISO format to force UTC parsing
+                const isoStr = dateStr.replace(' ', 'T') + 'Z';
+                return new Date(isoStr);
+            };
+
+            // Plotly sends range data in different formats depending on the event
+            if (eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined) {
+                startTime = parsePlotlyDate(eventData['xaxis.range[0]']);
+                endTime = parsePlotlyDate(eventData['xaxis.range[1]']);
+            } else if (eventData['xaxis.range'] && Array.isArray(eventData['xaxis.range'])) {
+                startTime = parsePlotlyDate(eventData['xaxis.range'][0]);
+                endTime = parsePlotlyDate(eventData['xaxis.range'][1]);
+            } else if (chartDiv && chartDiv.layout && chartDiv.layout.xaxis && chartDiv.layout.xaxis.range) {
+                // Fallback: get range from current chart layout
+                startTime = parsePlotlyDate(chartDiv.layout.xaxis.range[0]);
+                endTime = parsePlotlyDate(chartDiv.layout.xaxis.range[1]);
+            }
+
+            // If we got a time range, update the filter
+            if (startTime && endTime && isValidDate(startTime) && isValidDate(endTime)) {
+                currentTimeFilter = {
+                    start: startTime,
+                    end: endTime,
+                    chartType: testType
+                };
+
+                regenerateStatsAndTable(testType, fullPushData);
+            }
+        }
+
+        function isValidDate(date) {
+            return date instanceof Date && !isNaN(date);
+        }
+
+        function regenerateStatsAndTable(testType, fullPushData) {
+            // Update stats for this test type if applicable
+            if (testType !== 'All Test Types') {
+                // Update the stats grid for this specific test type
+                const statsGrid = document.querySelector(`#${testType}`).nextElementSibling;
+                if (statsGrid && statsGrid.classList.contains('stats-grid')) {
+                    updateTestTypeStats(statsGrid, testType, fullPushData);
+                }
+            } else {
+                // Update global stats
+                updateStats(fullPushData);
+            }
+
+            // Regenerate the bug table with filtered data
+            const containerId = testType === 'All Test Types' ? 'bug-table-all-types' : `bug-table-${testType}`;
+            generateBugTable(containerId, fullPushData, testType);
+        }
+
+        function updateTestTypeStats(statsGrid, testType, preFilteredPushData) {
+            // Calculate stats for this test type
+            const testTypeStats = filteredData.filter(test => test.test_type === testType);
+
+            // If there's a time filter, we need to recalculate based on filtered push data
+            if (currentTimeFilter && currentTimeFilter.chartType === testType) {
+                // Filter push data by time range
+                const startMs = currentTimeFilter.start.getTime();
+                const endMs = currentTimeFilter.end.getTime();
+
+                // Use the pre-filtered push data (already filtered by repo and job count)
+                const filteredPushes = preFilteredPushData.filter(push => {
+                    const pushTime = new Date(push.time);
+                    const pushMs = pushTime.getTime();
+                    return pushMs >= startMs && pushMs <= endMs;
+                });
+
+                // Calculate stats from filtered pushes
+                let totalJobRuns = 0;
+                let totalFailedJobs = 0;
+
+                filteredPushes.forEach(push => {
+                    // Get total jobs for this test type
+                    const jobCount = push.totalJobs.get(testType) || 0;
+                    totalJobRuns += jobCount;
+
+                    // Get failures for this test type
+                    const failureCount = push.testTypes.get(testType) || 0;
+                    totalFailedJobs += failureCount;
+                });
+
+                const actualFailRate = totalJobRuns > 0 ? (totalFailedJobs / totalJobRuns) * 100 : 0;
+
+                statsGrid.innerHTML = `
+                    <div class="stat-card">
+                        <h3>Total ${formatTestTypeName(testType)} Jobs</h3>
+                        <div class="stat-value">${totalJobRuns.toLocaleString()}</div>
+                        <div class="stat-label">Job runs for this test type (filtered)</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failure Rate</h3>
+                        <div class="stat-value">${actualFailRate.toFixed(1)}%</div>
+                        <div class="stat-label">Failed runs / total runs (filtered)</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failed Jobs</h3>
+                        <div class="stat-value">${totalFailedJobs.toLocaleString()}</div>
+                        <div class="stat-label">Failed ${formatTestTypeName(testType).toLowerCase()} runs (filtered)</div>
+                    </div>
+                `;
+            } else {
+                // No time filter, use original calculation
+                const totalJobRuns = testTypeStats.reduce((sum, test) => sum + test.total_runs, 0);
+                const totalFailedJobs = testTypeStats.reduce((sum, test) => sum + test.failed_runs, 0);
+                const actualFailRate = totalJobRuns > 0 ? (totalFailedJobs / totalJobRuns) * 100 : 0;
+
+                statsGrid.innerHTML = `
+                    <div class="stat-card">
+                        <h3>Total ${formatTestTypeName(testType)} Jobs</h3>
+                        <div class="stat-value">${totalJobRuns.toLocaleString()}</div>
+                        <div class="stat-label">Job runs for this test type</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failure Rate</h3>
+                        <div class="stat-value">${actualFailRate.toFixed(1)}%</div>
+                        <div class="stat-label">Failed runs / total runs</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Failed Jobs</h3>
+                        <div class="stat-value">${totalFailedJobs.toLocaleString()}</div>
+                        <div class="stat-label">Failed ${formatTestTypeName(testType).toLowerCase()} runs</div>
+                    </div>
+                `;
+            }
+        }
+
+        function formatTestTypeName(testType) {
+            // Special case for xpcshell to match the navigation link capitalization
+            if (testType === 'xpcshell') {
+                return 'XPCShell';
+            }
+            return testType.split('-').map(word =>
+                word.charAt(0).toUpperCase() + word.slice(1)
+            ).join(' ');
         }
 
         function generateBugTable(containerId, filteredPushData, testType) {
             const container = document.getElementById(containerId);
             if (!container) return;
 
+            // Apply time filter if active and matches this chart
+            let pushDataToUse = filteredPushData;
+            if (currentTimeFilter && currentTimeFilter.chartType === testType) {
+                // Plotly returns dates in the user's local timezone, but our data is in UTC
+                // We need to compare using UTC timestamps
+                const startMs = currentTimeFilter.start.getTime();
+                const endMs = currentTimeFilter.end.getTime();
+
+                pushDataToUse = filteredPushData.filter(push => {
+                    // Parse the UTC timestamp from the data
+                    const pushMs = new Date(push.time).getTime();
+                    // Both are now in milliseconds since epoch (UTC), so comparison works
+                    return pushMs >= startMs && pushMs <= endMs;
+                });
+
+            }
+
             // Aggregate bug data across all pushes
             const bugCounts = new Map();
 
-            filteredPushData.forEach(push => {
+            pushDataToUse.forEach(push => {
                 if (testType === 'All Test Types') {
                     // For all types, use the overall bugs map
                     push.bugs.forEach((count, bugId) => {
@@ -1357,7 +1592,7 @@
                 }
             }
 
-            // Filter jobs by test type and repository
+            // Filter jobs by test type, repository, and time range
             let filteredJobs = jobs;
 
             if (testType !== 'All Test Types') {
@@ -1368,12 +1603,23 @@
                 filteredJobs = filteredJobs.filter(job => job.repository === currentRepo);
             }
 
+            // Filter by time range if there's an active time filter for this chart type
+            if (currentTimeFilter && currentTimeFilter.chartType === testType) {
+                filteredJobs = filteredJobs.filter(job => {
+                    const jobTime = new Date(job.time);
+                    return jobTime >= currentTimeFilter.start && jobTime <= currentTimeFilter.end;
+                });
+            }
+
             if (filteredJobs.length === 0) {
                 // Debug info to help understand why no jobs were found
                 const debugInfo = [];
                 debugInfo.push(`Bug: ${bugData}`);
                 debugInfo.push(`Test Type Filter: ${testType}`);
                 debugInfo.push(`Repository Filter: ${currentRepo}`);
+                if (currentTimeFilter && currentTimeFilter.chartType === testType) {
+                    debugInfo.push(`Time Range Filter: ${currentTimeFilter.start.toLocaleString()} - ${currentTimeFilter.end.toLocaleString()}`);
+                }
                 debugInfo.push(`Total jobs for this bug: ${jobs.length}`);
 
                 if (jobs.length > 0) {
