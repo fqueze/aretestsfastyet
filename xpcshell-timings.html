@@ -2571,9 +2571,13 @@
                 document.getElementById('date-select').value = date || '';
 
                 // Restore search filter (or clear if not in hash)
-                const search = params.get('q');
-                document.getElementById('search-box').value = search || '';
-                updateClearButton();
+                // Don't update if the search box is currently focused (user is typing)
+                const searchBox = document.getElementById('search-box');
+                if (document.activeElement !== searchBox) {
+                    const search = params.get('q');
+                    searchBox.value = search || '';
+                    updateClearButton();
+                }
 
                 // Restore view selection (or clear if not in hash)
                 const view = params.get('view');
