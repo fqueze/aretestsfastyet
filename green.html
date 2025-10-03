@@ -1677,7 +1677,7 @@
                 <table class="job-details-table">
                     <thead>
                         <tr>
-                            <th>Test Name</th>
+                            <th>Test Job Name</th>
                             <th>Platforms</th>
                             <th>Failure Count</th>
                             <th>Latest Failure</th>
@@ -1746,6 +1746,14 @@
                     }
                     if (currentRepo !== 'all') {
                         jobs = jobs.filter(job => job.repository === currentRepo);
+                    }
+
+                    // Apply time filter if active
+                    if (currentTimeFilter && currentTimeFilter.chartType === currentTestType) {
+                        jobs = jobs.filter(job => {
+                            const jobTime = new Date(job.time);
+                            return jobTime >= currentTimeFilter.start && jobTime <= currentTimeFilter.end;
+                        });
                     }
 
                     // Filter to just this specific test
