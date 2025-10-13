@@ -95,6 +95,12 @@ function extractTestTimings(profile, jobName) {
         } else if (data.type === "Text") {
             // Old format
             testPath = data.text;
+
+            // Skip text markers like "replaying full log for ..."
+            if (testPath?.startsWith('replaying full log for ')) {
+                continue;
+            }
+
             // We don't have status information in old format
             status = 'UNKNOWN';
         } else {
