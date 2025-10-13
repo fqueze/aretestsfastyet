@@ -424,6 +424,13 @@
             return num.toLocaleString();
         }
 
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Calculate pass percentage with consistent precision
         function calculatePassPercentage(passCount, runCount) {
             if (runCount === 0) return 0;
@@ -471,7 +478,11 @@
         // Generate chart HTML structure (shared between tree and list views)
         function generateChartHtml(testPath) {
             const chartIdBase = testPath.replace(/[\/\.]/g, '-');
-            return `<div class="chart-expansion"><div id="chart-${chartIdBase}"></div><div id="chart-timeout-${chartIdBase}"></div></div>`;
+            return `
+                <div class="chart-expansion">
+                    <div id="chart-${chartIdBase}"></div>
+                    <div id="chart-timeout-${chartIdBase}"></div>
+                </div>`;
         }
 
         // Generate copy button for test paths
@@ -1220,6 +1231,38 @@
             return platforms;
         }
 
+        // Get skip message counts for a test
+        function getSkipMessageCounts(testId) {
+            const messageCounts = new Map();
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return [];
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find SKIP status ID
+            const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
+            if (skipStatusId === -1) return [];
+
+            const statusGroup = testGroup[skipStatusId];
+            if (!statusGroup || !statusGroup.messageIds) return [];
+
+            // Count messages
+            statusGroup.messageIds.forEach(messageId => {
+                if (messageId !== null) {
+                    const message = currentData.tables.messages[messageId];
+                    if (message) {
+                        messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                    }
+                }
+            });
+
+            // Convert to array and sort by count (descending)
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
         // Generate tooltip content for platform breakdown
         function generateTooltipContent(platforms, type, testData, testPath) {
             // Handle timing tooltips differently
@@ -1270,6 +1313,22 @@
                 content += `<span>${counts[type]} (${percentage}%)</span>`;
                 content += `</div>`;
             });
+
+            // Add skip messages for skips tooltip
+            if (type === 'skips' && testData && testData.testId !== undefined) {
+                const skipMessageCounts = getSkipMessageCounts(testData.testId);
+                if (skipMessageCounts.length > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #555;">`;
+                    content += `<strong>Skip reasons:</strong><br/>`;
+                    skipMessageCounts.forEach(({message, count}) => {
+                        content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
+                        content += `<span style="font-family: monospace;">${escapeHtml(message)}</span>`;
+                        content += ` <span style="color: #999;">(${count})</span>`;
+                        content += `</div>`;
+                    });
+                    content += `</div>`;
+                }
+            }
 
             // Add parallel failure summary at the end for failures tooltip on individual tests
             if (type === 'failures' && testData && testData.stats) {

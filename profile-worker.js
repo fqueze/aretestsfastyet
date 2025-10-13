@@ -67,12 +67,15 @@ function extractTestTimings(profile, jobName) {
 
         let testPath = null;
         let status = 'UNKNOWN';
+        let message = null;
 
         // Handle both old format (type: "Text") and new format (type: "Test")
         if (data.type === "Test") {
             // New structured format
             testPath = data.test || data.name;
             status = data.status || 'UNKNOWN';
+            // Normalize line breaks in message (convert \r\n to \n)
+            message = data.message ? data.message.replace(/\r\n/g, '\n') : null;
 
             // Check if this is an expected failure (FAIL status but green color)
             if (status === 'FAIL' && data.color === 'green') {
@@ -102,12 +105,16 @@ function extractTestTimings(profile, jobName) {
             continue;
         }
 
-        timings.push({
+        const timing = {
             path: testPath,
             duration: markers.endTime[i] - markers.startTime[i],
             status: status,
             timestamp: profile.meta.startTime + markers.startTime[i]
-        });
+        };
+        if (message) {
+            timing.message = message;
+        }
+        timings.push(timing);
     }
 
     return timings;

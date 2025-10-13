@@ -228,7 +228,8 @@ function createDataTables(jobResults) {
         testNames: [],
         repositories: [],
         statuses: [],
-        taskIds: []
+        taskIds: [],
+        messages: []
     };
 
     // Maps for O(1) string lookups
@@ -238,7 +239,8 @@ function createDataTables(jobResults) {
         testNames: new Map(),
         repositories: new Map(),
         statuses: new Map(),
-        taskIds: new Map()
+        taskIds: new Map(),
+        messages: new Map()
     };
 
     // Task info maps task ID index to repository and job name indexes
@@ -324,17 +326,28 @@ function createDataTables(jobResults) {
 
             // Initialize status group within test if it doesn't exist
             if (!testRuns[testId][statusId]) {
-                testRuns[testId][statusId] = {
+                const statusGroup = {
                     taskIdIds: [],
                     durations: [],
                     timestamps: []
                 };
+                // Only include messageIds array for SKIP status
+                if (timing.status === 'SKIP') {
+                    statusGroup.messageIds = [];
+                }
+                testRuns[testId][statusId] = statusGroup;
             }
 
             // Add test run to the appropriate test/status group
             testRuns[testId][statusId].taskIdIds.push(taskIdId);
             testRuns[testId][statusId].durations.push(Math.round(timing.duration));
             testRuns[testId][statusId].timestamps.push(timing.timestamp);
+
+            // Store message ID for SKIP status (or null if no message)
+            if (timing.status === 'SKIP') {
+                const messageId = timing.message ? findStringIndex('messages', timing.message) : null;
+                testRuns[testId][statusId].messageIds.push(messageId);
+            }
         }
     }
 
