@@ -374,6 +374,168 @@ function createDataTables(jobResults) {
     };
 }
 
+// Sort string tables by frequency and remap all indices for deterministic output and better compression
+function sortStringTablesByFrequency(dataStructure) {
+    const { tables, taskInfo, testInfo, testRuns } = dataStructure;
+
+    // Count frequency of each index for each table
+    const frequencyCounts = {
+        jobNames: new Array(tables.jobNames.length).fill(0),
+        testPaths: new Array(tables.testPaths.length).fill(0),
+        testNames: new Array(tables.testNames.length).fill(0),
+        repositories: new Array(tables.repositories.length).fill(0),
+        statuses: new Array(tables.statuses.length).fill(0),
+        taskIds: new Array(tables.taskIds.length).fill(0),
+        messages: new Array(tables.messages.length).fill(0),
+        crashSignatures: new Array(tables.crashSignatures.length).fill(0)
+    };
+
+    // Count taskInfo references
+    for (const jobNameId of taskInfo.jobNameIds) {
+        if (jobNameId !== undefined) frequencyCounts.jobNames[jobNameId]++;
+    }
+    for (const repositoryId of taskInfo.repositoryIds) {
+        if (repositoryId !== undefined) frequencyCounts.repositories[repositoryId]++;
+    }
+
+    // Count testInfo references
+    for (const testPathId of testInfo.testPathIds) {
+        frequencyCounts.testPaths[testPathId]++;
+    }
+    for (const testNameId of testInfo.testNameIds) {
+        frequencyCounts.testNames[testNameId]++;
+    }
+
+    // Count testRuns references
+    for (const testGroup of testRuns) {
+        if (!testGroup) continue;
+
+        testGroup.forEach((statusGroup, statusId) => {
+            if (!statusGroup) return;
+
+            frequencyCounts.statuses[statusId] += statusGroup.taskIdIds.length;
+
+            for (const taskIdId of statusGroup.taskIdIds) {
+                frequencyCounts.taskIds[taskIdId]++;
+            }
+
+            if (statusGroup.messageIds) {
+                for (const messageId of statusGroup.messageIds) {
+                    if (messageId !== null) frequencyCounts.messages[messageId]++;
+                }
+            }
+
+            if (statusGroup.crashSignatureIds) {
+                for (const crashSigId of statusGroup.crashSignatureIds) {
+                    if (crashSigId !== null) frequencyCounts.crashSignatures[crashSigId]++;
+                }
+            }
+        });
+    }
+
+    // Create sorted tables and index mappings (sorted by frequency descending)
+    const sortedTables = {};
+    const indexMaps = {};
+
+    for (const [tableName, table] of Object.entries(tables)) {
+        const counts = frequencyCounts[tableName];
+
+        // Create array with value, oldIndex, and count
+        const indexed = table.map((value, oldIndex) => ({
+            value,
+            oldIndex,
+            count: counts[oldIndex]
+        }));
+
+        // Sort by count descending, then by value for deterministic order when counts are equal
+        indexed.sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return a.value.localeCompare(b.value);
+        });
+
+        // Extract sorted values and create mapping
+        sortedTables[tableName] = indexed.map(item => item.value);
+        indexMaps[tableName] = new Map(indexed.map((item, newIndex) => [item.oldIndex, newIndex]));
+    }
+
+    // Remap taskInfo indices
+    // taskInfo arrays are indexed by taskIdId, and when taskIds get remapped,
+    // we need to rebuild the arrays at the new indices
+    const sortedTaskInfo = {
+        repositoryIds: [],
+        jobNameIds: []
+    };
+
+    for (let oldTaskIdId = 0; oldTaskIdId < taskInfo.repositoryIds.length; oldTaskIdId++) {
+        const newTaskIdId = indexMaps.taskIds.get(oldTaskIdId);
+        sortedTaskInfo.repositoryIds[newTaskIdId] = indexMaps.repositories.get(taskInfo.repositoryIds[oldTaskIdId]);
+        sortedTaskInfo.jobNameIds[newTaskIdId] = indexMaps.jobNames.get(taskInfo.jobNameIds[oldTaskIdId]);
+    }
+
+    // Remap testInfo indices
+    const sortedTestInfo = {
+        testPathIds: testInfo.testPathIds.map(oldId => indexMaps.testPaths.get(oldId)),
+        testNameIds: testInfo.testNameIds.map(oldId => indexMaps.testNames.get(oldId))
+    };
+
+    // Remap testRuns indices
+    const sortedTestRuns = testRuns.map(testGroup => {
+        if (!testGroup) return testGroup;
+
+        return testGroup.map((statusGroup, oldStatusId) => {
+            if (!statusGroup) return statusGroup;
+
+            const newStatusId = indexMaps.statuses.get(oldStatusId);
+
+            const remapped = {
+                taskIdIds: statusGroup.taskIdIds.map(oldId => indexMaps.taskIds.get(oldId)),
+                durations: statusGroup.durations,
+                timestamps: statusGroup.timestamps
+            };
+
+            // Remap message IDs for SKIP status
+            if (statusGroup.messageIds) {
+                remapped.messageIds = statusGroup.messageIds.map(oldId =>
+                    oldId === null ? null : indexMaps.messages.get(oldId)
+                );
+            }
+
+            // Remap crash data for CRASH status
+            if (statusGroup.crashSignatureIds) {
+                remapped.crashSignatureIds = statusGroup.crashSignatureIds.map(oldId =>
+                    oldId === null ? null : indexMaps.crashSignatures.get(oldId)
+                );
+            }
+            if (statusGroup.minidumps) {
+                remapped.minidumps = statusGroup.minidumps;
+            }
+
+            return remapped;
+        });
+    });
+
+    // Remap statusId positions in testRuns (move status groups to their new positions)
+    const finalTestRuns = sortedTestRuns.map(testGroup => {
+        if (!testGroup) return testGroup;
+
+        const remappedGroup = [];
+        testGroup.forEach((statusGroup, oldStatusId) => {
+            if (!statusGroup) return;
+            const newStatusId = indexMaps.statuses.get(oldStatusId);
+            remappedGroup[newStatusId] = statusGroup;
+        });
+
+        return remappedGroup;
+    });
+
+    return {
+        tables: sortedTables,
+        taskInfo: sortedTaskInfo,
+        testInfo: sortedTestInfo,
+        testRuns: finalTestRuns
+    };
+}
+
 // Common function to process jobs and create data structure
 async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, metadata) {
     if (jobs.length === 0) {
@@ -389,7 +551,7 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
 
     // Create efficient data tables
     const dataTablesStart = Date.now();
-    const dataStructure = createDataTables(jobResults);
+    let dataStructure = createDataTables(jobResults);
     const dataTablesTime = Date.now() - dataTablesStart;
     console.log(`Created data tables in ${dataTablesTime}ms:`);
 
@@ -405,6 +567,12 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
         return sum + testGroup.reduce((testSum, statusGroup) => testSum + (statusGroup ? statusGroup.taskIdIds.length : 0), 0);
     }, 0);
     console.log(`  ${dataStructure.testInfo.testPathIds.length} tests, ${totalRuns} runs, ${dataStructure.tables.taskIds.length} tasks, ${dataStructure.tables.jobNames.length} job names, ${dataStructure.tables.statuses.length} statuses`);
+
+    // Sort string tables by frequency for deterministic output and better compression
+    const sortingStart = Date.now();
+    dataStructure = sortStringTablesByFrequency(dataStructure);
+    const sortingTime = Date.now() - sortingStart;
+    console.log(`Sorted string tables by frequency in ${sortingTime}ms`);
 
     // Convert absolute timestamps to relative and apply differential compression (in place)
     for (const testGroup of dataStructure.testRuns) {
