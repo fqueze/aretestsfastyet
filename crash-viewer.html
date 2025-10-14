@@ -18,44 +18,152 @@
             line-height: 1.6;
         }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-
         h1 {
             color: #333;
-            margin-bottom: 20px;
+            margin: 0 0 20px 0;
             padding-bottom: 10px;
             border-bottom: 3px solid #0066cc;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .container {
+            margin: 0 auto;
+            background: white;
+            padding: 0 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .crash-signature-link {
+            color: #333;
+            text-decoration: none;
+        }
+
+        .crash-signature-link:hover {
+            color: #0066cc;
+            text-decoration: underline;
+        }
+
+        .raw-json-link {
+            font-size: 14px;
+            font-weight: normal;
+            color: #0066cc;
+            text-decoration: none;
+        }
+
+        .raw-json-link:hover {
+            text-decoration: underline;
         }
 
         h2 {
             color: #444;
-            margin-top: 30px;
-            margin-bottom: 15px;
-            padding: 10px;
-            background: #f8f9fa;
-            border-left: 4px solid #0066cc;
+            margin-top: 10px;
+            margin-bottom: 10px;
+            font-size: 1.3em;
+            font-weight: 600;
         }
 
         h3 {
             color: #555;
+            margin: 0 0 10px 0;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        h3:not(:first-child) {
             margin-top: 20px;
-            margin-bottom: 10px;
+        }
+
+        h4 {
+            color: #444;
+            margin: 0;
+            font-size: 1.1em;
+        }
+
+        h4:not(:first-of-type) {
+            margin-top: 10px;
+        }
+
+        .thread-truncate {
+            color: #0066cc;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        .thread-truncate:hover {
+            text-decoration: underline;
+        }
+
+        .thread-truncate.hidden {
+            display: none;
+        }
+
+        .thread-extra-frames {
+            display: none;
+        }
+
+        .thread-extra-frames.expanded {
+            display: table-row;
+        }
+
+        .info-value-full {
+            font-family: monospace;
+            color: #333;
+            word-break: break-all;
+            font-size: 0.95em;
+            grid-column: 2 / 5;
+        }
+
+        .expandable-section {
+            margin-top: 15px;
+            padding-bottom: 10px;
+            border-top: 1px solid #e9ecef;
+            padding-top: 10px;
+        }
+
+        .expandable-header {
+            cursor: pointer;
+            color: #0066cc;
+            font-size: 0.9em;
+            user-select: none;
+        }
+
+        .expandable-header:hover {
+            text-decoration: underline;
+        }
+
+        .expandable-content {
+            display: none;
+            margin-top: 10px;
+            padding-left: 15px;
+        }
+
+        .expandable-content.expanded {
+            display: block;
+        }
+
+        .extra-field {
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+
+        .extra-field-name {
+            font-weight: bold;
+            color: #666;
+        }
+
+        .extra-field-value {
+            font-family: monospace;
+            color: #333;
+            word-break: break-all;
         }
 
         .file-input {
-            margin: 20px 0;
-            padding: 20px;
-            background: #f8f9fa;
-            border: 2px dashed #ddd;
-            border-radius: 5px;
             text-align: center;
+            border: 2px dashed #ddd;
         }
 
         .file-input input[type="file"] {
@@ -64,35 +172,43 @@
 
         .info-grid {
             display: grid;
-            grid-template-columns: 200px 1fr;
-            gap: 10px;
-            margin: 15px 0;
+            grid-template-columns: 200px 1fr 200px 1fr;
+            gap: 5px 15px;
+            margin: 10px 0;
+            line-height: 1.4;
+        }
+
+        .info-grid:first-of-type {
+            padding-top: 10px;
         }
 
         .info-label {
             font-weight: bold;
             color: #666;
+            font-size: 0.95em;
         }
 
         .info-value {
             font-family: monospace;
             color: #333;
             word-break: break-all;
+            font-size: 0.95em;
         }
 
         .crash-reason {
             background: #fee;
-            padding: 15px;
+            padding: 15px 20px;
             border-left: 4px solid #d00;
-            margin: 15px 0;
+            margin: 0 -20px;
             font-family: monospace;
         }
 
         .stack-table {
-            width: 100%;
+            width: calc(100% + 40px);
+            margin-left: -20px;
+            margin-right: -20px;
             border-collapse: collapse;
             font-size: 13px;
-            margin: 15px 0;
         }
 
         .stack-table thead {
@@ -106,6 +222,22 @@
             padding: 8px;
             font-weight: 600;
             border-bottom: 2px solid #dee2e6;
+        }
+
+        .stack-table th:first-child {
+            padding-left: 20px;
+        }
+
+        .stack-table th:last-child {
+            padding-right: 20px;
+        }
+
+        .stack-table td:first-child {
+            padding-left: 20px;
+        }
+
+        .stack-table td:last-child {
+            padding-right: 20px;
         }
 
         .stack-table tr {
@@ -171,6 +303,10 @@
             color: #868e96;
         }
 
+        .frame-trust[title]:hover {
+            text-decoration: underline dotted;
+        }
+
         .frame-details {
             background: #f8f9fa;
             display: none;
@@ -233,35 +369,56 @@
             color: #0066cc;
         }
 
-        .module-list {
+        .module-table {
+            width: calc(100% + 40px);
+            margin-left: -20px;
+            margin-right: -20px;
+            border-collapse: collapse;
+            font-size: 13px;
             max-height: 400px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 0.9em;
         }
 
-        .module {
+        .module-table thead {
+            background: #e9ecef;
+            position: sticky;
+            top: 0;
+        }
+
+        .module-table th {
+            text-align: left;
             padding: 8px;
-            border-bottom: 1px solid #eee;
-        }
-
-        .module:hover {
-            background: #f8f9fa;
-        }
-
-        .thread {
-            margin: 15px 0;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 5px;
-        }
-
-        .thread-header {
-            font-weight: bold;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
+            font-weight: 600;
             border-bottom: 2px solid #dee2e6;
         }
+
+        .module-table th:first-child {
+            padding-left: 20px;
+        }
+
+        .module-table th:last-child {
+            padding-right: 20px;
+        }
+
+        .module-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #e9ecef;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .module-table td:first-child {
+            padding-left: 20px;
+            font-weight: 500;
+        }
+
+        .module-table td:last-child {
+            padding-right: 20px;
+        }
+
+        .module-table tr:hover {
+            background: #f8f9fa;
+        }
+
 
         .error {
             background: #fee;
@@ -298,26 +455,112 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Crash Dump Viewer</h1>
+    <h1>
+        <span id="page-title">Crash Dump Viewer</span>
+        <span id="raw-json-link-container"></span>
+    </h1>
 
-        <div class="file-input">
-            <label for="jsonFile">
-                <strong>Select minidump-stackwalk JSON file:</strong><br>
-                <input type="file" id="jsonFile" accept=".json">
-            </label>
-        </div>
-
-        <div id="output"></div>
+    <div class="container file-input">
+        <label for="jsonFile">
+            <strong>Select minidump-stackwalk JSON file:</strong><br>
+            <input type="file" id="jsonFile" accept=".json">
+        </label>
     </div>
 
+    <div id="output"></div>
+
     <script>
+        // Signature generation constants (from Mozilla's mozcrash.py)
+        const ABORT_SIGNATURES = [
+            "Abort(char const*)",
+            "RustMozCrash",
+            "NS_DebugBreak",
+            "core::ops::function::Fn::call",
+            "gkrust_shared::panic_hook",
+            "mozglue_static::panic_hook",
+            "intentional_panic",
+            "mozalloc_abort",
+            "mozalloc_abort(char const* const)",
+            "static void Abort(const char *)",
+            "std::sys_common::backtrace::__rust_end_short_backtrace",
+            "rust_begin_unwind",
+            "MOZ_Crash(char const*, int, char const*)",
+            "MOZ_CrashSequence(void*, long)",
+            "<alloc::boxed::Box<F,A> as core::ops::function::Fn<Args>>::call"
+        ];
+
+        const ABORT_SUBSTRINGS = [
+            "_panic_",
+            "core::panic::",
+            "core::panicking::",
+            "core::result::unwrap_failed",
+            "std::panicking::"
+        ];
+
+        function generateSignature(crashData) {
+            try {
+                const crashingThread = crashData.crashing_thread || {};
+                const frames = crashingThread.frames || [];
+
+                // Flatten frames (inlines first, then the main frame)
+                const flattenedFrames = [];
+                for (const frame of frames) {
+                    // Add inline frames first
+                    for (const inline of frame.inlines || []) {
+                        flattenedFrames.push(inline.function);
+                    }
+
+                    // Add main frame function or fallback to module + offset
+                    const func = frame.function ||
+                                `${frame.module} + ${frame.module_offset}`;
+                    flattenedFrames.push(func);
+                }
+
+                // Find first frame that is not an abort signature
+                for (const func of flattenedFrames) {
+                    if (!func) continue;
+
+                    const isAbortSignature = ABORT_SIGNATURES.includes(func) ||
+                                            ABORT_SUBSTRINGS.some(substr => func.includes(substr));
+
+                    if (!isAbortSignature) {
+                        let signature = `@ ${func}`;
+
+                        // Strip parameters (anything in parentheses)
+                        const paramMatch = signature.match(/(.*)\(.*\)/);
+                        if (paramMatch) {
+                            signature = paramMatch[1];
+                        }
+
+                        return signature;
+                    }
+                }
+
+                // If all frames are abort signatures, use the first one
+                if (flattenedFrames.length > 0 && flattenedFrames[0]) {
+                    let signature = `@ ${flattenedFrames[0]}`;
+                    const paramMatch = signature.match(/(.*)\(.*\)/);
+                    if (paramMatch) {
+                        signature = paramMatch[1];
+                    }
+                    return signature;
+                }
+            } catch (e) {
+                console.error("Error generating signature:", e);
+                return "@ Unknown";
+            }
+
+            return "@ Unknown";
+        }
+
         // Check for URL parameter on page load
         window.addEventListener('load', function() {
             const urlParams = new URLSearchParams(window.location.search);
             const crashUrl = urlParams.get('url');
 
             if (crashUrl) {
+                // Hide the file input form when URL is provided
+                document.querySelector('.file-input').style.display = 'none';
                 loadFromUrl(crashUrl);
             }
         });
@@ -343,32 +586,141 @@
             const output = document.getElementById('output');
             output.innerHTML = '<p>Loading crash dump from URL...</p>';
 
-            fetch(url)
-                .then(response => {
+            // Fetch both .json and .extra files
+            const extraUrl = url.replace(/\.json$/, '.extra');
+
+            Promise.all([
+                fetch(url).then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
                     return response.json();
-                })
-                .then(data => {
-                    displayCrashData(data);
-                })
-                .catch(err => {
-                    output.innerHTML = `<div class="error">Error loading crash dump: ${err.message}<br><br>URL: ${escapeHtml(url)}</div>`;
-                });
+                }),
+                fetch(extraUrl).then(response => {
+                    if (!response.ok) {
+                        // .extra file is optional, return null if not found
+                        return null;
+                    }
+                    return response.json();
+                }).catch(() => null)
+            ])
+            .then(([data, extraData]) => {
+                displayCrashData(data, url, extraData);
+            })
+            .catch(err => {
+                output.innerHTML = `<div class="error">Error loading crash dump: ${err.message}<br><br>URL: ${escapeHtml(url)}</div>`;
+            });
         }
 
-        function displayCrashData(data) {
+        function displayCrashData(data, url = null, extraData = null) {
             const output = document.getElementById('output');
             let html = '';
 
-            // Crash Info - combined section with crash details and crashing thread
-            if (data.crash_info || data.crashing_thread) {
-                html += `<h2>Crash Information</h2>`;
+            // Generate and update the page title with crash signature
+            const signature = generateSignature(data);
+            const crashTitle = `Crash ${signature}`;
 
-                // Crash details
+            // Create crash-stats search URL (signature with ~)
+            const crashStatsUrl = `https://crash-stats.mozilla.org/search/?signature=${encodeURIComponent('~' + signature.replace(/^@ /, ''))}`;
+
+            document.getElementById('page-title').innerHTML = `Crash <a href="${crashStatsUrl}" class="crash-signature-link" title="Search this crash signature in Mozilla Crash Stats" target="_blank">${escapeHtml(signature)}</a>`;
+            document.title = crashTitle;  // Update browser tab title
+
+            // Add raw JSON link if URL is provided
+            if (url) {
+                document.getElementById('raw-json-link-container').innerHTML =
+                    `<a href="${escapeHtml(url)}" class="raw-json-link" target="_blank">View raw JSON</a>`;
+            }
+
+            // General Info Box
+            html += `<div class="container">`;
+
+            // System Info
+            if (data.system_info) {
+                html += `<div class="info-grid">`;
+
+                // Operating system (merge with Linux distribution if available)
+                html += `<div class="info-label">Operating system:</div><div class="info-value">`;
+                html += escapeHtml(data.system_info.os);
+                if (data.lsb_release) {
+                    if (data.lsb_release.description) {
+                        html += ` - ${escapeHtml(data.lsb_release.description)}`;
+                    } else {
+                        html += ` - ${escapeHtml(data.lsb_release.id || '')} ${escapeHtml(data.lsb_release.release || '')} - ${escapeHtml(data.lsb_release.codename || '')}`;
+                    }
+                }
+                html += `</div>`;
+
+                html += `<div class="info-label">CPU:</div><div class="info-value">${escapeHtml(data.system_info.cpu_arch)} - ${escapeHtml(data.system_info.cpu_info)}</div>`;
+                html += `<div class="info-label">OS version:</div><div class="info-value">${escapeHtml(data.system_info.os_ver)}</div>`;
+                html += `<div class="info-label">CPU count:</div><div class="info-value">${data.system_info.cpu_count}</div>`;
+                html += `</div>`;
+            }
+
+            // Process info and metadata
+            html += `<div class="info-grid">`;
+            const processType = (extraData && extraData.RemoteType) ? extraData.RemoteType : 'main';
+            html += `<div class="info-label">Process type:</div><div class="info-value">${escapeHtml(processType)}</div>`;
+            html += `<div class="info-label">Process PID:</div><div class="info-value">${data.pid}</div>`;
+
+            // URL in the same grid, spanning full width
+            if (extraData && extraData.URL) {
+                html += `<div class="info-label">URL:</div><div class="info-value-full">${escapeHtml(extraData.URL)}</div>`;
+            }
+
+            html += `</div>`;
+
+            // Expandable section with all other extra data
+            if (extraData) {
+                const displayedFields = ['MozCrashReason', 'RemoteType', 'URL'];
+                const otherFields = Object.entries(extraData).filter(([key]) => !displayedFields.includes(key));
+
+                if (otherFields.length > 0) {
+                    html += `<div class="expandable-section">`;
+                    html += `<div class="expandable-header" onclick="toggleExtraData()">▸ Show all extra data (${otherFields.length} fields)</div>`;
+                    html += `<div class="expandable-content" id="extra-data-content">`;
+
+                    otherFields.forEach(([key, value]) => {
+                        html += `<div class="extra-field">`;
+                        html += `<span class="extra-field-name">${escapeHtml(key)}:</span> `;
+                        html += `<span class="extra-field-value">${escapeHtml(value)}</span>`;
+                        html += `</div>`;
+                    });
+
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+            }
+
+            html += `</div>`; // End general info container
+
+            // Crashing Thread Box
+            if (data.crash_info || data.crashing_thread) {
+                html += `<h2>Crashed thread</h2>`;
+                html += `<div class="container">`;
+
+                // Thread details header
+                if (data.crashing_thread) {
+                    const thread = data.crashing_thread;
+                    const tid = thread.thread_id || 'unknown';
+                    html += `<h4 title="tid: ${escapeHtml(tid)}">#${data.crash_info?.crashing_thread ?? 0}`;
+                    if (thread.thread_name) {
+                        html += ` - ${escapeHtml(thread.thread_name)}`;
+                    } else {
+                        html += ` - tid: ${escapeHtml(tid)}`;
+                    }
+                    html += `</h4>`;
+                }
+
+                // Crash details (red box)
                 if (data.crash_info) {
                     html += `<div class="crash-reason">`;
+
+                    // Show MozCrashReason first if available
+                    if (extraData && extraData.MozCrashReason) {
+                        html += `<strong>MozCrashReason:</strong> ${escapeHtml(extraData.MozCrashReason)}<br>`;
+                    }
+
                     html += `<strong>Type:</strong> ${escapeHtml(data.crash_info.type)}<br>`;
                     html += `<strong>Address:</strong> ${escapeHtml(data.crash_info.address)}`;
 
@@ -398,169 +750,183 @@
                     html += `</div>`;
                 }
 
-                // System Info
-                if (data.system_info) {
-                    html += `<div class="info-grid">`;
-                    html += `<div class="info-label">Operating system:</div><div class="info-value">${escapeHtml(data.system_info.os)}</div>`;
-                    html += `<div class="info-label">OS version:</div><div class="info-value">${escapeHtml(data.system_info.os_ver)}</div>`;
-                    html += `<div class="info-label">CPU:</div><div class="info-value">${escapeHtml(data.system_info.cpu_arch)}</div>`;
-                    html += `<div class="info-label">CPU info:</div><div class="info-value">${escapeHtml(data.system_info.cpu_info)}</div>`;
-                    html += `<div class="info-label">CPU count:</div><div class="info-value">${data.system_info.cpu_count}</div>`;
-                    html += `</div>`;
-                }
-
-                // LSB Release (Linux)
-                if (data.lsb_release) {
-                    html += `<div class="info-grid">`;
-                    html += `<div class="info-label">Linux distribution:</div><div class="info-value">`;
-                    html += `${escapeHtml(data.lsb_release.id || '')} ${escapeHtml(data.lsb_release.release || '')} - ${escapeHtml(data.lsb_release.codename || '')}`;
-                    if (data.lsb_release.description) {
-                        html += ` (${escapeHtml(data.lsb_release.description)})`;
-                    }
-                    html += `</div>`;
-                    html += `</div>`;
-                }
-
-                // Process info
-                html += `<div class="info-grid">`;
-                html += `<div class="info-label">Process PID:</div><div class="info-value">${data.pid}</div>`;
-                if (data.linux_memory_map_count) {
-                    html += `<div class="info-label">Memory map count:</div><div class="info-value">${data.linux_memory_map_count}</div>`;
-                }
-                html += `</div>`;
-
-                // Crashing Thread (within Crash Information section)
+                // Crashing Thread frames
                 if (data.crashing_thread) {
-                    const thread = data.crashing_thread;
-                    html += `<h3>Thread ${data.crash_info?.crashing_thread ?? 0}`;
-                    if (thread.thread_name) {
-                        html += ` ${escapeHtml(thread.thread_name)}`;
-                    }
-                    html += ` (crashed) - tid: ${thread.thread_id || 'unknown'}</h3>`;
+                    html += displayFrames(data.crashing_thread.frames, true);
+                }
 
-                    html += displayFrames(thread.frames, true);
+                html += `</div>`; // End crashing thread container
+            }
+
+            // Other Threads Box
+            if (data.threads && data.threads.length > 0) {
+                const otherThreads = data.threads.filter((thread, idx) => idx !== data.crash_info?.crashing_thread);
+
+                if (otherThreads.length > 0) {
+                    html += `<h2>Other Threads</h2>`;
+                    html += `<div class="container">`;
+
+                    data.threads.forEach((thread, idx) => {
+                        if (idx === data.crash_info?.crashing_thread) {
+                            return; // Skip crashing thread, already shown
+                        }
+
+                        const tid = thread.thread_id || 'unknown';
+                        html += `<h4 title="tid: ${escapeHtml(tid)}">#${idx}`;
+                        if (thread.thread_name) {
+                            html += ` - ${escapeHtml(thread.thread_name)}`;
+                        } else {
+                            html += ` - tid: ${escapeHtml(tid)}`;
+                        }
+                        html += `</h4>`;
+
+                        // Show all frames in one table
+                        if (thread.frames.length <= 10) {
+                            // Show all frames normally
+                            html += displayFrames(thread.frames, false);
+                        } else {
+                            // Show first 10 frames, then extra frames hidden
+                            html += displayFrames(thread.frames.slice(0, 10), false);
+
+                            // Add the extra frames without headers, inside the same table
+                            html = html.slice(0, -16); // Remove </tbody></table>
+                            html += displayFrames(thread.frames.slice(10), false, { includeHeaders: false, extraClass: 'thread-extra-frames' });
+                            html += '</tbody></table>';
+
+                            const remainingCount = thread.frames.length - 10;
+                            html += `<p class="thread-truncate" id="thread-toggle-${idx}" onclick="toggleThreadFrames(${idx})">▸ Show ${remainingCount} more frame${remainingCount > 1 ? 's' : ''}</p>`;
+                        }
+                    });
+
+                    html += `</div>`; // End other threads container
                 }
             }
 
-            // Other Threads
-            if (data.threads && data.threads.length > 0) {
-                html += `<h2>Other Threads</h2>`;
-                data.threads.forEach((thread, idx) => {
-                    if (idx === data.crash_info?.crashing_thread) {
-                        return; // Skip crashing thread, already shown
-                    }
-
-                    html += `<div class="thread">`;
-                    html += `<div class="thread-header">Thread ${idx}`;
-                    if (thread.thread_name) {
-                        html += ` ${escapeHtml(thread.thread_name)}`;
-                    }
-                    html += ` - tid: ${thread.thread_id || 'unknown'}`;
-                    html += `</div>`;
-                    html += displayFrames(thread.frames.slice(0, 10), false);
-                    if (thread.frames.length > 10) {
-                        html += `<p style="margin-top: 10px; color: #666;"><em>... and ${thread.frames.length - 10} more frames</em></p>`;
-                    }
-                    html += `</div>`;
-                });
-            }
-
-            // Modules
+            // Modules Box
             if (data.modules && data.modules.length > 0) {
                 html += `<h2>Loaded Modules (${data.modules.length})</h2>`;
-                html += `<div class="module-list">`;
+                html += `<div class="container">`;
+                html += `<table class="module-table">`;
+                html += `<thead><tr>`;
+                html += `<th>Name</th>`;
+                html += `<th>Version</th>`;
+                html += `<th>Base Address</th>`;
+                html += `<th>Size</th>`;
+                html += `</tr></thead>`;
+                html += `<tbody>`;
                 data.modules.forEach(module => {
-                    html += `<div class="module">`;
-                    html += `<strong>${escapeHtml(module.filename || 'unknown')}</strong><br>`;
-                    html += `Base: ${escapeHtml(module.base_addr || 'unknown')} `;
-                    html += `Size: ${escapeHtml(module.size?.toString() || 'unknown')}`;
-                    if (module.version) {
-                        html += ` Version: ${escapeHtml(module.version)}`;
-                    }
-                    html += `</div>`;
+                    html += `<tr>`;
+                    html += `<td>${escapeHtml(module.filename || 'unknown')}</td>`;
+                    html += `<td>${escapeHtml(module.version || '')}</td>`;
+
+                    // Format base address - remove leading zeros
+                    const baseAddr = module.base_addr ? formatHexOffset(module.base_addr) : '';
+                    html += `<td>${escapeHtml(baseAddr)}</td>`;
+
+                    html += `<td>${module.size ? escapeHtml(module.size.toString()) : ''}</td>`;
+                    html += `</tr>`;
                 });
-                html += `</div>`;
+                html += `</tbody></table>`;
+                html += `</div>`; // End modules container
             }
 
             output.innerHTML = html;
         }
 
-        function displayFrames(frames, isCrashed) {
+        function displayFrames(frames, isCrashed, options = {}) {
             if (!frames || frames.length === 0) return '';
 
-            let html = '<table class="stack-table">';
-            html += '<thead><tr>';
-            html += '<th>#</th>';
-            html += '<th>Module</th>';
-            html += '<th>Function</th>';
-            html += '<th>Location</th>';
-            html += '<th>Trust</th>';
-            html += '</tr></thead>';
-            html += '<tbody>';
+            const { includeHeaders = true, extraClass = '' } = options;
+
+            let html = '';
+            if (includeHeaders) {
+                html += '<table class="stack-table">';
+                html += '<thead><tr>';
+                html += '<th>#</th>';
+                html += '<th>Module</th>';
+                html += '<th>Function</th>';
+                html += '<th>Location</th>';
+                html += '<th>Trust</th>';
+                html += '</tr></thead>';
+                html += '<tbody>';
+            }
 
             frames.forEach((frame, idx) => {
                 const rowClass = (idx === 0 && isCrashed) ? 'crashed' : '';
                 const rowId = `frame-${frame.frame}`;
+                const combinedClass = [rowClass, extraClass].filter(c => c).join(' ');
 
                 // Show inline frames first (they're logically before the actual frame)
                 if (frame.inlines && frame.inlines.length > 0) {
                     frame.inlines.forEach(inline => {
-                        html += `<tr class="${rowClass}">`;
+                        html += `<tr class="${combinedClass}">`;
                         html += `<td class="frame-num"></td>`;
                         html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
 
-                        const inlineUrl = makeFileUrl(inline.file, inline.line);
+                        const inlineSearchUrl = makeSearchfoxSearchUrl(inline.function);
                         html += `<td class="frame-function">`;
-                        if (inlineUrl) {
-                            html += `<a href="${inlineUrl}" class="file-link" target="_blank">${escapeHtml(inline.function || '???')}</a>`;
+                        if (inlineSearchUrl) {
+                            html += `<a href="${inlineSearchUrl}" class="file-link" target="_blank">${escapeHtml(inline.function || '???')}</a>`;
                         } else {
                             html += escapeHtml(inline.function || '???');
                         }
-                        html += ' <span style="color: #999; font-size: 11px;">[inlined]</span>';
                         html += `</td>`;
 
                         html += `<td class="frame-location">`;
                         if (inline.file && inline.line) {
                             const inlineFileInfo = parseFileInfo(inline.file);
                             const inlineDisplayPath = inlineFileInfo ? inlineFileInfo.path : inline.file;
-                            html += `${escapeHtml(inlineDisplayPath)}:${inline.line}`;
+                            const inlineHgUrl = makeHgUrl(inline.file, inline.line);
+                            if (inlineHgUrl) {
+                                html += `<a href="${inlineHgUrl}" class="file-link" target="_blank">${escapeHtml(inlineDisplayPath)}:${inline.line}</a>`;
+                            } else {
+                                html += `${escapeHtml(inlineDisplayPath)}:${inline.line}`;
+                            }
                         }
                         html += `</td>`;
 
-                        html += `<td class="frame-trust"></td>`;
+                        html += `<td class="frame-trust">inline</td>`;
                         html += '</tr>';
                     });
                 }
 
                 // Main frame row
                 const hasDetails = frame.registers ? ` onclick="toggleFrameDetails('${rowId}')" style="cursor: pointer;"` : '';
-                html += `<tr class="${rowClass}"${hasDetails}>`;
+                html += `<tr class="${combinedClass}"${hasDetails}>`;
                 html += `<td class="frame-num">${frame.frame}</td>`;
                 html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
 
-                // Function with click-to-open
-                const fileUrl = makeFileUrl(frame.file, frame.line);
+                // Function with searchfox search link
+                const functionSearchUrl = makeSearchfoxSearchUrl(frame.function);
                 html += `<td class="frame-function">`;
-                if (fileUrl) {
-                    html += `<a href="${fileUrl}" class="file-link" onclick="event.stopPropagation()" target="_blank">${escapeHtml(frame.function || '???')}</a>`;
+                if (functionSearchUrl) {
+                    html += `<a href="${functionSearchUrl}" class="file-link" onclick="event.stopPropagation()" target="_blank">${escapeHtml(frame.function || '???')}</a>`;
                 } else {
                     html += escapeHtml(frame.function || '???');
                 }
                 html += `</td>`;
 
-                // Location
+                // Location with hg.mozilla.org link
                 html += `<td class="frame-location">`;
                 if (frame.file && frame.line) {
                     const fileInfo = parseFileInfo(frame.file);
                     const displayPath = fileInfo ? fileInfo.path : frame.file;
-                    html += `${escapeHtml(displayPath)}:${frame.line}`;
+                    const hgUrl = makeHgUrl(frame.file, frame.line);
+
+                    if (hgUrl) {
+                        html += `<a href="${hgUrl}" class="file-link" target="_blank">${escapeHtml(displayPath)}:${frame.line}</a>`;
+                    } else {
+                        html += `${escapeHtml(displayPath)}:${frame.line}`;
+                    }
+
                     if (frame.function_offset) {
-                        html += ` +${escapeHtml(frame.function_offset)}`;
+                        html += ` +${escapeHtml(formatHexOffset(frame.function_offset))}`;
                     }
                 }
                 html += `</td>`;
 
-                html += `<td class="frame-trust">${escapeHtml(frame.trust || '')}</td>`;
+                const trustTitle = frame.trust ? getTrustDescription(frame.trust) : '';
+                html += `<td class="frame-trust" title="${escapeHtml(trustTitle)}">${escapeHtml(frame.trust || '')}</td>`;
                 html += '</tr>';
 
                 // Details row (hidden by default) - show registers if available
@@ -577,7 +943,9 @@
                 }
             });
 
-            html += '</tbody></table>';
+            if (includeHeaders) {
+                html += '</tbody></table>';
+            }
             return html;
         }
 
@@ -586,6 +954,35 @@
             if (detailsRow) {
                 detailsRow.classList.toggle('expanded');
             }
+        }
+
+        function toggleExtraData() {
+            const content = document.getElementById('extra-data-content');
+            const header = document.querySelector('.expandable-header');
+            if (content && header) {
+                content.classList.toggle('expanded');
+                if (content.classList.contains('expanded')) {
+                    header.textContent = header.textContent.replace('▸', '▾');
+                } else {
+                    header.textContent = header.textContent.replace('▾', '▸');
+                }
+            }
+        }
+
+        function toggleThreadFrames(threadIdx) {
+            const toggleButton = document.getElementById(`thread-toggle-${threadIdx}`);
+
+            // Find all extra frame rows in the same table (look for rows with thread-extra-frames class near the toggle button)
+            const container = toggleButton.previousElementSibling; // The table
+            if (container && container.tagName === 'TABLE') {
+                const extraRows = container.querySelectorAll('.thread-extra-frames');
+                extraRows.forEach(row => {
+                    row.classList.add('expanded');
+                });
+            }
+
+            // Hide the toggle button
+            toggleButton.classList.add('hidden');
         }
 
         function parseFileInfo(file) {
@@ -605,12 +1002,34 @@
             return null;
         }
 
-        function makeFileUrl(file, line) {
+        function makeHgUrl(file, line) {
             const info = parseFileInfo(file);
             if (!info) return null;
 
-            // Create searchfox URL
-            return `https://searchfox.org/mozilla-central/rev/${info.revision}/${info.path}#${line || ''}`;
+            // Create hg.mozilla.org URL
+            // Example: https://hg.mozilla.org/releases/mozilla-beta/file/727346cd8fc1ab5df5ece0122891e3894567d019/netwerk/ipc/ParentProcessDocumentChannel.cpp#l177
+            return `https://${info.repo}/file/${info.revision}/${info.path}${line ? '#l' + line : ''}`;
+        }
+
+        function makeSearchfoxSearchUrl(functionName) {
+            if (!functionName) return null;
+
+            // Create searchfox search URL for the function
+            // Strip parameters and template arguments
+            let cleanName = functionName.replace(/<.*?>|\(.*?\)/g, '').trim();
+
+            return `https://searchfox.org/mozilla-central/search?q=${encodeURIComponent(cleanName)}`;
+        }
+
+        function getTrustDescription(trust) {
+            const descriptions = {
+                'cfi': 'Call Frame Information - most reliable, from debugging data',
+                'frame_pointer': 'Frame pointer - using the frame pointer register',
+                'context': 'Context - direct context from the stack (leaf frame)',
+                'scan': 'Stack scanning - least reliable, searching for return addresses',
+                'cfi_scan': 'CFI with stack scanning fallback'
+            };
+            return descriptions[trust] || trust;
         }
 
         function escapeHtml(text) {
@@ -618,6 +1037,17 @@
             const div = document.createElement('div');
             div.textContent = String(text);
             return div.innerHTML;
+        }
+
+        function formatHexOffset(hexString) {
+            if (!hexString) return '';
+            // Remove leading zeros but keep at least one digit
+            // Input: "0x000000000000004c" -> Output: "0x4c"
+            const match = hexString.match(/^(0x)0*(.+)$/);
+            if (match) {
+                return match[1] + match[2];
+            }
+            return hexString;
         }
     </script>
 </body>

@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPCShell Crashes</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .crash-list {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .crash-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            min-height: 28px;
+        }
+
+        .crash-row:hover {
+            background-color: #f5f5f5;
+        }
+
+        .crash-row.expanded {
+            background-color: #f0f8ff;
+        }
+
+        .crash-signature {
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .crash-stats {
+            display: flex;
+            gap: 30px;
+            font-size: 13px;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            text-align: right;
+            min-width: 60px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-value.crash {
+            color: #d00;
+        }
+
+        .crash-expansion {
+            padding: 20px;
+            background: #f9f9f9;
+            border-top: 1px solid #ddd;
+        }
+
+        .path-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px 4px 30px;
+            min-height: 28px;
+            background: #fafafa;
+        }
+
+        .path-row:hover {
+            background-color: #f0f0f0;
+        }
+
+        .path-row.expanded {
+            background-color: #e8f4f8;
+        }
+
+        .test-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px 4px 50px;
+            min-height: 28px;
+            background: #f5f5f5;
+        }
+
+        .test-row:hover {
+            background-color: #ebebeb;
+        }
+
+        .test-row.expanded {
+            background-color: #ddeeff;
+        }
+
+        .crash-instance-row {
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px 4px 70px;
+            min-height: 28px;
+            background: #fafafa;
+            cursor: pointer;
+        }
+
+        .crash-instance-row:hover {
+            background-color: #e8f4ff;
+        }
+
+        .crash-job-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .crash-time {
+            color: #666;
+            font-size: 12px;
+            margin-right: 20px;
+        }
+
+        .crash-link {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 12px;
+        }
+
+        .crash-link:hover {
+            text-decoration: underline;
+        }
+
+        .test-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .test-crash-count {
+            color: #666;
+            font-size: 13px;
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            gap: 20px;
+        }
+
+        .search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .search-box {
+            padding: 8px 30px 8px 12px;
+            width: 300px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #999;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-clear:hover {
+            color: #666;
+        }
+
+        .date-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+            margin: 0;
+            padding: 0;
+            vertical-align: baseline;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .sort-header {
+            background: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .sort-header .crash-signature {
+            color: #666;
+        }
+
+        .total-row {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            font-weight: bold;
+        }
+
+        .total-row:hover {
+            background-color: #f8f9fa;
+        }
+
+        .total-row .crash-signature {
+            color: #495057;
+        }
+
+        .sort-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 10px;
+            margin: 0 -10px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            text-align: right;
+            width: 100%;
+            white-space: nowrap;
+        }
+
+        .sort-button:hover {
+            background-color: #e9ecef;
+        }
+
+        .sort-button.active {
+            color: #007bff;
+            background-color: #e7f3ff;
+        }
+
+        .sort-arrow {
+            font-size: 10px;
+            margin-right: 2px;
+            width: 8px;
+            display: inline-block;
+            text-align: left;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>XPCShell Crashes by Signature</h1>
+    </div>
+
+    <div class="controls">
+        <div class="date-selector">
+            <label for="dateSelect">Select Date: </label>
+            <select id="dateSelect" onchange="loadSelectedDate()">
+            </select>
+            <span class="status-text" id="statusText">Loading...</span>
+        </div>
+        <div class="search-container">
+            <input type="text" id="searchBox" class="search-box" placeholder="Search crash signatures or tests...">
+            <button class="search-clear" id="searchClear">×</button>
+        </div>
+    </div>
+
+    <div id="content">
+        <div class="no-data">Loading crash data...</div>
+    </div>
+
+    <script>
+        let currentData = null;
+        let expandedSignatures = new Set();
+        let expandedPaths = new Set();
+        let expandedTests = new Set();
+        let currentSort = { column: 'count', ascending: false };
+
+        // Populate date selector with available dates from index
+        async function populateDateSelector() {
+            const select = document.getElementById('dateSelect');
+
+            try {
+                const response = await fetch('./xpcshell-data/index.json');
+                if (response.ok) {
+                    const index = await response.json();
+
+                    // Clear all existing options
+                    select.innerHTML = '';
+
+                    // Add all available dates
+                    if (index.dates && index.dates.length > 0) {
+                        index.dates.forEach((date, dateIndex) => {
+                            const option = document.createElement('option');
+                            option.value = date;
+                            option.text = date;
+                            option.selected = dateIndex === 0; // Select first (most recent) date
+                            select.appendChild(option);
+                        });
+
+                        return true;
+                    } else {
+                        throw new Error('No data available');
+                    }
+                } else {
+                    throw new Error('No data available. Please run: node fetch-xpcshell-data.js');
+                }
+            } catch (e) {
+                console.error('Could not load date index:', e);
+                document.getElementById('content').innerHTML = `<div class="no-data">${e.message}</div>`;
+                document.getElementById('statusText').textContent = 'Error loading data';
+                return false;
+            }
+        }
+
+        // Load data for selected date
+        async function loadSelectedDate() {
+            const dateToLoad = document.getElementById('dateSelect').value;
+
+            if (!dateToLoad) {
+                return;
+            }
+
+            try {
+                document.getElementById('statusText').textContent = 'Loading...';
+
+                const file = `xpcshell-${dateToLoad}.json`;
+                const response = await fetch(`./xpcshell-data/${file}`);
+
+                if (!response.ok) {
+                    throw new Error('Failed to load data');
+                }
+                currentData = await response.json();
+
+                // Process crash data
+                processCrashData();
+                renderCrashList();
+
+                const jobCount = currentData.metadata?.jobCount || 0;
+                document.getElementById('statusText').textContent = `${jobCount.toLocaleString()} test jobs`;
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('content').innerHTML = `<div class="no-data">${error.message}</div>`;
+                document.getElementById('statusText').textContent = 'Error loading data';
+            }
+        }
+
+        // Process crash data to group by signature
+        function processCrashData() {
+            if (!currentData || !currentData.testRuns || !currentData.tables || !currentData.testInfo) {
+                return;
+            }
+
+            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+            if (crashStatusId === -1) {
+                return;
+            }
+
+            const crashData = new Map(); // signature -> { paths: Map(dirPath -> { tests: Map(testName -> { crashes: [], totalCount }), totalCount }), totalCount }
+
+            // testRuns is an array where index = testId
+            currentData.testRuns.forEach((testGroup, testId) => {
+                if (!testGroup) return;
+
+                const statusGroup = testGroup[crashStatusId];
+                if (!statusGroup || !statusGroup.crashSignatureIds) {
+                    return;
+                }
+
+                // Get directory path and test name from testInfo
+                const testPathId = currentData.testInfo.testPathIds[testId];
+                const testNameId = currentData.testInfo.testNameIds[testId];
+                const dirPath = currentData.tables.testPaths[testPathId];
+                const testName = currentData.tables.testNames[testNameId];
+
+                if (testName === undefined) return;
+
+                // Decompress timestamps (differential compression)
+                const decompressedTimestamps = [];
+                let cumulativeTimestamp = 0;
+                for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                    cumulativeTimestamp += statusGroup.timestamps[i];
+                    // Convert back to milliseconds: (startTime + relativeSeconds) * 1000
+                    decompressedTimestamps.push((currentData.metadata.startTime + cumulativeTimestamp) * 1000);
+                }
+
+                // Group crashes by signature with individual instances
+                const crashesBySignature = new Map();
+                statusGroup.crashSignatureIds.forEach((sigId, index) => {
+                    if (sigId === null) return;
+
+                    const signature = currentData.tables.crashSignatures[sigId];
+                    if (!signature) return;
+
+                    if (!crashesBySignature.has(signature)) {
+                        crashesBySignature.set(signature, []);
+                    }
+
+                    // Get crash instance details
+                    const taskIdIndex = statusGroup.taskIdIds[index];
+                    const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                    const [taskId, retryId] = taskIdString.split('.');
+                    const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
+                    const jobName = currentData.tables.jobNames[jobNameId];
+                    const timestamp = decompressedTimestamps[index];
+                    const minidump = statusGroup.minidumps[index];
+
+                    crashesBySignature.get(signature).push({
+                        jobName,
+                        timestamp,
+                        taskId,
+                        retryId,
+                        minidump
+                    });
+                });
+
+                // Add to global crash data (store by signature -> dirPath -> testName)
+                for (const [signature, crashes] of crashesBySignature) {
+                    if (!crashData.has(signature)) {
+                        crashData.set(signature, { paths: new Map(), totalCount: 0 });
+                    }
+                    const sigData = crashData.get(signature);
+
+                    if (!sigData.paths.has(dirPath)) {
+                        sigData.paths.set(dirPath, { tests: new Map(), totalCount: 0 });
+                    }
+                    const pathData = sigData.paths.get(dirPath);
+
+                    if (!pathData.tests.has(testName)) {
+                        pathData.tests.set(testName, { crashes: [], totalCount: 0 });
+                    }
+                    const testData = pathData.tests.get(testName);
+
+                    testData.crashes.push(...crashes);
+                    testData.totalCount += crashes.length;
+                    pathData.totalCount += crashes.length;
+                    sigData.totalCount += crashes.length;
+                }
+            });
+
+            currentData.crashData = crashData;
+        }
+
+        // Render the crash list
+        function renderCrashList() {
+            if (!currentData || !currentData.crashData || currentData.crashData.size === 0) {
+                document.getElementById('content').innerHTML = '<div class="no-data">No crash data available</div>';
+                return;
+            }
+
+            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+
+            // Convert to array and filter
+            let crashes = Array.from(currentData.crashData.entries()).map(([signature, data]) => ({
+                signature,
+                pathCount: data.paths.size,
+                crashCount: data.totalCount,
+                paths: data.paths
+            }));
+
+            // Filter by search term
+            if (searchTerm) {
+                crashes = crashes.filter(crash => {
+                    if (crash.signature.toLowerCase().includes(searchTerm)) {
+                        return true;
+                    }
+                    // Check if any path or test name matches
+                    for (const [dirPath, pathData] of crash.paths) {
+                        if (dirPath.toLowerCase().includes(searchTerm)) {
+                            return true;
+                        }
+                        for (const testName of pathData.tests.keys()) {
+                            if (testName.toLowerCase().includes(searchTerm)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                });
+            }
+
+            // Sort crashes
+            crashes.sort((a, b) => {
+                let compareValue;
+                if (currentSort.column === 'signature') {
+                    compareValue = a.signature.localeCompare(b.signature);
+                } else if (currentSort.column === 'paths') {
+                    compareValue = a.pathCount - b.pathCount;
+                } else { // count
+                    compareValue = a.crashCount - b.crashCount;
+                }
+                return currentSort.ascending ? compareValue : -compareValue;
+            });
+
+            // Calculate totals
+            let totalTests = 0;
+            let totalCrashes = 0;
+            const uniqueTests = new Set();
+
+            for (const crash of crashes) {
+                totalCrashes += crash.crashCount;
+                for (const testPath of crash.paths.keys()) {
+                    uniqueTests.add(testPath);
+                }
+            }
+            totalTests = uniqueTests.size;
+
+            // Build HTML
+            let html = '<div class="crash-list">';
+
+            // Header
+            html += '<div class="sort-header">';
+            html += '<div class="crash-signature">Crash Signature</div>';
+            html += '<div class="crash-stats">';
+            html += `<div class="stat-item">
+                <button class="sort-button ${currentSort.column === 'paths' ? 'active' : ''}" onclick="sortBy('paths')">
+                    <span class="sort-arrow">${currentSort.column === 'paths' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
+                    Tests
+                </button>
+            </div>`;
+            html += `<div class="stat-item">
+                <button class="sort-button ${currentSort.column === 'count' ? 'active' : ''}" onclick="sortBy('count')">
+                    <span class="sort-arrow">${currentSort.column === 'count' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
+                    Crashes
+                </button>
+            </div>`;
+            html += '</div></div>';
+
+            // Total row
+            html += '<div class="crash-row total-row">';
+            html += '<div class="crash-signature">📊 Total</div>';
+            html += '<div class="crash-stats">';
+            html += `<div class="stat-item"><span class="stat-value">${totalTests}</span></div>`;
+            html += `<div class="stat-item"><span class="stat-value crash">${totalCrashes}</span></div>`;
+            html += '</div></div>';
+
+            // Crash rows
+            for (const crash of crashes) {
+                const isExpanded = expandedSignatures.has(crash.signature);
+                html += `<div class="crash-row ${isExpanded ? 'expanded' : ''}" onclick="toggleCrash('${escapeHtml(crash.signature)}')">`;
+                html += `<div class="crash-signature">${escapeHtml(crash.signature)}</div>`;
+                html += '<div class="crash-stats">';
+                html += `<div class="stat-item"><span class="stat-value">${crash.pathCount}</span></div>`;
+                html += `<div class="stat-item"><span class="stat-value crash">${crash.crashCount}</span></div>`;
+                html += '</div></div>';
+
+                if (isExpanded) {
+                    // Sort paths by crash count
+                    const pathList = Array.from(crash.paths.entries())
+                        .map(([dirPath, pathData]) => ({ dirPath, pathData }))
+                        .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
+
+                    for (const pathEntry of pathList) {
+                        const pathKey = `${crash.signature}|||${pathEntry.dirPath}`;
+                        const isPathExpanded = expandedPaths.has(pathKey);
+
+                        html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" onclick="event.stopPropagation(); togglePath('${escapeHtml(crash.signature)}', '${escapeHtml(pathEntry.dirPath)}')">`;
+                        html += `<div class="crash-signature">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
+                        html += '<div class="crash-stats">';
+                        html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
+                        html += `<div class="stat-item"><span class="stat-value crash">${pathEntry.pathData.totalCount}</span></div>`;
+                        html += '</div></div>';
+
+                        if (isPathExpanded) {
+                            // Sort tests by crash count
+                            const testList = Array.from(pathEntry.pathData.tests.entries())
+                                .map(([testName, testData]) => ({ testName, testData }))
+                                .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+
+                            for (const test of testList) {
+                                const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${test.testName}`;
+                                const isTestExpanded = expandedTests.has(testKey);
+
+                                html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" onclick="event.stopPropagation(); toggleTest('${escapeHtml(crash.signature)}', '${escapeHtml(pathEntry.dirPath)}', '${escapeHtml(test.testName)}')">`;
+                                html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                                html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
+                                html += '</div>';
+
+                                if (isTestExpanded) {
+                                    // Sort crash instances by timestamp (most recent first)
+                                    const crashes = [...test.testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
+
+                                    for (const crashInstance of crashes) {
+                                        // Build crash viewer URL
+                                        let crashUrl = '';
+                                        if (crashInstance.minidump) {
+                                            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/${crashInstance.minidump}.json`;
+                                            crashUrl = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
+                                        }
+
+                                        const onclickHandler = crashUrl ? `onclick="window.open('${crashUrl}', '_blank'); event.stopPropagation();"` : '';
+                                        html += `<div class="crash-instance-row" ${onclickHandler}>`;
+                                        html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
+                                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+
+                                        // View Profile link
+                                        const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+                                        const encodedProfileUrl = encodeURIComponent(profileUrl);
+                                        const profileName = `${crashInstance.jobName} (${crashInstance.taskId}.${crashInstance.retryId})`;
+                                        const encodedProfileName = encodeURIComponent(profileName);
+                                        const profilerUrl = `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
+                                        html += `<a href="${profilerUrl}" target="_blank" class="crash-link" onclick="event.stopPropagation()" style="margin-right: 10px;">View Profile</a>`;
+
+                                        // View Crash link (still shown as link for clarity)
+                                        if (crashInstance.minidump) {
+                                            html += `<a href="${crashUrl}" target="_blank" class="crash-link" onclick="event.stopPropagation()">View Crash</a>`;
+                                        }
+                                        html += '</div>';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            html += '</div>';
+            document.getElementById('content').innerHTML = html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function toggleCrash(signature) {
+            if (expandedSignatures.has(signature)) {
+                expandedSignatures.delete(signature);
+            } else {
+                expandedSignatures.add(signature);
+            }
+            renderCrashList();
+        }
+
+        function togglePath(signature, dirPath) {
+            const pathKey = `${signature}|||${dirPath}`;
+            if (expandedPaths.has(pathKey)) {
+                expandedPaths.delete(pathKey);
+            } else {
+                expandedPaths.add(pathKey);
+            }
+            renderCrashList();
+        }
+
+        function toggleTest(signature, dirPath, testName) {
+            const testKey = `${signature}|||${dirPath}|||${testName}`;
+            if (expandedTests.has(testKey)) {
+                expandedTests.delete(testKey);
+            } else {
+                expandedTests.add(testKey);
+            }
+            renderCrashList();
+        }
+
+        function sortBy(column) {
+            if (currentSort.column === column) {
+                currentSort.ascending = !currentSort.ascending;
+            } else {
+                currentSort.column = column;
+                currentSort.ascending = false;
+            }
+            renderCrashList();
+        }
+
+        // Update URL hash with current state
+        function updateUrlHash() {
+            const params = new URLSearchParams();
+
+            const date = document.getElementById('dateSelect').value;
+            if (date) {
+                params.set('date', date);
+            }
+
+            const search = document.getElementById('searchBox').value.trim();
+            if (search) {
+                params.set('q', search);
+            }
+
+            const hash = params.toString();
+            if (hash) {
+                window.history.replaceState(null, '', '#' + hash);
+            } else {
+                window.history.replaceState(null, '', window.location.pathname);
+            }
+        }
+
+        // Load state from URL hash
+        function loadFromUrlHash() {
+            const hash = window.location.hash.slice(1); // Remove #
+            const params = new URLSearchParams(hash);
+
+            // Restore date selection
+            const date = params.get('date');
+            const dateSelect = document.getElementById('dateSelect');
+            if (date && dateSelect.querySelector(`option[value="${date}"]`)) {
+                dateSelect.value = date;
+            }
+
+            // Restore search filter (don't update if search box is focused)
+            const searchBox = document.getElementById('searchBox');
+            if (document.activeElement !== searchBox) {
+                const search = params.get('q');
+                searchBox.value = search || '';
+                updateClearButton();
+            }
+        }
+
+        function updateClearButton() {
+            const searchBox = document.getElementById('searchBox');
+            const searchClear = document.getElementById('searchClear');
+            searchClear.style.display = searchBox.value ? 'flex' : 'none';
+        }
+
+        // Search functionality
+        const searchBox = document.getElementById('searchBox');
+        const searchClear = document.getElementById('searchClear');
+        let filterTimeout;
+        let isNavigating = false;
+
+        searchBox.addEventListener('input', function() {
+            updateClearButton();
+
+            // Clear previous timeout
+            clearTimeout(filterTimeout);
+
+            // Debounce filtering and hash update
+            filterTimeout = setTimeout(() => {
+                if (!isNavigating) {
+                    updateUrlHash();
+                }
+                renderCrashList();
+            }, 300);
+        });
+
+        searchClear.addEventListener('click', function() {
+            searchBox.value = '';
+            updateClearButton();
+            clearTimeout(filterTimeout);
+            updateUrlHash();
+            renderCrashList();
+            searchBox.focus();
+        });
+
+        // Update hash when date changes
+        document.getElementById('dateSelect').addEventListener('change', function() {
+            updateUrlHash();
+        });
+
+        // Handle browser back/forward buttons
+        window.addEventListener('hashchange', function() {
+            isNavigating = true;
+            loadFromUrlHash();
+            loadSelectedDate();
+            isNavigating = false;
+        });
+
+        // Initial load
+        (async function() {
+            const hasData = await populateDateSelector();
+            if (hasData) {
+                // Load state from URL hash
+                loadFromUrlHash();
+                await loadSelectedDate();
+            }
+        })();
+    </script>
+</body>
+</html>
