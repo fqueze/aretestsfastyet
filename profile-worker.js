@@ -7,14 +7,10 @@ const zlib = require('zlib');
 function extractParallelRanges(markers, stringArray) {
     const parallelRanges = [];
 
-    if (!markers || !markers.data) {
-        return parallelRanges;
-    }
-
     for (let i = 0; i < markers.length; i++) {
-        const data = markers.data && markers.data[i];
+        const data = markers.data[i];
         // Look for markers with type: "Text" and text: "parallel"
-        if (data && data.type === "Text" && data.text === "parallel") {
+        if (data?.type === "Text" && data.text === "parallel") {
             parallelRanges.push({
                 start: markers.startTime[i],
                 end: markers.endTime[i]
@@ -45,22 +41,37 @@ function extractTestTimings(profile, jobName) {
     const thread = profile.threads[0];
     const { markers, stringArray } = thread;
 
-    if (!markers || !stringArray) {
+    if (!markers || !markers.data || !markers.name || !stringArray) {
         return [];
     }
 
     // First, extract parallel execution ranges
     const parallelRanges = extractParallelRanges(markers, stringArray);
 
+    // Extract crash markers for later matching with CRASH status tests
+    const crashMarkers = [];
+    for (let i = 0; i < markers.length; i++) {
+        const data = markers.data[i];
+        if (data?.type !== "Crash" || !data.test) {
+            continue;
+        }
+        crashMarkers.push({
+            testPath: data.test,
+            startTime: markers.startTime[i],
+            signature: data.signature || null,
+            minidump: data.minidump || null
+        });
+    }
+
     const testStringId = stringArray.indexOf("test");
     const timings = [];
 
     for (let i = 0; i < markers.length; i++) {
-        if (markers.name && markers.name[i] !== testStringId) {
+        if (markers.name[i] !== testStringId) {
             continue;
         }
 
-        const data = markers.data && markers.data[i];
+        const data = markers.data[i];
         if (!data) {
             continue;
         }
@@ -111,15 +122,36 @@ function extractTestTimings(profile, jobName) {
             continue;
         }
 
+        const testStartTime = markers.startTime[i];
+        const testEndTime = markers.endTime[i];
+
         const timing = {
             path: testPath,
-            duration: markers.endTime[i] - markers.startTime[i],
+            duration: testEndTime - testStartTime,
             status: status,
-            timestamp: profile.meta.startTime + markers.startTime[i]
+            timestamp: profile.meta.startTime + testStartTime
         };
         if (message) {
             timing.message = message;
         }
+
+        // For CRASH status, find matching crash marker within the test's time range
+        if (status === 'CRASH') {
+            const matchingCrash = crashMarkers.find(crash =>
+                crash.testPath === data.test &&
+                crash.startTime >= testStartTime &&
+                crash.startTime <= testEndTime
+            );
+            if (matchingCrash) {
+                if (matchingCrash.signature) {
+                    timing.crashSignature = matchingCrash.signature;
+                }
+                if (matchingCrash.minidump) {
+                    timing.minidump = matchingCrash.minidump;
+                }
+            }
+        }
+
         timings.push(timing);
     }
 

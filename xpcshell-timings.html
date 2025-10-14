@@ -482,6 +482,7 @@
                 <div class="chart-expansion">
                     <div id="chart-${chartIdBase}"></div>
                     <div id="chart-timeout-${chartIdBase}"></div>
+                    <div id="chart-crash-${chartIdBase}"></div>
                 </div>`;
         }
 
@@ -797,7 +798,7 @@
                     const taskIdString = currentData.tables.taskIds[taskIdIndex];
                     const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
 
-                    runs.push({
+                    const run = {
                         duration: duration,
                         repository: currentData.tables.repositories[currentData.taskInfo.repositoryIds[taskIdIndex]],
                         jobName: jobName,
@@ -807,7 +808,16 @@
                         isFail: status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status),
                         isSkip: status === 'SKIP',
                         isTimeout: status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL' || (status === 'UNKNOWN' && duration > 300000)
-                    });
+                    };
+
+                    // Add crash data for CRASH status
+                    if (status === 'CRASH' && statusGroup.crashSignatureIds && statusGroup.minidumps) {
+                        const crashSigId = statusGroup.crashSignatureIds[i];
+                        run.crashSignature = crashSigId !== null ? currentData.tables.crashSignatures[crashSigId] : null;
+                        run.minidump = statusGroup.minidumps[i];
+                    }
+
+                    runs.push(run);
                 }
             }
 
@@ -1263,6 +1273,43 @@
                 .map(([message, count]) => ({ message, count }));
         }
 
+        // Get crash data for a test
+        function getCrashData(testId) {
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return { signatures: [], minidumps: [] };
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find CRASH status ID
+            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+            if (crashStatusId === -1) return { signatures: [], minidumps: [] };
+
+            const statusGroup = testGroup[crashStatusId];
+            if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [], minidumps: [] };
+
+            // Collect unique signatures with counts
+            const signatureCounts = new Map();
+            statusGroup.crashSignatureIds.forEach(sigId => {
+                if (sigId !== null) {
+                    const signature = currentData.tables.crashSignatures[sigId];
+                    if (signature) {
+                        signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + 1);
+                    }
+                }
+            });
+
+            // Collect unique minidumps
+            const minidumps = [...new Set(statusGroup.minidumps.filter(m => m !== null))];
+
+            return {
+                signatures: Array.from(signatureCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([signature, count]) => ({ signature, count })),
+                minidumps: minidumps
+            };
+        }
+
         // Generate tooltip content for platform breakdown
         function generateTooltipContent(platforms, type, testData, testPath) {
             // Handle timing tooltips differently
@@ -1370,6 +1417,48 @@
                             });
                             content += `</div>`;
                         }
+                    }
+                }
+
+                // Add crash count and breakdown
+                if (testData.testId !== undefined) {
+                    const crashData = getCrashData(testData.testId);
+                    const totalCrashes = crashData.signatures.reduce((sum, sig) => sum + sig.count, 0);
+
+                    if (totalCrashes > 0) {
+                        content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                        content += `<strong>Crashes: ${totalCrashes}</strong><br/>`;
+
+                        // Add crash breakdown by platform
+                        const crashesByPlatform = {};
+                        if (currentData && currentData.testRuns && currentData.testRuns[testData.testId]) {
+                            const testGroup = currentData.testRuns[testData.testId];
+                            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+                            if (crashStatusId !== -1) {
+                                const statusGroup = testGroup[crashStatusId];
+                                if (statusGroup) {
+                                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                        const taskIdIndex = statusGroup.taskIdIds[i];
+                                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                        const platform = extractPlatform(jobName) || 'unknown';
+                                        crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        const sortedPlatforms = Object.entries(crashesByPlatform)
+                            .sort((a, b) => b[1] - a[1]);
+
+                        sortedPlatforms.forEach(([platform, count]) => {
+                            const percentage = ((count / totalCrashes) * 100).toFixed(1);
+                            content += `<div class="tooltip-platform">`;
+                            content += `<span class="tooltip-platform-name">${platform}:</span>`;
+                            content += `<span>${count} (${percentage}%)</span>`;
+                            content += `</div>`;
+                        });
+
+                        content += `</div>`;
                     }
                 }
             }
@@ -2280,6 +2369,9 @@
                     title: 'Duration (seconds)',
                     rangemode: 'tozero'
                 },
+                hoverlabel: {
+                    font: { color: 'white' }
+                },
                 hovermode: 'closest',
                 height: 400
             };
@@ -2317,6 +2409,9 @@
                         title: 'Duration (seconds)'
                         // Remove rangemode: 'tozero' to allow auto-scaling
                     },
+                    hoverlabel: {
+                        font: { color: 'white' }
+                    },
                     hovermode: 'closest',
                     height: 300
                 };
@@ -2325,6 +2420,103 @@
 
                 // Add click handler to open profiles for timeouts
                 document.getElementById(timeoutChartId).on('plotly_click', plotlyClickHandler);
+            }
+
+            // Render crash chart if there are crashes
+            const crashChartId = `chart-crash-${chartIdBase}`;
+            const crashChartElement = document.getElementById(crashChartId);
+            const crashTraces = {};
+            let hasCrashes = false;
+
+            runs.forEach(run => {
+                if (run.status !== 'CRASH') return;
+
+                hasCrashes = true;
+                const platform = extractPlatform(run.jobName) || 'unknown';
+                const traceKey = platform;
+
+                if (!crashTraces[traceKey]) {
+                    crashTraces[traceKey] = {
+                        x: [],
+                        y: [],
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: `${platform} (crash)`,
+                        marker: {
+                            color: platformColors[platform],
+                            size: 8,
+                            opacity: 0.7
+                        },
+                        customdata: [],
+                        hovertemplate: '<b>%{customdata.jobName}</b><br>' +
+                                       'Signature: %{customdata.signature}<br>' +
+                                       'Repository: %{customdata.repository}<br>' +
+                                       'Status: CRASH<br>' +
+                                       'Duration: %{customdata.durationStr}<br>' +
+                                       'Date: %{customdata.dateStr}<br>' +
+                                       '<i>Click to view crash report</i><br>' +
+                                       '<extra></extra>'
+                    };
+                }
+
+                crashTraces[traceKey].x.push(new Date(run.timestamp));
+                crashTraces[traceKey].y.push(run.duration / 1000);
+                crashTraces[traceKey].customdata.push({
+                    repository: run.repository,
+                    taskIdString: run.taskIdString,
+                    jobName: run.jobName,
+                    signature: run.crashSignature || 'Unknown',
+                    minidump: run.minidump,
+                    durationStr: formatDuration(run.duration),
+                    timestamp: run.timestamp,
+                    dateStr: new Date(run.timestamp).toLocaleString()
+                });
+            });
+
+            if (hasCrashes && crashChartElement) {
+                // Update crash trace names with counts
+                Object.keys(crashTraces).forEach(traceKey => {
+                    const trace = crashTraces[traceKey];
+                    const count = trace.x.length;
+                    if (count > 0) {
+                        const platform = trace.name.replace(' (crash)', '');
+                        trace.name = `${platform} (${count} crash${count !== 1 ? 'es' : ''})`;
+                    }
+                });
+
+                const crashLayout = {
+                    title: `${testPath} - Crashes`,
+                    xaxis: {
+                        title: 'Date',
+                        type: 'date',
+                        tickformat: '%Y-%m-%d'
+                    },
+                    yaxis: {
+                        title: 'Duration (seconds)'
+                    },
+                    hoverlabel: {
+                        font: { color: 'white' }
+                    },
+                    hovermode: 'closest',
+                    height: 300
+                };
+
+                Plotly.newPlot(crashChartId, Object.values(crashTraces), crashLayout, config);
+
+                // Add click handler to open crash reports
+                document.getElementById(crashChartId).on('plotly_click', function(data) {
+                    if (data.points.length > 0) {
+                        const point = data.points[0];
+                        const minidump = point.customdata.minidump;
+                        const { taskIdString } = point.customdata;
+                        if (minidump && taskIdString) {
+                            const [taskId, retryId] = taskIdString.split('.');
+                            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${minidump}.json`;
+                            const crashUrl = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
+                            window.open(crashUrl, '_blank');
+                        }
+                    }
+                });
             }
         }
 

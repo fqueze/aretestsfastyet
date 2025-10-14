@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crash Dump Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #0066cc;
+        }
+
+        h2 {
+            color: #444;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-left: 4px solid #0066cc;
+        }
+
+        h3 {
+            color: #555;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        .file-input {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .file-input input[type="file"] {
+            font-size: 16px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: #666;
+        }
+
+        .info-value {
+            font-family: monospace;
+            color: #333;
+            word-break: break-all;
+        }
+
+        .crash-reason {
+            background: #fee;
+            padding: 15px;
+            border-left: 4px solid #d00;
+            margin: 15px 0;
+            font-family: monospace;
+        }
+
+        .stack-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 15px 0;
+        }
+
+        .stack-table thead {
+            background: #e9ecef;
+            position: sticky;
+            top: 0;
+        }
+
+        .stack-table th {
+            text-align: left;
+            padding: 8px;
+            font-weight: 600;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .stack-table tr {
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .stack-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .stack-table tr[onclick] {
+            cursor: pointer;
+        }
+
+        .stack-table tr.crashed {
+            background: #fff3cd;
+            font-weight: 500;
+        }
+
+        .stack-table tr.crashed:hover {
+            background: #ffecb3;
+        }
+
+        .stack-table td {
+            padding: 4px 8px;
+            vertical-align: top;
+        }
+
+        .frame-num {
+            width: 40px;
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .frame-module {
+            width: 120px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #495057;
+        }
+
+        .frame-function {
+            font-family: 'Courier New', monospace;
+            color: #d73a49;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .frame-function:hover {
+            text-decoration: underline;
+        }
+
+        .frame-location {
+            width: 350px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #6c757d;
+        }
+
+        .frame-trust {
+            width: 80px;
+            font-size: 11px;
+            color: #868e96;
+        }
+
+        .frame-details {
+            background: #f8f9fa;
+            display: none;
+        }
+
+        .frame-details.expanded {
+            display: table-row;
+        }
+
+        .frame-details td {
+            padding: 15px;
+            border-top: none;
+        }
+
+        .inline-frames {
+            margin: 10px 0;
+            padding-left: 20px;
+            border-left: 3px solid #dee2e6;
+        }
+
+        .inline-frame {
+            padding: 4px 0;
+            font-size: 12px;
+            color: #495057;
+        }
+
+        .inline-frame .function {
+            font-family: 'Courier New', monospace;
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .file-link {
+            color: #0066cc;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .file-link:hover {
+            text-decoration: underline;
+        }
+
+        .registers {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+
+        .register {
+            background: #f1f3f5;
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+
+        .register-name {
+            font-weight: bold;
+            color: #0066cc;
+        }
+
+        .module-list {
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+
+        .module {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .module:hover {
+            background: #f8f9fa;
+        }
+
+        .thread {
+            margin: 15px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+
+        .thread-header {
+            font-weight: bold;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        code {
+            background: #f1f3f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .status.ok {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crash Dump Viewer</h1>
+
+        <div class="file-input">
+            <label for="jsonFile">
+                <strong>Select minidump-stackwalk JSON file:</strong><br>
+                <input type="file" id="jsonFile" accept=".json">
+            </label>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // Check for URL parameter on page load
+        window.addEventListener('load', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const crashUrl = urlParams.get('url');
+
+            if (crashUrl) {
+                loadFromUrl(crashUrl);
+            }
+        });
+
+        document.getElementById('jsonFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    displayCrashData(data);
+                } catch (err) {
+                    document.getElementById('output').innerHTML =
+                        `<div class="error">Error parsing JSON: ${err.message}</div>`;
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function loadFromUrl(url) {
+            const output = document.getElementById('output');
+            output.innerHTML = '<p>Loading crash dump from URL...</p>';
+
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    displayCrashData(data);
+                })
+                .catch(err => {
+                    output.innerHTML = `<div class="error">Error loading crash dump: ${err.message}<br><br>URL: ${escapeHtml(url)}</div>`;
+                });
+        }
+
+        function displayCrashData(data) {
+            const output = document.getElementById('output');
+            let html = '';
+
+            // Crash Info - combined section with crash details and crashing thread
+            if (data.crash_info || data.crashing_thread) {
+                html += `<h2>Crash Information</h2>`;
+
+                // Crash details
+                if (data.crash_info) {
+                    html += `<div class="crash-reason">`;
+                    html += `<strong>Type:</strong> ${escapeHtml(data.crash_info.type)}<br>`;
+                    html += `<strong>Address:</strong> ${escapeHtml(data.crash_info.address)}`;
+
+                    if (data.crash_info.adjusted_address?.kind === 'null-pointer') {
+                        html += ` <strong style="color: #d00;">** Null pointer detected with offset: ${escapeHtml(data.crash_info.adjusted_address.offset)}</strong>`;
+                    }
+
+                    if (data.crash_info.instruction) {
+                        html += `<br><strong>Crashing instruction:</strong> <code>${escapeHtml(data.crash_info.instruction)}</code>`;
+                    }
+
+                    if (data.crash_info.memory_accesses?.length > 0) {
+                        html += `<br><br><strong>Memory accessed by instruction:</strong>`;
+                        data.crash_info.memory_accesses.forEach((access, i) => {
+                            html += `<br>${i+1}. Address: ${escapeHtml(access.address)}`;
+                            html += `<br>&nbsp;&nbsp;&nbsp;Size: ${access.size}`;
+                            html += `<br>&nbsp;&nbsp;&nbsp;Access type: ${escapeHtml(access.access_type)}`;
+                        });
+                    }
+
+                    if (data.crash_info.instruction_pointer_update) {
+                        html += `<br><strong>Instruction pointer update:</strong> ${escapeHtml(data.crash_info.instruction_pointer_update)}`;
+                    } else {
+                        html += `<br>No instruction pointer update by instruction`;
+                    }
+
+                    html += `</div>`;
+                }
+
+                // System Info
+                if (data.system_info) {
+                    html += `<div class="info-grid">`;
+                    html += `<div class="info-label">Operating system:</div><div class="info-value">${escapeHtml(data.system_info.os)}</div>`;
+                    html += `<div class="info-label">OS version:</div><div class="info-value">${escapeHtml(data.system_info.os_ver)}</div>`;
+                    html += `<div class="info-label">CPU:</div><div class="info-value">${escapeHtml(data.system_info.cpu_arch)}</div>`;
+                    html += `<div class="info-label">CPU info:</div><div class="info-value">${escapeHtml(data.system_info.cpu_info)}</div>`;
+                    html += `<div class="info-label">CPU count:</div><div class="info-value">${data.system_info.cpu_count}</div>`;
+                    html += `</div>`;
+                }
+
+                // LSB Release (Linux)
+                if (data.lsb_release) {
+                    html += `<div class="info-grid">`;
+                    html += `<div class="info-label">Linux distribution:</div><div class="info-value">`;
+                    html += `${escapeHtml(data.lsb_release.id || '')} ${escapeHtml(data.lsb_release.release || '')} - ${escapeHtml(data.lsb_release.codename || '')}`;
+                    if (data.lsb_release.description) {
+                        html += ` (${escapeHtml(data.lsb_release.description)})`;
+                    }
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+
+                // Process info
+                html += `<div class="info-grid">`;
+                html += `<div class="info-label">Process PID:</div><div class="info-value">${data.pid}</div>`;
+                if (data.linux_memory_map_count) {
+                    html += `<div class="info-label">Memory map count:</div><div class="info-value">${data.linux_memory_map_count}</div>`;
+                }
+                html += `</div>`;
+
+                // Crashing Thread (within Crash Information section)
+                if (data.crashing_thread) {
+                    const thread = data.crashing_thread;
+                    html += `<h3>Thread ${data.crash_info?.crashing_thread ?? 0}`;
+                    if (thread.thread_name) {
+                        html += ` ${escapeHtml(thread.thread_name)}`;
+                    }
+                    html += ` (crashed) - tid: ${thread.thread_id || 'unknown'}</h3>`;
+
+                    html += displayFrames(thread.frames, true);
+                }
+            }
+
+            // Other Threads
+            if (data.threads && data.threads.length > 0) {
+                html += `<h2>Other Threads</h2>`;
+                data.threads.forEach((thread, idx) => {
+                    if (idx === data.crash_info?.crashing_thread) {
+                        return; // Skip crashing thread, already shown
+                    }
+
+                    html += `<div class="thread">`;
+                    html += `<div class="thread-header">Thread ${idx}`;
+                    if (thread.thread_name) {
+                        html += ` ${escapeHtml(thread.thread_name)}`;
+                    }
+                    html += ` - tid: ${thread.thread_id || 'unknown'}`;
+                    html += `</div>`;
+                    html += displayFrames(thread.frames.slice(0, 10), false);
+                    if (thread.frames.length > 10) {
+                        html += `<p style="margin-top: 10px; color: #666;"><em>... and ${thread.frames.length - 10} more frames</em></p>`;
+                    }
+                    html += `</div>`;
+                });
+            }
+
+            // Modules
+            if (data.modules && data.modules.length > 0) {
+                html += `<h2>Loaded Modules (${data.modules.length})</h2>`;
+                html += `<div class="module-list">`;
+                data.modules.forEach(module => {
+                    html += `<div class="module">`;
+                    html += `<strong>${escapeHtml(module.filename || 'unknown')}</strong><br>`;
+                    html += `Base: ${escapeHtml(module.base_addr || 'unknown')} `;
+                    html += `Size: ${escapeHtml(module.size?.toString() || 'unknown')}`;
+                    if (module.version) {
+                        html += ` Version: ${escapeHtml(module.version)}`;
+                    }
+                    html += `</div>`;
+                });
+                html += `</div>`;
+            }
+
+            output.innerHTML = html;
+        }
+
+        function displayFrames(frames, isCrashed) {
+            if (!frames || frames.length === 0) return '';
+
+            let html = '<table class="stack-table">';
+            html += '<thead><tr>';
+            html += '<th>#</th>';
+            html += '<th>Module</th>';
+            html += '<th>Function</th>';
+            html += '<th>Location</th>';
+            html += '<th>Trust</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+
+            frames.forEach((frame, idx) => {
+                const rowClass = (idx === 0 && isCrashed) ? 'crashed' : '';
+                const rowId = `frame-${frame.frame}`;
+
+                // Show inline frames first (they're logically before the actual frame)
+                if (frame.inlines && frame.inlines.length > 0) {
+                    frame.inlines.forEach(inline => {
+                        html += `<tr class="${rowClass}">`;
+                        html += `<td class="frame-num"></td>`;
+                        html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
+
+                        const inlineUrl = makeFileUrl(inline.file, inline.line);
+                        html += `<td class="frame-function">`;
+                        if (inlineUrl) {
+                            html += `<a href="${inlineUrl}" class="file-link" target="_blank">${escapeHtml(inline.function || '???')}</a>`;
+                        } else {
+                            html += escapeHtml(inline.function || '???');
+                        }
+                        html += ' <span style="color: #999; font-size: 11px;">[inlined]</span>';
+                        html += `</td>`;
+
+                        html += `<td class="frame-location">`;
+                        if (inline.file && inline.line) {
+                            const inlineFileInfo = parseFileInfo(inline.file);
+                            const inlineDisplayPath = inlineFileInfo ? inlineFileInfo.path : inline.file;
+                            html += `${escapeHtml(inlineDisplayPath)}:${inline.line}`;
+                        }
+                        html += `</td>`;
+
+                        html += `<td class="frame-trust"></td>`;
+                        html += '</tr>';
+                    });
+                }
+
+                // Main frame row
+                const hasDetails = frame.registers ? ` onclick="toggleFrameDetails('${rowId}')" style="cursor: pointer;"` : '';
+                html += `<tr class="${rowClass}"${hasDetails}>`;
+                html += `<td class="frame-num">${frame.frame}</td>`;
+                html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
+
+                // Function with click-to-open
+                const fileUrl = makeFileUrl(frame.file, frame.line);
+                html += `<td class="frame-function">`;
+                if (fileUrl) {
+                    html += `<a href="${fileUrl}" class="file-link" onclick="event.stopPropagation()" target="_blank">${escapeHtml(frame.function || '???')}</a>`;
+                } else {
+                    html += escapeHtml(frame.function || '???');
+                }
+                html += `</td>`;
+
+                // Location
+                html += `<td class="frame-location">`;
+                if (frame.file && frame.line) {
+                    const fileInfo = parseFileInfo(frame.file);
+                    const displayPath = fileInfo ? fileInfo.path : frame.file;
+                    html += `${escapeHtml(displayPath)}:${frame.line}`;
+                    if (frame.function_offset) {
+                        html += ` +${escapeHtml(frame.function_offset)}`;
+                    }
+                }
+                html += `</td>`;
+
+                html += `<td class="frame-trust">${escapeHtml(frame.trust || '')}</td>`;
+                html += '</tr>';
+
+                // Details row (hidden by default) - show registers if available
+                if (frame.registers) {
+                    html += `<tr class="frame-details" id="${rowId}-details">`;
+                    html += '<td colspan="5">';
+                    html += '<div style="margin-top: 10px;"><strong>Registers:</strong></div>';
+                    html += '<div class="registers">';
+                    Object.entries(frame.registers).sort().forEach(([name, value]) => {
+                        html += `<div class="register"><span class="register-name">${escapeHtml(name)}</span> = ${escapeHtml(value)}</div>`;
+                    });
+                    html += '</div>';
+                    html += '</td></tr>';
+                }
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function toggleFrameDetails(rowId) {
+            const detailsRow = document.getElementById(rowId + '-details');
+            if (detailsRow) {
+                detailsRow.classList.toggle('expanded');
+            }
+        }
+
+        function parseFileInfo(file) {
+            if (!file) return null;
+
+            // Parse the file format: hg:repo:path:revision
+            // Example: hg:hg.mozilla.org/mozilla-central:xpcom/base/file.cpp:c536b1636b55af
+            const parts = file.split(':');
+            if (parts[0] === 'hg' && parts.length >= 4) {
+                const repo = parts[1];
+                const revision = parts[parts.length - 1];
+                const path = parts.slice(2, parts.length - 1).join(':');
+
+                return { repo, revision, path };
+            }
+
+            return null;
+        }
+
+        function makeFileUrl(file, line) {
+            const info = parseFileInfo(file);
+            if (!info) return null;
+
+            // Create searchfox URL
+            return `https://searchfox.org/mozilla-central/rev/${info.revision}/${info.path}#${line || ''}`;
+        }
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

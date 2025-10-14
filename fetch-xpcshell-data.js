@@ -229,7 +229,8 @@ function createDataTables(jobResults) {
         repositories: [],
         statuses: [],
         taskIds: [],
-        messages: []
+        messages: [],
+        crashSignatures: []
     };
 
     // Maps for O(1) string lookups
@@ -240,7 +241,8 @@ function createDataTables(jobResults) {
         repositories: new Map(),
         statuses: new Map(),
         taskIds: new Map(),
-        messages: new Map()
+        messages: new Map(),
+        crashSignatures: new Map()
     };
 
     // Task info maps task ID index to repository and job name indexes
@@ -325,8 +327,9 @@ function createDataTables(jobResults) {
             }
 
             // Initialize status group within test if it doesn't exist
-            if (!testRuns[testId][statusId]) {
-                const statusGroup = {
+            let statusGroup = testRuns[testId][statusId];
+            if (!statusGroup) {
+                statusGroup = {
                     taskIdIds: [],
                     durations: [],
                     timestamps: []
@@ -335,18 +338,30 @@ function createDataTables(jobResults) {
                 if (timing.status === 'SKIP') {
                     statusGroup.messageIds = [];
                 }
+                // Only include crash data arrays for CRASH status
+                if (timing.status === 'CRASH') {
+                    statusGroup.crashSignatureIds = [];
+                    statusGroup.minidumps = [];
+                }
                 testRuns[testId][statusId] = statusGroup;
             }
 
             // Add test run to the appropriate test/status group
-            testRuns[testId][statusId].taskIdIds.push(taskIdId);
-            testRuns[testId][statusId].durations.push(Math.round(timing.duration));
-            testRuns[testId][statusId].timestamps.push(timing.timestamp);
+            statusGroup.taskIdIds.push(taskIdId);
+            statusGroup.durations.push(Math.round(timing.duration));
+            statusGroup.timestamps.push(timing.timestamp);
 
             // Store message ID for SKIP status (or null if no message)
             if (timing.status === 'SKIP') {
                 const messageId = timing.message ? findStringIndex('messages', timing.message) : null;
-                testRuns[testId][statusId].messageIds.push(messageId);
+                statusGroup.messageIds.push(messageId);
+            }
+
+            // Store crash data for CRASH status (or null if not available)
+            if (timing.status === 'CRASH') {
+                const crashSignatureId = timing.crashSignature ? findStringIndex('crashSignatures', timing.crashSignature) : null;
+                statusGroup.crashSignatureIds.push(crashSignatureId);
+                statusGroup.minidumps.push(timing.minidump || null);
             }
         }
     }
@@ -403,12 +418,26 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
                 statusGroup.timestamps[i] = Math.floor(statusGroup.timestamps[i] / 1000) - startTime;
             }
 
-            // Map to array of objects
-            const runs = statusGroup.timestamps.map((ts, i) => ({
-                timestamp: ts,
-                taskIdId: statusGroup.taskIdIds[i],
-                duration: statusGroup.durations[i]
-            }));
+            // Map to array of objects including crash data if present
+            const runs = statusGroup.timestamps.map((ts, i) => {
+                const run = {
+                    timestamp: ts,
+                    taskIdId: statusGroup.taskIdIds[i],
+                    duration: statusGroup.durations[i]
+                };
+                // Include crash data if this is a CRASH status group
+                if (statusGroup.crashSignatureIds) {
+                    run.crashSignatureId = statusGroup.crashSignatureIds[i];
+                }
+                if (statusGroup.minidumps) {
+                    run.minidump = statusGroup.minidumps[i];
+                }
+                // Include message data if this is a SKIP status group
+                if (statusGroup.messageIds) {
+                    run.messageId = statusGroup.messageIds[i];
+                }
+                return run;
+            });
 
             // Sort by timestamp
             runs.sort((a, b) => a.timestamp - b.timestamp);
@@ -425,6 +454,17 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
             statusGroup.taskIdIds = runs.map(run => run.taskIdId);
             statusGroup.durations = runs.map(run => run.duration);
             statusGroup.timestamps = runs.map(run => run.timestamp);
+            // Update crash data arrays if present
+            if (statusGroup.crashSignatureIds) {
+                statusGroup.crashSignatureIds = runs.map(run => run.crashSignatureId);
+            }
+            if (statusGroup.minidumps) {
+                statusGroup.minidumps = runs.map(run => run.minidump);
+            }
+            // Update message data arrays if present
+            if (statusGroup.messageIds) {
+                statusGroup.messageIds = runs.map(run => run.messageId);
+            }
         }
     }
 
