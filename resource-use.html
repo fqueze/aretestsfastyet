@@ -636,24 +636,30 @@
                                 case 'idle':
                                     const idleTimeA = currentData.jobs.idleTimes[idxA] || 0;
                                     const idleTimeB = currentData.jobs.idleTimes[idxB] || 0;
-                                    const totalTimeA = bucketsA.reduce((sum, val) => sum + val, 0);
-                                    const totalTimeB = bucketsB.reduce((sum, val) => sum + val, 0);
+                                    const idleBucketsA = currentData.jobs.cpuBuckets[idxA];
+                                    const idleBucketsB = currentData.jobs.cpuBuckets[idxB];
+                                    const totalTimeA = idleBucketsA.reduce((sum, val) => sum + val, 0);
+                                    const totalTimeB = idleBucketsB.reduce((sum, val) => sum + val, 0);
                                     valA = totalTimeA > 0 ? (idleTimeA / totalTimeA) : 0;
                                     valB = totalTimeB > 0 ? (idleTimeB / totalTimeB) : 0;
                                     break;
                                 case 'singleCore':
                                     const singleCoreTimeA = currentData.jobs.singleCoreTimes[idxA] || 0;
                                     const singleCoreTimeB = currentData.jobs.singleCoreTimes[idxB] || 0;
-                                    const singleTotalTimeA = currentData.jobs.cpuBuckets[idxA].reduce((sum, val) => sum + val, 0);
-                                    const singleTotalTimeB = currentData.jobs.cpuBuckets[idxB].reduce((sum, val) => sum + val, 0);
+                                    const singleBucketsA = currentData.jobs.cpuBuckets[idxA];
+                                    const singleBucketsB = currentData.jobs.cpuBuckets[idxB];
+                                    const singleTotalTimeA = singleBucketsA.reduce((sum, val) => sum + val, 0);
+                                    const singleTotalTimeB = singleBucketsB.reduce((sum, val) => sum + val, 0);
                                     valA = singleTotalTimeA > 0 ? (singleCoreTimeA / singleTotalTimeA) : 0;
                                     valB = singleTotalTimeB > 0 ? (singleCoreTimeB / singleTotalTimeB) : 0;
                                     break;
                                 case 'maxCpu':
-                                    const maxCpuA = currentData.jobs.cpuBuckets[idxA].at(-1) || 0;
-                                    const maxCpuB = currentData.jobs.cpuBuckets[idxB].at(-1) || 0;
-                                    const cpuTotalA = currentData.jobs.cpuBuckets[idxA].reduce((sum, val) => sum + val, 0);
-                                    const cpuTotalB = currentData.jobs.cpuBuckets[idxB].reduce((sum, val) => sum + val, 0);
+                                    const maxCpuBucketsA = currentData.jobs.cpuBuckets[idxA];
+                                    const maxCpuBucketsB = currentData.jobs.cpuBuckets[idxB];
+                                    const maxCpuA = maxCpuBucketsA.at(-1) || 0;
+                                    const maxCpuB = maxCpuBucketsB.at(-1) || 0;
+                                    const cpuTotalA = maxCpuBucketsA.reduce((sum, val) => sum + val, 0);
+                                    const cpuTotalB = maxCpuBucketsB.reduce((sum, val) => sum + val, 0);
                                     valA = cpuTotalA > 0 ? (maxCpuA / cpuTotalA) : 0;
                                     valB = cpuTotalB > 0 ? (maxCpuB / cpuTotalB) : 0;
                                     break;
