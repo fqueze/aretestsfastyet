@@ -996,15 +996,24 @@
         function parseFileInfo(file) {
             if (!file) return null;
 
-            // Parse the file format: hg:repo:path:revision
-            // Example: hg:hg.mozilla.org/mozilla-central:xpcom/base/file.cpp:c536b1636b55af
             const parts = file.split(':');
+
+            // Parse git format: git:github.com/owner/repo:path:revision
+            // Example: git:github.com/rust-lang/rust:library/alloc/src/boxed.rs:05f9846f893b09a1be1fc8560e33fc3c815cfecb
+            if (parts[0] === 'git' && parts.length >= 4) {
+                const repo = parts[1];
+                const revision = parts[parts.length - 1];
+                const path = parts.slice(2, parts.length - 1).join(':');
+                return { type: 'git', repo, revision, path };
+            }
+
+            // Parse hg format: hg:repo:path:revision
+            // Example: hg:hg.mozilla.org/mozilla-central:xpcom/base/file.cpp:c536b1636b55af
             if (parts[0] === 'hg' && parts.length >= 4) {
                 const repo = parts[1];
                 const revision = parts[parts.length - 1];
                 const path = parts.slice(2, parts.length - 1).join(':');
-
-                return { repo, revision, path };
+                return { type: 'hg', repo, revision, path };
             }
 
             return null;
@@ -1014,9 +1023,19 @@
             const info = parseFileInfo(file);
             if (!info) return null;
 
-            // Create hg.mozilla.org URL
-            // Example: https://hg.mozilla.org/releases/mozilla-beta/file/727346cd8fc1ab5df5ece0122891e3894567d019/netwerk/ipc/ParentProcessDocumentChannel.cpp#l177
-            return `https://${info.repo}/file/${info.revision}/${info.path}${line ? '#l' + line : ''}`;
+            if (info.type === 'git') {
+                // Create GitHub URL
+                // Example: https://github.com/rust-lang/rust/blob/05f9846f893b09a1be1fc8560e33fc3c815cfecb/library/alloc/src/boxed.rs#L1976
+                return `https://${info.repo}/blob/${info.revision}/${info.path}${line ? '#L' + line : ''}`;
+            }
+
+            if (info.type === 'hg') {
+                // Create hg.mozilla.org URL
+                // Example: https://hg.mozilla.org/releases/mozilla-beta/file/727346cd8fc1ab5df5ece0122891e3894567d019/netwerk/ipc/ParentProcessDocumentChannel.cpp#l177
+                return `https://${info.repo}/file/${info.revision}/${info.path}${line ? '#l' + line : ''}`;
+            }
+
+            return null;
         }
 
         function makeSearchfoxSearchUrl(functionName) {
