@@ -32,6 +32,82 @@ function isInParallelRange(testStart, testEnd, parallelRanges) {
     return false;
 }
 
+// Extract resource usage information from profile
+function extractResourceUsage(profile) {
+    if (!profile || !profile.threads || !profile.threads[0]) {
+        return null;
+    }
+
+    const thread = profile.threads[0];
+    const { markers } = thread;
+
+    if (!markers || !markers.data) {
+        return null;
+    }
+
+    // Extract machine info from profile metadata
+    // Convert memory to GB with 1 decimal place to avoid grouping issues from tiny variations
+    const machineInfo = {
+        logicalCPUs: profile.meta?.logicalCPUs || null,
+        physicalCPUs: profile.meta?.physicalCPUs || null,
+        mainMemory: profile.meta?.mainMemory
+            ? parseFloat((profile.meta.mainMemory / (1024 * 1024 * 1024)).toFixed(1))
+            : null
+    };
+
+    let maxMemory = 0;
+    let idleTime = 0;
+    let singleCoreTime = 0;
+    // CPU buckets: [0-10%, 10-20%, 20-30%, ..., 90-100%]
+    const cpuBuckets = new Array(10).fill(0);
+
+    // Calculate thresholds based on core count
+    const oneCorePct = machineInfo.logicalCPUs ? (100 / machineInfo.logicalCPUs) : 12.5;
+    const idleThreshold = oneCorePct / 2;
+    // Single-core range: 0.75 to 1.25 cores (to account for slight variations)
+    const singleCoreMin = oneCorePct * 0.75;
+    const singleCoreMax = oneCorePct * 1.25;
+
+    // Process markers to gather resource usage
+    for (let i = 0; i < markers.length; i++) {
+        const data = markers.data[i];
+        if (!data) continue;
+
+        const duration = markers.endTime[i] - markers.startTime[i];
+
+        if (data.type === 'Mem') {
+            if (data.used > maxMemory) {
+                maxMemory = data.used;
+            }
+        } else if (data.type === 'CPU') {
+            // Parse CPU percentage (e.g., "21.4%" -> 21.4)
+            const cpuPercent = parseFloat(data.cpuPercent);
+            if (isNaN(cpuPercent)) continue;
+
+            if (cpuPercent < idleThreshold) {
+                idleTime += duration;
+            }
+
+            // Check if it's in the single-core range
+            if (cpuPercent >= singleCoreMin && cpuPercent <= singleCoreMax) {
+                singleCoreTime += duration;
+            }
+
+            // Compute bucket index: 0-10% -> bucket 0, 10-20% -> bucket 1, etc.
+            const bucketIndex = Math.min(Math.floor(cpuPercent / 10), 9);
+            cpuBuckets[bucketIndex] += duration;
+        }
+    }
+
+    return {
+        machineInfo,
+        maxMemory,
+        idleTime,
+        singleCoreTime,
+        cpuBuckets
+    };
+}
+
 // Extract test timings from profile
 function extractTestTimings(profile, jobName) {
     if (!profile || !profile.threads || !profile.threads[0]) {
@@ -222,13 +298,21 @@ async function processJob(job) {
         return null;
     }
 
+    const resourceUsage = extractResourceUsage(profile);
+
+    // Convert start_time to timestamp in seconds if it's a string
+    const startTime = typeof job.start_time === 'string'
+        ? Math.floor(new Date(job.start_time).getTime() / 1000)
+        : job.start_time;
+
     return {
         jobName: jobName,
         taskId: taskId,
         retryId: retryId,
         repository: job.repository,
-        startTime: job.start_time,
-        timings: timings
+        startTime: startTime,
+        timings: timings,
+        resourceUsage: resourceUsage
     };
 }
 

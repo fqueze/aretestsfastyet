@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPCShell Resource Usage Dashboard</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            margin: 0 0 20px 0;
+            color: #333;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+
+        .controls-left {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .controls-right {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        label {
+            font-weight: 500;
+            color: #555;
+        }
+
+        select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .filter-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        #filterBox {
+            padding: 8px 30px 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 300px;
+        }
+
+        .clear-filter {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #999;
+            font-size: 18px;
+            display: none;
+            user-select: none;
+        }
+
+        .clear-filter:hover {
+            color: #333;
+        }
+
+        .clear-filter.visible {
+            display: block;
+        }
+
+        .job-count {
+            color: #666;
+            font-size: 14px;
+        }
+
+        #resourceTable {
+            width: 100%;
+            background: white;
+            border-collapse: collapse;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        #resourceTable th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #dee2e6;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #resourceTable th:hover {
+            background: #e9ecef;
+        }
+
+        #resourceTable td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .group-row {
+            background: #f8f9fa;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .group-row:hover {
+            background: #e9ecef;
+        }
+
+        .job-row {
+            background: white;
+            cursor: pointer;
+        }
+
+        .job-row:hover {
+            background: #f8f9fa;
+        }
+
+        .job-row td:first-child {
+            padding-left: 40px;
+        }
+
+        .expand-icon {
+            display: inline-block;
+            width: 16px;
+            margin-right: 8px;
+            transition: transform 0.2s;
+        }
+
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+
+        .cpu-chart {
+            display: flex;
+            height: 20px;
+            width: 200px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            overflow: hidden;
+            cursor: help;
+        }
+
+        .cpu-bucket {
+            height: 100%;
+        }
+
+        .hidden {
+            display: main;
+        }
+
+        .number {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .profile-link {
+            color: #0066cc;
+            text-decoration: none;
+            margin-left: 10px;
+            font-size: 12px;
+        }
+
+        .profile-link:hover {
+            text-decoration: underline;
+        }
+
+        .machine-info {
+            color: #666;
+            font-size: 13px;
+            font-weight: normal;
+            margin-left: 10px;
+        }
+
+        .sort-arrow {
+            margin-left: 5px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>XPCShell Resource Usage Dashboard</h1>
+        <div class="controls">
+            <div class="controls-left">
+                <label>
+                    Date:
+                    <select id="dateSelector">
+                        <option value="">Loading...</option>
+                    </select>
+                </label>
+                <span class="job-count" id="jobCount"></span>
+            </div>
+            <div class="controls-right">
+                <div class="filter-container">
+                    <input type="text" id="filterBox" placeholder="Filter by job name...">
+                    <span class="clear-filter" id="clearFilter">×</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <table id="resourceTable">
+        <thead>
+            <tr>
+                <th data-sort="name">Job Name</th>
+                <th data-sort="cores" class="number">Cores</th>
+                <th data-sort="ram" class="number">RAM (GB)</th>
+                <th data-sort="memory" class="number" title="Maximum memory used as percentage of available RAM">Max Memory (%)</th>
+                <th data-sort="totalTime" class="number" title="Total time profiled (sum of all CPU measurements)">Total Time</th>
+                <th data-sort="idle" class="number" title="Less than half a core used">Idle (%)</th>
+                <th data-sort="singleCore" class="number" title="Using approximately one CPU core (0.75 to 1.25 cores)">1 core (%)</th>
+                <th data-sort="maxCpu" class="number" title="More than 90% of CPU used">All cores (%)</th>
+                <th title="Distribution of CPU usage across 10% buckets">CPU Usage Distribution</th>
+                <th data-sort="count" class="number">Jobs</th>
+            </tr>
+        </thead>
+        <tbody id="resourceTableBody">
+            <tr>
+                <td colspan="8" style="text-align: center; padding: 40px;">Loading data...</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <script>
+        let currentData = null;
+        let expandedGroups = new Set();
+        let sortColumn = null;
+        let sortDirection = 'asc';
+        let initialLoadComplete = false;
+
+        // CPU bucket colors (from low to high usage)
+        const CPU_COLORS = [
+            '#e8f5e9', // 0-10%
+            '#c8e6c9', // 10-20%
+            '#a5d6a7', // 20-30%
+            '#81c784', // 30-40%
+            '#66bb6a', // 40-50%
+            '#4caf50', // 50-60%
+            '#43a047', // 60-70%
+            '#388e3c', // 70-80%
+            '#2e7d32', // 80-90%
+            '#1b5e20'  // 90-100%
+        ];
+
+        // Parse URL hash
+        function parseHash() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            return {
+                date: params.get('date'),
+                filter: params.get('filter') || ''
+            };
+        }
+
+        // Update URL hash
+        function updateHash() {
+            if (!initialLoadComplete) return;
+
+            const params = new URLSearchParams();
+            const date = document.getElementById('dateSelector').value;
+            const filter = document.getElementById('filterBox').value;
+
+            if (date) params.set('date', date);
+            if (filter) params.set('filter', filter);
+
+            const newHash = params.toString();
+            if (newHash !== window.location.hash.substring(1)) {
+                window.location.hash = newHash;
+            }
+        }
+
+        // Load available dates
+        async function loadDates() {
+            try {
+                const response = await fetch('xpcshell-data/index.json');
+                const data = await response.json();
+
+                const selector = document.getElementById('dateSelector');
+                selector.innerHTML = '';
+
+                data.dates.forEach((date, index) => {
+                    const option = document.createElement('option');
+                    option.value = date;
+                    option.textContent = date;
+                    selector.appendChild(option);
+                });
+
+                if (data.dates.length > 0) {
+                    // Check URL hash for date
+                    const hash = parseHash();
+                    const dateToLoad = hash.date && data.dates.includes(hash.date) ? hash.date : data.dates[0];
+                    selector.value = dateToLoad;
+
+                    // Restore filter from hash
+                    if (hash.filter) {
+                        document.getElementById('filterBox').value = hash.filter;
+                    }
+
+                    await loadData(dateToLoad);
+                    initialLoadComplete = true;
+                }
+            } catch (error) {
+                console.error('Failed to load dates:', error);
+                document.getElementById('dateSelector').innerHTML = '<option>Error loading dates</option>';
+            }
+        }
+
+        // Load resource usage data for a date
+        async function loadData(date) {
+            try {
+                const response = await fetch(`xpcshell-data/xpcshell-${date}-resources.json`);
+                currentData = await response.json();
+
+                // Decompress timestamps
+                decompressTimestamps();
+
+                renderTable();
+            } catch (error) {
+                console.error('Failed to load data:', error);
+                document.getElementById('resourceTableBody').innerHTML =
+                    '<tr><td colspan="8" style="text-align: center; padding: 40px; color: red;">Error loading data</td></tr>';
+            }
+        }
+
+        // Decompress differential timestamps
+        function decompressTimestamps() {
+            let currentTime = 0;
+            const timestamps = currentData.jobs.startTimes.map(diff => {
+                currentTime += diff;
+                return currentTime;
+            });
+            currentData.jobs.decompressedStartTimes = timestamps;
+        }
+
+        // Group jobs by job name and machine info
+        function groupJobs() {
+            const groups = new Map();
+
+            for (let i = 0; i < currentData.jobs.jobNameIds.length; i++) {
+                const jobNameId = currentData.jobs.jobNameIds[i];
+                const machineInfoId = currentData.jobs.machineInfoIds[i];
+                const groupKey = `${jobNameId}-${machineInfoId}`;
+
+                if (!groups.has(groupKey)) {
+                    groups.set(groupKey, {
+                        jobNameId,
+                        machineInfoId,
+                        jobIndices: []
+                    });
+                }
+
+                groups.get(groupKey).jobIndices.push(i);
+            }
+
+            return Array.from(groups.values());
+        }
+
+        // Calculate aggregate stats for a group
+        function calculateGroupStats(group) {
+            const { jobIndices } = group;
+            const machineInfo = currentData.machineInfos[group.machineInfoId];
+
+            let totalIdleTime = 0;
+            let totalSingleCoreTime = 0;
+            let maxMemory = 0;
+            const cpuBucketsSum = new Array(10).fill(0);
+
+            for (const idx of jobIndices) {
+                totalIdleTime += currentData.jobs.idleTimes[idx] || 0;
+                totalSingleCoreTime += currentData.jobs.singleCoreTimes[idx] || 0;
+                maxMemory = Math.max(maxMemory, currentData.jobs.maxMemories[idx] || 0);
+
+                const buckets = currentData.jobs.cpuBuckets[idx];
+                for (let b = 0; b < 10; b++) {
+                    cpuBucketsSum[b] += buckets[b] || 0;
+                }
+            }
+
+            const totalCpuTime = cpuBucketsSum.reduce((sum, val) => sum + val, 0);
+
+            return {
+                machineInfo,
+                count: jobIndices.length,
+                totalIdleTime: totalIdleTime,
+                totalSingleCoreTime: totalSingleCoreTime,
+                totalTime: totalCpuTime,
+                maxMemory,
+                cpuBucketsSum
+            };
+        }
+
+        // Format bytes to GB
+        function formatGB(bytes) {
+            return (bytes / (1024 * 1024 * 1024)).toFixed(1);
+        }
+
+        // Format memory percentage
+        function formatMemoryPercent(usedBytes, totalGB) {
+            if (!totalGB) return '?';
+            const totalBytes = totalGB * 1024 * 1024 * 1024;
+            const percent = (usedBytes / totalBytes) * 100;
+            return percent.toFixed(1);
+        }
+
+        // Format milliseconds to human readable
+        function formatTime(milliseconds) {
+            const seconds = milliseconds / 1000;
+            if (seconds < 60) return seconds.toFixed(1) + 's';
+
+            const totalMinutes = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+
+            if (totalMinutes < 60) {
+                return `${totalMinutes}m ${secs}s`;
+            }
+
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            return `${hours}h ${minutes}m`;
+        }
+
+        // Create CPU chart HTML
+        function createCpuChart(cpuBuckets) {
+            const total = cpuBuckets.reduce((sum, val) => sum + val, 0);
+            if (total === 0) return '<div class="cpu-chart"></div>';
+
+            const tooltipLines = [];
+            cpuBuckets.forEach((time, idx) => {
+                const pct = ((time / total) * 100).toFixed(1);
+                tooltipLines.push(`${idx * 10}-${idx * 10 + 10}%: ${formatTime(time)} (${pct}%)`);
+            });
+            const tooltip = tooltipLines.join('\n');
+
+            let html = `<div class="cpu-chart" title="${tooltip}">`;
+
+            cpuBuckets.forEach((time, idx) => {
+                const widthPct = (time / total) * 100;
+                if (widthPct > 0) {
+                    html += `<div class="cpu-bucket" style="width: ${widthPct}%; background: ${CPU_COLORS[idx]};"></div>`;
+                }
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+
+        // Render the table
+        function renderTable() {
+            const groups = groupJobs();
+            const filterText = document.getElementById('filterBox').value.toLowerCase();
+
+            // Show/hide clear button
+            const clearButton = document.getElementById('clearFilter');
+            if (filterText) {
+                clearButton.classList.add('visible');
+            } else {
+                clearButton.classList.remove('visible');
+            }
+
+            // Filter groups
+            const filteredGroups = groups.filter(group => {
+                const jobName = currentData.jobNames[group.jobNameId];
+                return jobName.toLowerCase().includes(filterText);
+            });
+
+            // Update job count
+            const totalJobs = currentData.jobs.jobNameIds.length;
+            const filteredJobCount = filteredGroups.reduce((sum, group) => sum + group.jobIndices.length, 0);
+            const jobCountEl = document.getElementById('jobCount');
+            if (filterText) {
+                jobCountEl.textContent = `${filteredJobCount} / ${totalJobs} jobs`;
+            } else {
+                jobCountEl.textContent = `${totalJobs} jobs`;
+            }
+
+            // Sort groups
+            if (sortColumn) {
+                filteredGroups.sort((a, b) => {
+                    const statsA = calculateGroupStats(a);
+                    const statsB = calculateGroupStats(b);
+
+                    let valA, valB;
+                    switch (sortColumn) {
+                        case 'name':
+                            valA = currentData.jobNames[a.jobNameId];
+                            valB = currentData.jobNames[b.jobNameId];
+                            return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                        case 'cores':
+                            valA = statsA.machineInfo.logicalCPUs || 0;
+                            valB = statsB.machineInfo.logicalCPUs || 0;
+                            break;
+                        case 'ram':
+                            valA = statsA.machineInfo.mainMemory || 0;
+                            valB = statsB.machineInfo.mainMemory || 0;
+                            break;
+                        case 'totalTime':
+                            valA = statsA.totalTime;
+                            valB = statsB.totalTime;
+                            break;
+                        case 'idle':
+                            valA = statsA.totalTime > 0 ? (statsA.totalIdleTime / statsA.totalTime) : 0;
+                            valB = statsB.totalTime > 0 ? (statsB.totalIdleTime / statsB.totalTime) : 0;
+                            break;
+                        case 'singleCore':
+                            valA = statsA.totalTime > 0 ? (statsA.totalSingleCoreTime / statsA.totalTime) : 0;
+                            valB = statsB.totalTime > 0 ? (statsB.totalSingleCoreTime / statsB.totalTime) : 0;
+                            break;
+                        case 'maxCpu':
+                            const maxCpuA = statsA.cpuBucketsSum.at(-1) || 0;
+                            const maxCpuB = statsB.cpuBucketsSum.at(-1) || 0;
+                            valA = statsA.totalTime > 0 ? (maxCpuA / statsA.totalTime) : 0;
+                            valB = statsB.totalTime > 0 ? (maxCpuB / statsB.totalTime) : 0;
+                            break;
+                        case 'memory':
+                            valA = statsA.maxMemory;
+                            valB = statsB.maxMemory;
+                            break;
+                        case 'count':
+                            valA = statsA.count;
+                            valB = statsB.count;
+                            break;
+                        default:
+                            return 0;
+                    }
+
+                    return sortDirection === 'asc' ? valA - valB : valB - valA;
+                });
+            }
+
+            const tbody = document.getElementById('resourceTableBody');
+            tbody.innerHTML = '';
+
+            for (const group of filteredGroups) {
+                const stats = calculateGroupStats(group);
+                const jobName = currentData.jobNames[group.jobNameId];
+                const groupKey = `${group.jobNameId}-${group.machineInfoId}`;
+                const isExpanded = expandedGroups.has(groupKey);
+
+                // Group row
+                const groupRow = document.createElement('tr');
+                groupRow.className = 'group-row';
+                const coreTooltip = `${stats.machineInfo.physicalCPUs || '?'} physical, ${stats.machineInfo.logicalCPUs || '?'} logical`;
+                const memoryPercent = formatMemoryPercent(stats.maxMemory, stats.machineInfo.mainMemory);
+                const memoryTooltip = `${formatGB(stats.maxMemory)} GB`;
+
+                const idlePercent = stats.totalTime > 0 ? ((stats.totalIdleTime / stats.totalTime) * 100).toFixed(1) : '0.0';
+                const idleTooltip = formatTime(stats.totalIdleTime);
+
+                const singleCorePercent = stats.totalTime > 0 ? ((stats.totalSingleCoreTime / stats.totalTime) * 100).toFixed(1) : '0.0';
+                const singleCoreTooltip = formatTime(stats.totalSingleCoreTime);
+
+                const maxCpuBucketTime = stats.cpuBucketsSum.at(-1) || 0;
+                const maxCpuPercent = stats.totalTime > 0 ? ((maxCpuBucketTime / stats.totalTime) * 100).toFixed(1) : '0.0';
+                const maxCpuTooltip = formatTime(maxCpuBucketTime);
+
+                groupRow.innerHTML = `
+                    <td>
+                        <span class="expand-icon ${isExpanded ? 'expanded' : ''}">▶</span>
+                        ${jobName}
+                        <span class="machine-info">
+                            ${stats.machineInfo.logicalCPUs || '?'} cores,
+                            ${stats.machineInfo.mainMemory || '?'} GB RAM
+                        </span>
+                    </td>
+                    <td class="number" title="${coreTooltip}">${stats.machineInfo.logicalCPUs || '?'}</td>
+                    <td class="number">${stats.machineInfo.mainMemory || '?'}</td>
+                    <td class="number" title="${memoryTooltip}">${memoryPercent}%</td>
+                    <td class="number">${formatTime(stats.totalTime)}</td>
+                    <td class="number" title="${idleTooltip}">${idlePercent}%</td>
+                    <td class="number" title="${singleCoreTooltip}">${singleCorePercent}%</td>
+                    <td class="number" title="${maxCpuTooltip}">${maxCpuPercent}%</td>
+                    <td>${createCpuChart(stats.cpuBucketsSum)}</td>
+                    <td class="number">${stats.count}</td>
+                `;
+
+                groupRow.addEventListener('click', () => {
+                    if (expandedGroups.has(groupKey)) {
+                        expandedGroups.delete(groupKey);
+                    } else {
+                        expandedGroups.add(groupKey);
+                    }
+                    renderTable();
+                });
+
+                tbody.appendChild(groupRow);
+
+                // Job rows
+                if (isExpanded) {
+                    // Sort job indices if there's an active sort column
+                    let sortedIndices = [...group.jobIndices];
+                    if (sortColumn) {
+                        sortedIndices.sort((idxA, idxB) => {
+                            let valA, valB;
+                            switch (sortColumn) {
+                                case 'name':
+                                    const chunkA = currentData.jobs.chunks[idxA];
+                                    const chunkB = currentData.jobs.chunks[idxB];
+                                    valA = chunkA !== null ? chunkA : -1;
+                                    valB = chunkB !== null ? chunkB : -1;
+                                    break;
+                                case 'totalTime':
+                                    const bucketsA = currentData.jobs.cpuBuckets[idxA];
+                                    const bucketsB = currentData.jobs.cpuBuckets[idxB];
+                                    valA = bucketsA.reduce((sum, val) => sum + val, 0);
+                                    valB = bucketsB.reduce((sum, val) => sum + val, 0);
+                                    break;
+                                case 'idle':
+                                    const idleTimeA = currentData.jobs.idleTimes[idxA] || 0;
+                                    const idleTimeB = currentData.jobs.idleTimes[idxB] || 0;
+                                    const totalTimeA = bucketsA.reduce((sum, val) => sum + val, 0);
+                                    const totalTimeB = bucketsB.reduce((sum, val) => sum + val, 0);
+                                    valA = totalTimeA > 0 ? (idleTimeA / totalTimeA) : 0;
+                                    valB = totalTimeB > 0 ? (idleTimeB / totalTimeB) : 0;
+                                    break;
+                                case 'singleCore':
+                                    const singleCoreTimeA = currentData.jobs.singleCoreTimes[idxA] || 0;
+                                    const singleCoreTimeB = currentData.jobs.singleCoreTimes[idxB] || 0;
+                                    const singleTotalTimeA = currentData.jobs.cpuBuckets[idxA].reduce((sum, val) => sum + val, 0);
+                                    const singleTotalTimeB = currentData.jobs.cpuBuckets[idxB].reduce((sum, val) => sum + val, 0);
+                                    valA = singleTotalTimeA > 0 ? (singleCoreTimeA / singleTotalTimeA) : 0;
+                                    valB = singleTotalTimeB > 0 ? (singleCoreTimeB / singleTotalTimeB) : 0;
+                                    break;
+                                case 'maxCpu':
+                                    const maxCpuA = currentData.jobs.cpuBuckets[idxA].at(-1) || 0;
+                                    const maxCpuB = currentData.jobs.cpuBuckets[idxB].at(-1) || 0;
+                                    const cpuTotalA = currentData.jobs.cpuBuckets[idxA].reduce((sum, val) => sum + val, 0);
+                                    const cpuTotalB = currentData.jobs.cpuBuckets[idxB].reduce((sum, val) => sum + val, 0);
+                                    valA = cpuTotalA > 0 ? (maxCpuA / cpuTotalA) : 0;
+                                    valB = cpuTotalB > 0 ? (maxCpuB / cpuTotalB) : 0;
+                                    break;
+                                case 'memory':
+                                    valA = currentData.jobs.maxMemories[idxA] || 0;
+                                    valB = currentData.jobs.maxMemories[idxB] || 0;
+                                    break;
+                                default:
+                                    return 0;
+                            }
+                            return sortDirection === 'asc' ? valA - valB : valB - valA;
+                        });
+                    }
+
+                    for (const idx of sortedIndices) {
+                        const taskId = currentData.jobs.taskIds[idx];
+                        const chunk = currentData.jobs.chunks[idx];
+                        const displayName = chunk !== null ? `${jobName}-${chunk}` : jobName;
+                        const idleTime = currentData.jobs.idleTimes[idx] || 0;
+                        const singleCoreTime = currentData.jobs.singleCoreTimes[idx] || 0;
+                        const maxMemory = currentData.jobs.maxMemories[idx] || 0;
+                        const cpuBuckets = currentData.jobs.cpuBuckets[idx];
+
+                        const totalTime = cpuBuckets.reduce((sum, val) => sum + val, 0);
+                        const jobIdlePercent = totalTime > 0 ? ((idleTime / totalTime) * 100).toFixed(1) : '0.0';
+                        const jobIdleTooltip = formatTime(idleTime);
+
+                        const jobSingleCorePercent = totalTime > 0 ? ((singleCoreTime / totalTime) * 100).toFixed(1) : '0.0';
+                        const jobSingleCoreTooltip = formatTime(singleCoreTime);
+
+                        const maxCpuBucketTime = cpuBuckets.at(-1) || 0;
+                        const jobMaxCpuPercent = totalTime > 0 ? ((maxCpuBucketTime / totalTime) * 100).toFixed(1) : '0.0';
+                        const jobMaxCpuTooltip = formatTime(maxCpuBucketTime);
+
+                        const jobRow = document.createElement('tr');
+                        jobRow.className = 'job-row';
+                        const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId.split('.')[0]}/runs/${taskId.includes('.') ? taskId.split('.')[1] : '0'}/artifacts/public/test_info/profile_resource-usage.json`;
+                        const profileName = `${displayName} (${taskId})`;
+                        const profileUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
+
+                        const jobMemoryPercent = formatMemoryPercent(maxMemory, stats.machineInfo.mainMemory);
+                        const jobMemoryTooltip = `${formatGB(maxMemory)} GB`;
+
+                        jobRow.innerHTML = `
+                            <td>
+                                ${displayName}
+                            </td>
+                            <td class="number">-</td>
+                            <td class="number">-</td>
+                            <td class="number" title="${jobMemoryTooltip}">${jobMemoryPercent}%</td>
+                            <td class="number">${formatTime(totalTime)}</td>
+                            <td class="number" title="${jobIdleTooltip}">${jobIdlePercent}%</td>
+                            <td class="number" title="${jobSingleCoreTooltip}">${jobSingleCorePercent}%</td>
+                            <td class="number" title="${jobMaxCpuTooltip}">${jobMaxCpuPercent}%</td>
+                            <td>${createCpuChart(cpuBuckets)}</td>
+                            <td class="number">-</td>
+                        `;
+
+                        jobRow.addEventListener('click', () => {
+                            window.open(profileUrl, '_blank');
+                        });
+
+                        tbody.appendChild(jobRow);
+                    }
+                }
+            }
+
+            // Update sort arrows
+            document.querySelectorAll('th .sort-arrow').forEach(el => el.remove());
+            if (sortColumn) {
+                const th = document.querySelector(`th[data-sort="${sortColumn}"]`);
+                if (th) {
+                    const arrow = document.createElement('span');
+                    arrow.className = 'sort-arrow';
+                    arrow.textContent = sortDirection === 'asc' ? '↑' : '↓';
+                    th.appendChild(arrow);
+                }
+            }
+        }
+
+        // Event listeners
+        document.getElementById('dateSelector').addEventListener('change', (e) => {
+            loadData(e.target.value);
+            updateHash();
+        });
+
+        document.getElementById('filterBox').addEventListener('input', () => {
+            renderTable();
+            updateHash();
+        });
+
+        document.getElementById('clearFilter').addEventListener('click', () => {
+            document.getElementById('filterBox').value = '';
+            renderTable();
+            updateHash();
+        });
+
+        // Handle browser back/forward
+        window.addEventListener('hashchange', () => {
+            if (!initialLoadComplete) return;
+
+            const hash = parseHash();
+            const currentDate = document.getElementById('dateSelector').value;
+            const currentFilter = document.getElementById('filterBox').value;
+
+            // Update date if changed
+            if (hash.date && hash.date !== currentDate) {
+                document.getElementById('dateSelector').value = hash.date;
+                loadData(hash.date);
+            }
+
+            // Update filter if changed
+            if (hash.filter !== currentFilter) {
+                document.getElementById('filterBox').value = hash.filter;
+                renderTable();
+            }
+        });
+
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+                const newColumn = th.dataset.sort;
+                if (sortColumn === newColumn) {
+                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortColumn = newColumn;
+                    sortDirection = 'asc';
+                }
+                renderTable();
+            });
+        });
+
+        // Load data on page load
+        loadDates();
+    </script>
+</body>
+</html>

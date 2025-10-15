@@ -536,6 +536,136 @@ function sortStringTablesByFrequency(dataStructure) {
     };
 }
 
+// Create resource usage data structure
+function createResourceUsageData(jobResults) {
+    const jobNames = [];
+    const jobNameMap = new Map();
+    const repositories = [];
+    const repositoryMap = new Map();
+    const machineInfos = [];
+    const machineInfoMap = new Map();
+
+    // Collect all job data first
+    const jobDataList = [];
+
+    for (const result of jobResults) {
+        if (!result || !result.resourceUsage) continue;
+
+        // Extract chunk number from job name (e.g., "test-linux1804-64/opt-xpcshell-1" -> "test-linux1804-64/opt-xpcshell", chunk: 1)
+        let jobNameBase = result.jobName;
+        let chunkNumber = null;
+        const match = result.jobName.match(/^(.+)-(\d+)$/);
+        if (match) {
+            jobNameBase = match[1];
+            chunkNumber = parseInt(match[2], 10);
+        }
+
+        // Get or create job name index
+        let jobNameId = jobNameMap.get(jobNameBase);
+        if (jobNameId === undefined) {
+            jobNameId = jobNames.length;
+            jobNames.push(jobNameBase);
+            jobNameMap.set(jobNameBase, jobNameId);
+        }
+
+        // Get or create repository index
+        let repositoryId = repositoryMap.get(result.repository);
+        if (repositoryId === undefined) {
+            repositoryId = repositories.length;
+            repositories.push(result.repository);
+            repositoryMap.set(result.repository, repositoryId);
+        }
+
+        // Get or create machine info index
+        const machineInfo = result.resourceUsage.machineInfo;
+        const machineInfoKey = JSON.stringify(machineInfo);
+        let machineInfoId = machineInfoMap.get(machineInfoKey);
+        if (machineInfoId === undefined) {
+            machineInfoId = machineInfos.length;
+            machineInfos.push(machineInfo);
+            machineInfoMap.set(machineInfoKey, machineInfoId);
+        }
+
+        // Combine taskId and retryId (omit .0 for retry 0)
+        const taskIdString = result.retryId === 0 ? result.taskId : `${result.taskId}.${result.retryId}`;
+
+        jobDataList.push({
+            jobNameId,
+            chunk: chunkNumber,
+            taskId: taskIdString,
+            repositoryId,
+            startTime: result.startTime,
+            machineInfoId,
+            maxMemory: result.resourceUsage.maxMemory,
+            idleTime: result.resourceUsage.idleTime,
+            singleCoreTime: result.resourceUsage.singleCoreTime,
+            cpuBuckets: result.resourceUsage.cpuBuckets
+        });
+    }
+
+    // Sort by start time
+    jobDataList.sort((a, b) => a.startTime - b.startTime);
+
+    // Apply differential compression to start times and build parallel arrays
+    const jobs = {
+        jobNameIds: [],
+        chunks: [],
+        taskIds: [],
+        repositoryIds: [],
+        startTimes: [],
+        machineInfoIds: [],
+        maxMemories: [],
+        idleTimes: [],
+        singleCoreTimes: [],
+        cpuBuckets: []
+    };
+
+    let previousStartTime = 0;
+    for (const jobData of jobDataList) {
+        jobs.jobNameIds.push(jobData.jobNameId);
+        jobs.chunks.push(jobData.chunk);
+        jobs.taskIds.push(jobData.taskId);
+        jobs.repositoryIds.push(jobData.repositoryId);
+
+        // Differential compression: store difference from previous
+        const timeDiff = jobData.startTime - previousStartTime;
+        jobs.startTimes.push(timeDiff);
+        previousStartTime = jobData.startTime;
+
+        jobs.machineInfoIds.push(jobData.machineInfoId);
+        jobs.maxMemories.push(jobData.maxMemory);
+        jobs.idleTimes.push(jobData.idleTime);
+        jobs.singleCoreTimes.push(jobData.singleCoreTime);
+        jobs.cpuBuckets.push(jobData.cpuBuckets);
+    }
+
+    return {
+        jobNames: jobNames,
+        repositories: repositories,
+        machineInfos: machineInfos,
+        jobs: jobs
+    };
+}
+
+// Helper to save a JSON file and log its size
+function saveJsonFile(data, filePath, debug) {
+    const jsonString = debug ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+    fs.writeFileSync(filePath, jsonString);
+
+    const stats = fs.statSync(filePath);
+    const fileSizeBytes = stats.size;
+
+    // Use MB for files >= 1MB, otherwise KB
+    if (fileSizeBytes >= 1024 * 1024) {
+        const fileSizeMB = Math.round(fileSizeBytes / (1024 * 1024));
+        const formattedBytes = fileSizeBytes.toLocaleString();
+        console.log(`Saved ${filePath} - ${fileSizeMB}MB (${formattedBytes} bytes)${debug ? ' (with formatting)' : ''}`);
+    } else {
+        const fileSizeKB = Math.round(fileSizeBytes / 1024);
+        console.log(`Saved ${filePath} - ${fileSizeKB}KB`);
+    }
+}
+
 // Common function to process jobs and create data structure
 async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, metadata) {
     if (jobs.length === 0) {
@@ -638,17 +768,20 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
 
     // Build output with metadata
     return {
-        metadata: {
-            ...metadata,
-            startTime: startTime,
-            generatedAt: new Date().toISOString(),
-            jobCount: jobs.length,
-            processedJobCount: jobResults.length
+        testData: {
+            metadata: {
+                ...metadata,
+                startTime: startTime,
+                generatedAt: new Date().toISOString(),
+                jobCount: jobs.length,
+                processedJobCount: jobResults.length
+            },
+            tables: dataStructure.tables,
+            taskInfo: dataStructure.taskInfo,
+            testInfo: dataStructure.testInfo,
+            testRuns: dataStructure.testRuns
         },
-        tables: dataStructure.tables,
-        taskInfo: dataStructure.taskInfo,
-        testInfo: dataStructure.testInfo,
-        testRuns: dataStructure.testRuns
+        resourceData: createResourceUsageData(jobResults)
     };
 }
 
@@ -695,16 +828,9 @@ async function processTryData(revision, forceRefetch = false, debug = false) {
 
         if (!output) return null;
 
-        const jsonString = debug ? JSON.stringify(output, null, 2) : JSON.stringify(output);
-        fs.writeFileSync(cacheFile, jsonString);
-
-        // Get file size and format it
-        const stats = fs.statSync(cacheFile);
-        const fileSizeBytes = stats.size;
-        const fileSizeMB = Math.round(fileSizeBytes / (1024 * 1024));
-        const formattedBytes = fileSizeBytes.toLocaleString();
-
-        console.log(`Saved ${cacheFile} - ${fileSizeMB}MB (${formattedBytes} bytes)${debug ? ' (with formatting)' : ''}`);
+        saveJsonFile(output.testData, cacheFile, debug);
+        const resourceCacheFile = path.join(CACHE_DIR, `xpcshell-try-${revision}-resources.json`);
+        saveJsonFile(output.resourceData, resourceCacheFile, debug);
 
         return output;
     } catch (error) {
@@ -753,16 +879,9 @@ async function processDateData(targetDate, forceRefetch = false, debug = false) 
 
         if (!output) return null;
 
-        const jsonString = debug ? JSON.stringify(output, null, 2) : JSON.stringify(output);
-        fs.writeFileSync(cacheFile, jsonString);
-
-        // Get file size and format it
-        const stats = fs.statSync(cacheFile);
-        const fileSizeBytes = stats.size;
-        const fileSizeMB = Math.round(fileSizeBytes / (1024 * 1024));
-        const formattedBytes = fileSizeBytes.toLocaleString();
-
-        console.log(`Saved ${cacheFile} - ${fileSizeMB}MB (${formattedBytes} bytes)${debug ? ' (with formatting)' : ''}`);
+        saveJsonFile(output.testData, cacheFile, debug);
+        const resourceCacheFile = path.join(CACHE_DIR, `xpcshell-${targetDate}-resources.json`);
+        saveJsonFile(output.resourceData, resourceCacheFile, debug);
 
         return output;
     } catch (error) {
