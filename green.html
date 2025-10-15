@@ -561,18 +561,25 @@
         </header>
 
         <div class="controls">
-            <div style="display: flex; align-items: center; gap: 30px;">
-                <div class="btn-group">
-                    <button id="autoland-btn" class="active" onclick="switchRepository('autoland')">Autoland</button>
-                    <button id="mozilla-central-btn" onclick="switchRepository('mozilla-central')">Mozilla Central</button>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 30px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 30px;">
+                    <div class="btn-group">
+                        <button id="autoland-btn" class="active" onclick="switchRepository('autoland')">Autoland</button>
+                        <button id="mozilla-central-btn" onclick="switchRepository('mozilla-central')">Mozilla Central</button>
+                    </div>
+
+                    <div class="platform-links" style="display: flex; align-items: center;">
+                        <span style="margin-right: 15px; color: #666;">Jump to:</span>
+                        <a href="#mochitest" style="margin-right: 15px;">Mochitest</a>
+                        <a href="#xpcshell" style="margin-right: 15px;">XPCShell</a>
+                        <a href="#reftest" style="margin-right: 15px;">Reftest</a>
+                        <a href="#web-platform-tests">Web Platform Tests</a>
+                    </div>
                 </div>
 
-                <div class="platform-links" style="display: flex; align-items: center;">
-                    <span style="margin-right: 15px; color: #666;">Jump to:</span>
-                    <a href="#mochitest" style="margin-right: 15px;">Mochitest</a>
-                    <a href="#xpcshell" style="margin-right: 15px;">XPCShell</a>
-                    <a href="#reftest" style="margin-right: 15px;">Reftest</a>
-                    <a href="#web-platform-tests">Web Platform Tests</a>
+                <div class="search-container" style="position: relative;">
+                    <input type="text" id="filterBox" class="search-box" placeholder="Filter jobs..." style="padding: 8px 30px 8px 12px; width: 300px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <button id="filterClear" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font-size: 16px; color: #999; padding: 0; width: 20px; height: 20px; display: none; align-items: center; justify-content: center;">×</button>
                 </div>
             </div>
         </div>
@@ -622,6 +629,7 @@
         let testData = [];
         let pushData = new Map();
         let filteredData = [];
+        let rawRows = []; // Store raw data for re-filtering
         let globalJobDetails = new Map(); // Global storage for job details by bug
         let currentSelectedBug = null;
         let currentChartType = null;
@@ -648,12 +656,17 @@
                 }
 
 
-                // Process the data
-                const processedData = processTestData(rows);
+                // Store raw rows for filtering
+                rawRows = rows;
+
+                // Process the data (populate job details on initial load)
+                const processedData = processTestData(rows, true);
                 testData = processedData.testData;
                 pushData = processedData.pushData;
                 filteredData = [...testData];
 
+                // Load filter from URL
+                loadFilterFromUrl();
 
                 // Hide loading indicator and show content
                 document.getElementById('loading-indicator').style.display = 'none';
@@ -668,7 +681,7 @@
             }
         }
 
-        function processTestData(rows) {
+        function processTestData(rows, populateJobDetails = false) {
             if (!rows || rows.length === 0) {
                 return { testData: [], pushData: new Map() };
             }
@@ -721,9 +734,9 @@
                 // Clean up test name by removing platform/build specifics
                 const cleanTestName = testName.replace(/^test-[^/]+\/[^-]+-/, '').replace(/-\d+$/, '');
 
-                // Track bug numbers and job details for ALL failures
+                // Track bug numbers and job details for ALL failures (only on initial load)
                 const bugData = row.bug;
-                if (bugData && taskId !== null) {
+                if (populateJobDetails && bugData && taskId !== null) {
                     // Store job details globally (not tied to push time)
                     if (!globalJobDetails.has(bugData)) {
                         globalJobDetails.set(bugData, []);
@@ -913,10 +926,83 @@
         }
 
         function applyFilters() {
-            filteredData = testData.filter(test => {
-                if (currentRepository !== 'all' && test.repository !== currentRepository) return false;
-                return true;
-            });
+            const searchTerm = document.getElementById('filterBox').value.toLowerCase();
+
+            // If there's a search term, rebuild pushData with filtered rows
+            if (searchTerm) {
+                // Find matching bugs
+                const matchingBugs = new Set();
+                for (const [bugData, jobDetails] of globalJobDetails.entries()) {
+                    if (bugData && bugData.toLowerCase().includes(searchTerm)) {
+                        matchingBugs.add(bugData);
+                    }
+                }
+
+                // Filter raw rows: keep all successes (taskId=null) and only matching failures
+                const filteredRows = rawRows.filter(row => {
+                    const testName = row.test_name || row.name;
+                    const bugData = row.bug;
+                    const taskId = row.task;
+
+                    // Keep all success rows (no task/bug)
+                    if (taskId === null) {
+                        return true;
+                    }
+
+                    // For failures, check if they match the filter
+                    // Check if test name matches
+                    const nameMatches = testName && testName.toLowerCase().includes(searchTerm);
+                    // Check if bug matches
+                    const bugMatches = bugData && matchingBugs.has(bugData);
+
+                    return nameMatches || bugMatches;
+                });
+
+                // Rebuild data from filtered rows
+                const processedData = processTestData(filteredRows);
+                filteredData = processedData.testData;
+                pushData = processedData.pushData;
+            } else {
+                // No filter, rebuild from all rows
+                const processedData = processTestData(rawRows);
+                testData = processedData.testData;
+                pushData = processedData.pushData;
+                filteredData = testData.filter(test => {
+                    if (currentRepository !== 'all' && test.repository !== currentRepository) return false;
+                    return true;
+                });
+            }
+
+            // Apply repository filter
+            if (currentRepository !== 'all') {
+                filteredData = filteredData.filter(test => test.repository === currentRepository);
+            }
+
+            // Update URL
+            updateUrlWithFilter();
+        }
+
+        function loadFilterFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const filter = params.get('filter');
+            if (filter) {
+                document.getElementById('filterBox').value = filter;
+                document.getElementById('filterClear').style.display = 'flex';
+            }
+        }
+
+        function updateUrlWithFilter() {
+            const searchTerm = document.getElementById('filterBox').value;
+            const params = new URLSearchParams(window.location.search);
+
+            if (searchTerm) {
+                params.set('filter', searchTerm);
+            } else {
+                params.delete('filter');
+            }
+
+            const newUrl = params.toString() ? `?${params.toString()}` : window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
         }
 
         function updateStats(preFilteredPushData) {
@@ -1005,16 +1091,19 @@
         }
 
         function updateCharts() {
+            // Check if there's an active search filter
+            const searchTerm = document.getElementById('filterBox').value.toLowerCase();
 
             // Filter push data based on repository and job count (for autoland)
-            const filteredPushData = Array.from(pushData.values()).filter(push => {
+            const chartPushData = Array.from(pushData.values()).filter(push => {
                 // Repository filter
                 if (currentRepository !== 'all' && push.repository !== currentRepository) {
                     return false;
                 }
 
                 // For autoland repository, ignore pushes with less than 1000 total jobs
-                if (push.repository === 'autoland') {
+                // But skip this filter if there's an active search (filtered data will have fewer jobs)
+                if (push.repository === 'autoland' && !searchTerm) {
                     // Calculate total job count for this push (sum of all test type job counts)
                     let totalJobs = 0;
                     push.totalJobs.forEach(count => {
@@ -1031,10 +1120,10 @@
             });
 
             // Chart 1: Failures per push (all test types)
-            updateFailuresByPushChart(filteredPushData);
+            updateFailuresByPushChart(chartPushData);
 
             // Chart 2+: Individual charts per test type showing platform breakdown
-            updateTestTypeCharts(filteredPushData);
+            updateTestTypeCharts(chartPushData);
         }
 
         function updateFailuresByPushChart(filteredPushData) {
@@ -1917,6 +2006,29 @@
                 if (event.target.tagName === 'H2' && event.target.id) {
                     window.location.hash = event.target.id;
                 }
+            });
+
+            // Filter box event handlers
+            const filterBox = document.getElementById('filterBox');
+            const filterClear = document.getElementById('filterClear');
+            let filterTimeout;
+
+            filterBox.addEventListener('input', function() {
+                // Show/hide clear button
+                filterClear.style.display = this.value ? 'flex' : 'none';
+
+                // Debounce filtering
+                clearTimeout(filterTimeout);
+                filterTimeout = setTimeout(() => {
+                    updateDisplay();
+                }, 300);
+            });
+
+            filterClear.addEventListener('click', function() {
+                filterBox.value = '';
+                filterClear.style.display = 'none';
+                updateDisplay();
+                filterBox.focus();
             });
         });
 
