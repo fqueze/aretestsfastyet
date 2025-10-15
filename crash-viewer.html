@@ -209,6 +209,7 @@
             margin-right: -20px;
             border-collapse: collapse;
             font-size: 13px;
+            table-layout: fixed;
         }
 
         .stack-table thead {
@@ -263,17 +264,14 @@
 
         .stack-table td {
             padding: 4px 8px;
-            vertical-align: top;
         }
 
         .frame-num {
-            width: 40px;
             color: #6c757d;
             font-weight: 500;
         }
 
         .frame-module {
-            width: 120px;
             font-family: 'Courier New', monospace;
             font-size: 12px;
             color: #495057;
@@ -281,24 +279,27 @@
 
         .frame-function {
             font-family: 'Courier New', monospace;
-            color: #d73a49;
-            font-weight: 500;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+
+        td.frame-function {
             cursor: pointer;
         }
 
-        .frame-function:hover {
+        td.frame-function:hover {
             text-decoration: underline;
         }
 
         .frame-location {
-            width: 350px;
             font-family: 'Courier New', monospace;
             font-size: 11px;
             color: #6c757d;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
 
         .frame-trust {
-            width: 80px;
             font-size: 11px;
             color: #868e96;
         }
@@ -841,12 +842,19 @@
             let html = '';
             if (includeHeaders) {
                 html += '<table class="stack-table">';
+                html += '<colgroup>';
+                html += '<col style="width: 40px">';
+                html += '<col style="width: 120px">';
+                html += '<col style="width: 50%">';
+                html += '<col style="width: 30%">';
+                html += '<col style="width: 50px">';
+                html += '</colgroup>';
                 html += '<thead><tr>';
-                html += '<th>#</th>';
-                html += '<th>Module</th>';
-                html += '<th>Function</th>';
-                html += '<th>Location</th>';
-                html += '<th>Trust</th>';
+                html += '<th class="frame-num">#</th>';
+                html += '<th class="frame-module">Module</th>';
+                html += '<th class="frame-function">Function</th>';
+                html += '<th class="frame-location">Location</th>';
+                html += '<th class="frame-trust">Trust</th>';
                 html += '</tr></thead>';
                 html += '<tbody>';
             }
