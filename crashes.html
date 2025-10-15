@@ -107,6 +107,10 @@
             background: #f5f5f5;
         }
 
+        .test-row.direct-child {
+            padding-left: 30px;
+        }
+
         .test-row:hover {
             background-color: #ebebeb;
         }
@@ -591,8 +595,10 @@
             // Crash rows
             for (const crash of crashes) {
                 const isExpanded = expandedSignatures.has(crash.signature);
-                html += `<div class="crash-row ${isExpanded ? 'expanded' : ''}" onclick="toggleCrash('${escapeHtml(crash.signature)}')">`;
-                html += `<div class="crash-signature">${escapeHtml(crash.signature)}</div>`;
+                const escapedSig = escapeHtml(crash.signature);
+                const attrSig = escapeAttr(crash.signature);
+                html += `<div class="crash-row ${isExpanded ? 'expanded' : ''}" data-signature="${attrSig}">`;
+                html += `<div class="crash-signature">${escapedSig}</div>`;
                 html += '<div class="crash-stats">';
                 html += `<div class="stat-item"><span class="stat-value">${crash.pathCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value crash">${crash.crashCount}</span></div>`;
@@ -608,58 +614,94 @@
                         const pathKey = `${crash.signature}|||${pathEntry.dirPath}`;
                         const isPathExpanded = expandedPaths.has(pathKey);
 
-                        html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" onclick="event.stopPropagation(); togglePath('${escapeHtml(crash.signature)}', '${escapeHtml(pathEntry.dirPath)}')">`;
-                        html += `<div class="crash-signature">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
-                        html += '<div class="crash-stats">';
-                        html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
-                        html += `<div class="stat-item"><span class="stat-value crash">${pathEntry.pathData.totalCount}</span></div>`;
-                        html += '</div></div>';
+                        // If path has only one test, skip the path level and show test directly
+                        if (pathEntry.pathData.tests.size === 1) {
+                            const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
+                            const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${testName}`;
+                            const isTestExpanded = expandedTests.has(testKey);
 
-                        if (isPathExpanded) {
-                            // Sort tests by crash count
-                            const testList = Array.from(pathEntry.pathData.tests.entries())
-                                .map(([testName, testData]) => ({ testName, testData }))
-                                .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+                            // If test has only one crash, show it inline
+                            if (testData.totalCount === 1) {
+                                const crashInstance = testData.crashes[0];
+                                const crashUrl = getCrashViewerUrl(crashInstance);
 
-                            for (const test of testList) {
-                                const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${test.testName}`;
-                                const isTestExpanded = expandedTests.has(testKey);
-
-                                html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" onclick="event.stopPropagation(); toggleTest('${escapeHtml(crash.signature)}', '${escapeHtml(pathEntry.dirPath)}', '${escapeHtml(test.testName)}')">`;
-                                html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                                html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
+                                html += `<div class="test-row single-crash direct-child" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                                html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
+                                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                                html += renderCrashLinks(crashInstance);
+                                html += '</div>';
+                            } else {
+                                // Multiple crashes in single test - show test with expand capability
+                                html += `<div class="test-row direct-child ${isTestExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
+                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                                html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${testData.totalCount}</div></div>`;
                                 html += '</div>';
 
                                 if (isTestExpanded) {
                                     // Sort crash instances by timestamp (most recent first)
-                                    const crashes = [...test.testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
+                                    const crashes = [...testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
 
                                     for (const crashInstance of crashes) {
-                                        // Build crash viewer URL
-                                        let crashUrl = '';
-                                        if (crashInstance.minidump) {
-                                            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/${crashInstance.minidump}.json`;
-                                            crashUrl = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
-                                        }
-
-                                        const onclickHandler = crashUrl ? `onclick="window.open('${crashUrl}', '_blank'); event.stopPropagation();"` : '';
-                                        html += `<div class="crash-instance-row" ${onclickHandler}>`;
+                                        const crashUrl = getCrashViewerUrl(crashInstance);
+                                        html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
                                         html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
                                         html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-
-                                        // View Profile link
-                                        const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
-                                        const encodedProfileUrl = encodeURIComponent(profileUrl);
-                                        const profileName = `${crashInstance.jobName} (${crashInstance.taskId}.${crashInstance.retryId})`;
-                                        const encodedProfileName = encodeURIComponent(profileName);
-                                        const profilerUrl = `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
-                                        html += `<a href="${profilerUrl}" target="_blank" class="crash-link" onclick="event.stopPropagation()" style="margin-right: 10px;">View Profile</a>`;
-
-                                        // View Crash link (still shown as link for clarity)
-                                        if (crashInstance.minidump) {
-                                            html += `<a href="${crashUrl}" target="_blank" class="crash-link" onclick="event.stopPropagation()">View Crash</a>`;
-                                        }
+                                        html += renderCrashLinks(crashInstance);
                                         html += '</div>';
+                                    }
+                                }
+                            }
+                        } else {
+                            // Multiple tests in path - show path level
+                            html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
+                            html += `<div class="crash-signature">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
+                            html += '<div class="crash-stats">';
+                            html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
+                            html += `<div class="stat-item"><span class="stat-value crash">${pathEntry.pathData.totalCount}</span></div>`;
+                            html += '</div></div>';
+
+                            if (isPathExpanded) {
+                                // Sort tests by crash count
+                                const testList = Array.from(pathEntry.pathData.tests.entries())
+                                    .map(([testName, testData]) => ({ testName, testData }))
+                                    .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+
+                                for (const test of testList) {
+                                    const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${test.testName}`;
+                                    const isTestExpanded = expandedTests.has(testKey);
+
+                                    // If test has only one crash, show it inline
+                                    if (test.testData.totalCount === 1) {
+                                        const crashInstance = test.testData.crashes[0];
+                                        const crashUrl = getCrashViewerUrl(crashInstance);
+
+                                        html += `<div class="test-row single-crash" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                                        html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
+                                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                                        html += renderCrashLinks(crashInstance);
+                                        html += '</div>';
+                                    } else {
+                                        // Multiple crashes - show test with expand capability
+                                        html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(test.testName)}">`;
+                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                                        html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
+                                        html += '</div>';
+
+                                        if (isTestExpanded) {
+                                            // Sort crash instances by timestamp (most recent first)
+                                            const crashes = [...test.testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
+
+                                            for (const crashInstance of crashes) {
+                                                const crashUrl = getCrashViewerUrl(crashInstance);
+                                                html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                                                html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
+                                                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                                                html += renderCrashLinks(crashInstance);
+                                                html += '</div>';
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -672,10 +714,102 @@
             document.getElementById('content').innerHTML = html;
         }
 
+        function setupClickHandlers() {
+            const content = document.getElementById('content');
+
+            content.addEventListener('click', function(event) {
+                // Don't handle clicks on links
+                if (event.target.tagName === 'A') {
+                    return;
+                }
+
+                // Find the closest row element
+                let target = event.target;
+                while (target && target !== content) {
+                    if (target.classList.contains('crash-row')) {
+                        const signature = target.dataset.signature;
+                        if (signature) {
+                            toggleCrash(signature);
+                        }
+                        return;
+                    }
+
+                    if (target.classList.contains('path-row')) {
+                        const signature = target.dataset.signature;
+                        const path = target.dataset.path;
+                        if (signature && path !== undefined) {
+                            togglePath(signature, path);
+                        }
+                        return;
+                    }
+
+                    if (target.classList.contains('test-row')) {
+                        // Check if it's a single crash (clickable to open crash)
+                        if (target.classList.contains('single-crash')) {
+                            const crashUrl = target.dataset.crashUrl;
+                            if (crashUrl) {
+                                window.open(crashUrl, '_blank');
+                            }
+                            return;
+                        }
+
+                        // Otherwise it's an expandable test
+                        const signature = target.dataset.signature;
+                        const path = target.dataset.path;
+                        const test = target.dataset.test;
+                        if (signature && path !== undefined && test) {
+                            toggleTest(signature, path, test);
+                        }
+                        return;
+                    }
+
+                    if (target.classList.contains('crash-instance-row')) {
+                        const crashUrl = target.dataset.crashUrl;
+                        if (crashUrl) {
+                            window.open(crashUrl, '_blank');
+                        }
+                        return;
+                    }
+
+                    target = target.parentElement;
+                }
+            });
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function getCrashViewerUrl(crashInstance) {
+            if (!crashInstance.minidump) return '';
+            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/${crashInstance.minidump}.json`;
+            return `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
+        }
+
+        function getProfilerUrl(crashInstance) {
+            const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+            const encodedProfileUrl = encodeURIComponent(profileUrl);
+            const profileName = `${crashInstance.jobName} (${crashInstance.taskId}.${crashInstance.retryId})`;
+            const encodedProfileName = encodeURIComponent(profileName);
+            return `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
+        }
+
+        function renderCrashLinks(crashInstance) {
+            let html = '';
+            const profilerUrl = getProfilerUrl(crashInstance);
+            html += `<a href="${profilerUrl}" target="_blank" class="crash-link" style="margin-right: 10px;">View Profile</a>`;
+
+            const crashUrl = getCrashViewerUrl(crashInstance);
+            if (crashUrl) {
+                html += `<a href="${crashUrl}" target="_blank" class="crash-link">View Crash</a>`;
+            }
+            return html;
         }
 
         function toggleCrash(signature) {
@@ -808,6 +942,9 @@
             loadSelectedDate();
             isNavigating = false;
         });
+
+        // Set up click handlers once
+        setupClickHandlers();
 
         // Initial load
         (async function() {
