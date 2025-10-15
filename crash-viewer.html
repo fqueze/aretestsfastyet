@@ -660,7 +660,7 @@
 
             // Process info and metadata
             html += `<div class="info-grid">`;
-            const processType = (extraData && extraData.RemoteType) ? extraData.RemoteType : 'main';
+            const processType = extraData && (extraData.RemoteType || extraData.ProcessType) || 'main';
             html += `<div class="info-label">Process type:</div><div class="info-value">${escapeHtml(processType)}</div>`;
             html += `<div class="info-label">Process PID:</div><div class="info-value">${data.pid}</div>`;
 
@@ -673,7 +673,7 @@
 
             // Expandable section with all other extra data
             if (extraData) {
-                const displayedFields = ['MozCrashReason', 'RemoteType', 'URL'];
+                const displayedFields = ['MozCrashReason', 'ProcessType', 'RemoteType', 'URL'];
                 const otherFields = Object.entries(extraData).filter(([key]) => !displayedFields.includes(key));
 
                 if (otherFields.length > 0) {
