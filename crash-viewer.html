@@ -684,7 +684,8 @@
                     otherFields.forEach(([key, value]) => {
                         html += `<div class="extra-field">`;
                         html += `<span class="extra-field-name">${escapeHtml(key)}:</span> `;
-                        html += `<span class="extra-field-value">${escapeHtml(value)}</span>`;
+                        const displayValue = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+                        html += `<span class="extra-field-value">${escapeHtml(displayValue)}</span>`;
                         html += `</div>`;
                     });
 
