@@ -283,11 +283,11 @@
             overflow-wrap: anywhere;
         }
 
-        td.frame-function {
+        td.frame-function a {
             cursor: pointer;
         }
 
-        td.frame-function:hover {
+        td.frame-function a:hover {
             text-decoration: underline;
         }
 
@@ -872,7 +872,7 @@
                         html += `<td class="frame-num"></td>`;
                         html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
 
-                        const inlineSearchUrl = makeSearchfoxSearchUrl(inline.function);
+                        const inlineSearchUrl = makeSearchfoxSearchUrl(inline);
                         html += `<td class="frame-function">`;
                         if (inlineSearchUrl) {
                             html += `<a href="${inlineSearchUrl}" class="file-link" target="_blank">${escapeHtml(inline.function || '???')}</a>`;
@@ -906,7 +906,7 @@
                 html += `<td class="frame-module">${escapeHtml(frame.module || 'unknown')}</td>`;
 
                 // Function with searchfox search link
-                const functionSearchUrl = makeSearchfoxSearchUrl(frame.function);
+                const functionSearchUrl = makeSearchfoxSearchUrl(frame);
                 html += `<td class="frame-function">`;
                 if (functionSearchUrl) {
                     html += `<a href="${functionSearchUrl}" class="file-link" onclick="event.stopPropagation()" target="_blank">${escapeHtml(frame.function || '???')}</a>`;
@@ -1039,14 +1039,20 @@
             return null;
         }
 
-        function makeSearchfoxSearchUrl(functionName) {
-            if (!functionName) return null;
+        function makeSearchfoxSearchUrl(frame) {
+            // Only create searchfox links for Mozilla code with file info
+            if (!frame || !frame.function || !frame.file || !frame.line) {
+                return null; // No frame/file info, likely system/OS code
+            }
 
-            // Create searchfox search URL for the function
-            // Strip parameters and template arguments
-            let cleanName = functionName.replace(/<.*?>|\(.*?\)/g, '').trim();
+            const fileInfo = parseFileInfo(frame.file);
+            if (!fileInfo || fileInfo.type !== 'hg') {
+                return null; // Not Mozilla code
+            }
 
-            return `https://searchfox.org/mozilla-central/search?q=${encodeURIComponent(cleanName)}`;
+            // Create searchfox direct link to the file at this revision and line
+            // Format: https://searchfox.org/mozilla-central/hgrev/{revision}/{path}#{line}
+            return `https://searchfox.org/mozilla-central/hgrev/${fileInfo.revision}/${fileInfo.path}#${frame.line}`;
         }
 
         function getTrustDescription(trust) {
