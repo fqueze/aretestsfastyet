@@ -530,15 +530,20 @@
             const buckets = [0, 0.1, 0.2, 0.5, 1, 2, 3];
             let a = 2, b = 3;
 
-            while (b < maxSeconds) {
+            // Cap at 5 minutes (300 seconds)
+            const maxBucket = 300;
+
+            while (b < maxBucket) {
                 const next = a + b;
+                if (next >= maxBucket) break;
                 buckets.push(next);
                 a = b;
                 b = next;
             }
 
-            // Add one more bucket to cover remaining range
-            buckets.push(maxSeconds + 1);
+            // Add final bucket for 5 minutes or more
+            buckets.push(maxBucket);
+            buckets.push(Infinity);
 
             return buckets;
         }
@@ -575,11 +580,13 @@
             }
 
             // Store bucket data for tooltips
-            const bucketData = buckets.map((count, i) => ({
-                rangeStart: formatTime(fibBuckets[i] * 1000),
-                rangeEnd: formatTime(fibBuckets[i + 1] * 1000),
-                count
-            }));
+            const bucketData = buckets.map((count, i) => {
+                const rangeStart = formatTime(fibBuckets[i] * 1000);
+                const rangeEnd = fibBuckets[i + 1] === Infinity
+                    ? 'and more'
+                    : formatTime(fibBuckets[i + 1] * 1000);
+                return { rangeStart, rangeEnd, count };
+            });
 
             let html = `<div class="histogram" data-histogram="true" data-buckets='${JSON.stringify(bucketData)}'>`;
             for (let i = 0; i < numBuckets; i++) {
