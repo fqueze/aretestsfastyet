@@ -27,11 +27,11 @@ function getDateString(daysAgo = 0) {
 
 // Resource profile fetching moved to profile-worker.js
 
-// Fetch try commit push data from Treeherder API
-async function fetchTryCommitData(revision) {
-    console.log(`Fetching try commit data for revision ${revision}...`);
+// Fetch commit push data from Treeherder API
+async function fetchCommitData(project, revision) {
+    console.log(`Fetching commit data for ${project}:${revision}...`);
 
-    const response = await fetch(`https://treeherder.mozilla.org/api/project/try/push/?full=true&count=10&revision=${revision}`);
+    const response = await fetch(`https://treeherder.mozilla.org/api/project/${project}/push/?full=true&count=10&revision=${revision}`);
 
     if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -40,7 +40,7 @@ async function fetchTryCommitData(revision) {
     const result = await response.json();
 
     if (!result.results || result.results.length === 0) {
-        throw new Error(`No push found for revision ${revision}`);
+        throw new Error(`No push found for revision ${revision} on project ${project}`);
     }
 
     const pushId = result.results[0].id;
@@ -48,8 +48,8 @@ async function fetchTryCommitData(revision) {
     return pushId;
 }
 
-// Fetch jobs from try push
-async function fetchTryJobs(pushId) {
+// Fetch jobs from push
+async function fetchPushJobs(project, pushId) {
     console.log(`Fetching jobs for push ID ${pushId}...`);
 
     const response = await fetch(`https://treeherder.mozilla.org/api/jobs/?push_id=${pushId}`);
@@ -76,7 +76,7 @@ async function fetchTryJobs(pushId) {
             task_id: job[taskIdIndex],
             retry_id: job[retryIdIndex] || 0,
             start_time: job[lastModifiedIndex],
-            repository: 'try'
+            repository: project
         }));
 
     console.log(`Found ${xpcshellJobs.length} xpcshell jobs out of ${allJobs.length} total jobs`);
@@ -785,42 +785,46 @@ async function processJobsAndCreateData(jobs, debug, targetLabel, startTime, met
     };
 }
 
-// Process try commit data
-async function processTryData(revision, forceRefetch = false, debug = false) {
-    const cacheFile = path.join(CACHE_DIR, `xpcshell-try-${revision}.json`);
+// Process revision data
+async function processRevisionData(project, revision, forceRefetch = false, debug = false) {
+    console.log(`Fetching xpcshell test data for ${project}:${revision}`);
+    console.log(`=== Processing ${project}:${revision} ===`);
+
+    const cacheFile = path.join(CACHE_DIR, `xpcshell-${project}-${revision}.json`);
 
     // Check if we already have data for this revision
     if (fs.existsSync(cacheFile) && !forceRefetch) {
-        console.log(`Data for try revision ${revision} already exists. Skipping.`);
+        console.log(`Data for ${project}:${revision} already exists. Skipping.`);
         return null;
     }
 
     if (forceRefetch) {
-        console.log(`Force flag detected, re-fetching data for try revision ${revision}...`);
+        console.log(`Force flag detected, re-fetching data for ${project}:${revision}...`);
     }
 
     try {
         // Fetch push ID from revision
-        const pushId = await fetchTryCommitData(revision);
+        const pushId = await fetchCommitData(project, revision);
 
         // Fetch jobs for the push
-        const jobs = await fetchTryJobs(pushId);
+        const jobs = await fetchPushJobs(project, pushId);
 
         if (jobs.length === 0) {
-            console.log(`No xpcshell jobs found for try revision ${revision}.`);
+            console.log(`No xpcshell jobs found for ${project}:${revision}.`);
             return null;
         }
 
-        // For try commits, use the last_modified time of the first job as start time
+        // Use the last_modified time of the first job as start time
         const startTime = jobs.length > 0 ? Math.floor(new Date(jobs[0].start_time).getTime() / 1000) : Math.floor(Date.now() / 1000);
 
         // Process using common function
         const output = await processJobsAndCreateData(
             jobs,
             debug,
-            `try-${revision}`,
+            `${project}-${revision}`,
             startTime,
             {
+                project: project,
                 revision: revision,
                 pushId: pushId
             }
@@ -829,12 +833,12 @@ async function processTryData(revision, forceRefetch = false, debug = false) {
         if (!output) return null;
 
         saveJsonFile(output.testData, cacheFile, debug);
-        const resourceCacheFile = path.join(CACHE_DIR, `xpcshell-try-${revision}-resources.json`);
+        const resourceCacheFile = path.join(CACHE_DIR, `xpcshell-${project}-${revision}-resources.json`);
         saveJsonFile(output.resourceData, resourceCacheFile, debug);
 
         return output;
     } catch (error) {
-        console.error(`Error processing try revision ${revision}:`, error);
+        console.error(`Error processing ${project}:${revision}:`, error);
         return null;
     }
 }
@@ -908,14 +912,33 @@ async function main() {
         }
     }
 
-    // Check for try commit option
+    // Check for --revision parameter (format: project:revision)
+    const revisionIndex = process.argv.findIndex(arg => arg === '--revision');
+    if (revisionIndex !== -1 && revisionIndex + 1 < process.argv.length) {
+        const revisionArg = process.argv[revisionIndex + 1];
+        const parts = revisionArg.split(':');
+
+        if (parts.length !== 2) {
+            console.error('Error: --revision must be in format project:revision (e.g., try:abc123 or autoland:def456)');
+            process.exit(1);
+        }
+
+        const [project, revision] = parts;
+        const output = await processRevisionData(project, revision, forceRefetch, debug);
+
+        if (output) {
+            console.log('Successfully processed revision data.');
+        } else {
+            console.log('\nNo data was successfully processed.');
+        }
+        return;
+    }
+
+    // Check for --try option (shortcut for --revision try:...)
     const tryIndex = process.argv.findIndex(arg => arg === '--try');
     if (tryIndex !== -1 && tryIndex + 1 < process.argv.length) {
         const revision = process.argv[tryIndex + 1];
-        console.log(`Try mode: Fetching xpcshell test data for revision ${revision}`);
-        console.log(`=== Processing try revision ${revision} ===`);
-
-        const output = await processTryData(revision, forceRefetch, debug);
+        const output = await processRevisionData('try', revision, forceRefetch, debug);
 
         if (output) {
             console.log('Successfully processed try commit data.');
