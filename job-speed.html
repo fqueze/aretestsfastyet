@@ -95,6 +95,10 @@
             font-size: 14px;
         }
 
+        .breakdown-checkbox {
+            margin-right: 15px;
+        }
+
         #speedTable {
             width: 100%;
             background: white;
@@ -119,6 +123,10 @@
             background: #e9ecef;
         }
 
+        #speedTable th[title] {
+            cursor: help;
+        }
+
         #speedTable td {
             padding: 2px 12px 0;
             border-bottom: 1px solid #f0f0f0;
@@ -132,6 +140,17 @@
 
         .group-row:hover {
             background: #e9ecef;
+        }
+
+        .total-row {
+            background: #e3f2fd !important;
+            font-weight: bold;
+            cursor: default;
+            border-bottom: 2px solid #90caf9;
+        }
+
+        .total-row:hover {
+            background: #e3f2fd !important;
         }
 
         .job-row {
@@ -150,6 +169,46 @@
 
         .job-row td:first-child {
             padding-left: 40px;
+        }
+
+        .test-row {
+            background: #fff8e1;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .test-row:hover {
+            background: #fff3cd;
+        }
+
+        .test-row-resolved {
+            background: #e9ecef;
+        }
+
+        .test-row-resolved:hover {
+            background: #dee2e6;
+        }
+
+        #speedTable .test-row td {
+            padding: 0 12px;
+        }
+
+        .test-histogram {
+            display: flex;
+            width: 600px;
+            height: 18px;
+        }
+
+        .test-histogram > div {
+            border-right: 1px solid #ddd;
+            background: transparent;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #333;
+            font-weight: 500;
         }
 
         .expand-icon {
@@ -208,6 +267,136 @@
             margin-left: 5px;
             color: #999;
         }
+
+        .hide-timeout-factors .timeout-factor-column,
+        .hide-timeout-factors .custom-factor-column,
+        .hide-timeout-factors #copyPlatformFactorsButton,
+        .hide-timeout-factors .timeout-adjustments {
+            display: none;
+        }
+
+        .timeout-adjustments {
+            margin: 30px auto;
+            max-width: 1400px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .timeout-adjustments h2 {
+            margin-top: 0;
+            color: #333;
+            font-size: 20px;
+        }
+
+        .timeout-adjustments-info {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+
+        .timeout-adjustments-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        #copyJsonButton, #copyPlatformFactorsButton {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        #copyJsonButton:hover, #copyPlatformFactorsButton:hover {
+            background: #0056b3;
+        }
+
+        #copyJsonButton:active, #copyPlatformFactorsButton:active {
+            background: #004085;
+        }
+
+        #copyJsonButton.copied, #copyPlatformFactorsButton.copied {
+            background: #28a745;
+        }
+
+        #copyPlatformFactorsButton {
+            margin-right: 15px;
+        }
+
+        #timeoutAdjustmentsList {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px 20px;
+        }
+
+        #timeoutAdjustmentsList li {
+            padding: 4px 0;
+            color: #333;
+        }
+
+        #timeoutAdjustmentsList hr {
+            border: none;
+            border-top: 2px solid #ccc;
+            margin: 20px 0;
+        }
+
+        .timeout-comment {
+            color: #999;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .timeout-factor-badge {
+            display: inline-block;
+            background: #dc3545;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 11px;
+            margin-left: 10px;
+        }
+
+        .no-adjustments {
+            color: #666;
+            font-style: italic;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .adjusted-indicator {
+            font-size: 10px;
+            color: #007bff;
+            margin-left: 3px;
+            cursor: help;
+        }
+
+        .custom-factor-input {
+            width: 50px;
+            padding: 2px 4px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .custom-factor-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
     </style>
 </head>
 <body>
@@ -224,6 +413,19 @@
                 <span class="job-count" id="jobCount"></span>
             </div>
             <div class="controls-right">
+                <button id="copyPlatformFactorsButton" title="Copy all custom platform factors">Copy Platform Factors</button>
+                <label class="breakdown-checkbox">
+                    <input type="checkbox" id="breakdownByTests" checked>
+                    Breakdown by tests
+                </label>
+                <label class="breakdown-checkbox">
+                    <input type="checkbox" id="breakdownByJobs">
+                    Breakdown by jobs
+                </label>
+                <label class="breakdown-checkbox">
+                    <input type="checkbox" id="showTimeoutFactors">
+                    Show timeout factors
+                </label>
                 <div class="filter-container">
                     <input type="text" id="filterBox" placeholder="Filter by job name...">
                     <span class="clear-filter" id="clearFilter">×</span>
@@ -238,18 +440,32 @@
                 <th data-sort="name">Job Name</th>
                 <th data-sort="jobs" class="number">Jobs</th>
                 <th data-sort="count" class="number">Test runs</th>
+                <th data-sort="timeout-exceeds" class="number" title="Number of unique tests that passed but took longer than 30s">Timeouts</th>
                 <th data-sort="average" class="number">Average</th>
                 <th data-sort="median" class="number">Median</th>
                 <th data-sort="max" class="number">Max</th>
                 <th>Duration Distribution</th>
+                <th data-sort="timeout" class="number timeout-factor-column" title="Suggested platform timeout factor">Timeout Factor</th>
+                <th class="number custom-factor-column" title="Custom timeout factor (0 = baseline)">Custom</th>
             </tr>
         </thead>
         <tbody id="speedTableBody">
             <tr>
-                <td colspan="7" style="text-align: center; padding: 40px;">Loading data...</td>
+                <td colspan="10" style="text-align: center; padding: 40px;">Loading data...</td>
             </tr>
         </tbody>
     </table>
+
+    <div class="timeout-adjustments">
+        <h2>Suggested Timeout Adjustments</h2>
+        <div class="timeout-adjustments-header">
+            <div class="timeout-adjustments-info">
+                Tests requiring timeout factor adjustments based on 90th percentile run times (Linux baseline).
+            </div>
+            <button id="copyJsonButton">Copy JSON</button>
+        </div>
+        <ul id="timeoutAdjustmentsList"></ul>
+    </div>
 
     <div id="histogramTooltip" class="histogram-tooltip"></div>
 
@@ -261,6 +477,55 @@
         let globalMaxDuration = 0;
         let expandedGroups = new Set();
         let cachedGroups = null;
+        let showTestBreakdown = true;
+        let showJobBreakdown = false;
+        let customPlatformFactors = new Map(); // jobName -> custom timeout factor (0 = baseline)
+
+        // Manifest-level timeout factors - paths that have timeout factors applied at manifest level
+        const manifestTimeoutFactors = {
+            'toolkit/components/extensions/test/xpcshell': 2
+        };
+
+        // Define baseline platforms - these won't have their times adjusted
+        const baselinePlatforms = [
+            'test-linux2404-64/opt-xpcshell',
+            'test-windows11-64-24h2/opt-xpcshell',
+            'test-windows11-32-24h2/opt-xpcshell',
+            'test-windows10-64-2009-qr/opt-xpcshell'
+        ];
+
+        // Get manifest timeout factor for a test based on its path
+        function getManifestFactor(testName) {
+            for (const [path, factor] of Object.entries(manifestTimeoutFactors)) {
+                if (testName.startsWith(path + '/')) {
+                    return factor;
+                }
+            }
+            return 1;
+        }
+
+        // Load custom platform factors from localStorage
+        function loadCustomFactors() {
+            try {
+                const stored = localStorage.getItem('customPlatformFactors');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    customPlatformFactors = new Map(Object.entries(parsed));
+                }
+            } catch (e) {
+                console.error('Failed to load custom factors:', e);
+            }
+        }
+
+        // Save custom platform factors to localStorage
+        function saveCustomFactors() {
+            try {
+                const obj = Object.fromEntries(customPlatformFactors);
+                localStorage.setItem('customPlatformFactors', JSON.stringify(obj));
+            } catch (e) {
+                console.error('Failed to save custom factors:', e);
+            }
+        }
 
         // Parse URL hash
         function parseHash() {
@@ -325,11 +590,30 @@
             }
         }
 
-        // Load test timing data for a date
-        async function loadData(date) {
+        // Load test timing data for a date or try revision
+        async function loadData(dateOrRevision) {
             try {
-                const response = await fetch(`xpcshell-data/xpcshell-${date}.json`);
+                // Show loading message in table
+                document.getElementById('speedTableBody').innerHTML =
+                    '<tr><td colspan="10" style="text-align: center; padding: 40px;">Loading data...</td></tr>';
+
+                // Determine if this is a try revision or a date
+                const isTryRevision = dateOrRevision.length === 40; // Try revisions are 40-char hashes
+                const filename = isTryRevision
+                    ? `xpcshell-data/xpcshell-try-${dateOrRevision}.json`
+                    : `xpcshell-data/xpcshell-${dateOrRevision}.json`;
+
+                const response = await fetch(filename);
                 currentData = await response.json();
+
+                // Update job count display
+                const jobCount = currentData.metadata?.jobCount || 0;
+                if (isTryRevision) {
+                    const shortRev = dateOrRevision.substring(0, 12);
+                    document.getElementById('jobCount').textContent = `Try: ${shortRev} (${jobCount.toLocaleString()} jobs)`;
+                } else {
+                    document.getElementById('jobCount').textContent = `${jobCount.toLocaleString()} jobs`;
+                }
 
                 // Calculate global max duration for histogram alignment
                 calculateGlobalMaxDuration();
@@ -340,8 +624,34 @@
                 renderTable();
             } catch (error) {
                 console.error('Failed to load data:', error);
+                const errorMessage = error.message || String(error);
+                const errorStack = error.stack || '';
+                const displayError = `Error loading data: ${errorMessage}\n\n${errorStack}`;
                 document.getElementById('speedTableBody').innerHTML =
-                    '<tr><td colspan="7" style="text-align: center; padding: 40px; color: red;">Error loading data</td></tr>';
+                    `<tr><td colspan="10" style="text-align: center; padding: 40px; color: red;">
+                        <div style="font-weight: bold; margin-bottom: 10px;">Error loading data</div>
+                        <pre id="errorBox" style="text-align: left; background: #fee; padding: 15px; border-radius: 5px; max-width: 800px; margin: 0 auto; overflow-x: auto; font-size: 12px; cursor: pointer;" title="Click to copy error to clipboard">${escapeHtml(displayError)}</pre>
+                    </td></tr>`;
+
+                // Add click handler to copy error to clipboard
+                setTimeout(() => {
+                    const errorBox = document.getElementById('errorBox');
+                    if (errorBox) {
+                        errorBox.addEventListener('click', () => {
+                            navigator.clipboard.writeText(displayError).then(() => {
+                                const originalBg = errorBox.style.background;
+                                errorBox.style.background = '#c8e6c9';
+                                errorBox.title = 'Copied to clipboard!';
+                                setTimeout(() => {
+                                    errorBox.style.background = originalBg;
+                                    errorBox.title = 'Click to copy error to clipboard';
+                                }, 1000);
+                            }).catch(err => {
+                                console.error('Failed to copy to clipboard:', err);
+                            });
+                        });
+                    }
+                }, 0);
             }
         }
 
@@ -423,15 +733,39 @@
                         if (!groups.has(baseJobName)) {
                             groups.set(baseJobName, {
                                 baseJobName,
+                                durationsWithTestId: [], // [{duration, testId}]
                                 durations: [],
                                 taskIdIds: new Set(),
+                                testsExceeding30s: new Set(), // Track unique tests > 30s
+                                allTestDurations: new Map(), // Track all durations for all tests
                                 jobsByTaskIdId: new Map() // Track individual jobs by taskIdId
                             });
                         }
 
                         const group = groups.get(baseJobName);
+                        group.durationsWithTestId.push({duration, testId});
                         group.durations.push(duration);
                         group.taskIdIds.add(taskIdId);
+
+                        // Get test name to check manifest factor
+                        const testPathId = currentData.testInfo.testPathIds[testId];
+                        const testNameId = currentData.testInfo.testNameIds[testId];
+                        const testPath = currentData.tables.testPaths[testPathId];
+                        const testName = currentData.tables.testNames[testNameId];
+                        const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+                        const manifestFactor = getManifestFactor(fullTestName);
+                        const effectiveTimeout = 30000 * manifestFactor;
+
+                        // Track tests that exceeded effective timeout (including manifest factor)
+                        if (duration > effectiveTimeout) {
+                            group.testsExceeding30s.add(testId);
+                        }
+
+                        // Track all durations for all tests (we'll filter later)
+                        if (!group.allTestDurations.has(testId)) {
+                            group.allTestDurations.set(testId, []);
+                        }
+                        group.allTestDurations.get(testId).push(duration);
 
                         // Track individual job durations by taskIdId
                         if (!group.jobsByTaskIdId.has(taskIdId)) {
@@ -440,12 +774,125 @@
                                 taskIdId,
                                 jobName,
                                 repositoryId,
-                                durations: []
+                                durationsWithTestId: [], // [{duration, testId}]
+                                durations: [],
+                                testsExceeding30s: new Set() // Track unique tests > 30s for this job
                             });
                         }
                         const jobData = group.jobsByTaskIdId.get(taskIdId);
+                        jobData.durationsWithTestId.push({duration, testId});
                         jobData.durations.push(duration);
+
+                        // Track if this test exceeded effective timeout for this specific job
+                        if (duration > effectiveTimeout) {
+                            jobData.testsExceeding30s.add(testId);
+                        }
                     }
+                }
+            }
+
+            // First pass: calculate timeout factors for each baseline platform, keep maximum
+            const baselineTimeoutFactors = new Map(); // testId -> max timeoutFactor across all baselines
+
+            for (const baselineName of baselinePlatforms) {
+                const baselineGroup = groups.get(baselineName);
+                if (!baselineGroup) continue;
+
+                // Calculate timeout factors for this baseline platform
+                for (const testId of baselineGroup.testsExceeding30s) {
+                    const allDurations = baselineGroup.allTestDurations.get(testId);
+                    if (!allDurations || allDurations.length === 0) continue;
+
+                    const sorted = [...allDurations].sort((a, b) => a - b);
+                    const totalCount = sorted.length;
+                    const p90Index = Math.floor(totalCount * 0.9);
+                    const p90Duration = sorted[p90Index];
+                    const suggestedTimeoutFactor = p90Duration / 30000;
+                    const roundedFactor = Math.ceil(suggestedTimeoutFactor);
+
+                    if (roundedFactor > 1) {
+                        // Keep the maximum factor across all baseline platforms
+                        const currentMax = baselineTimeoutFactors.get(testId) || 0;
+                        if (roundedFactor > currentMax) {
+                            baselineTimeoutFactors.set(testId, roundedFactor);
+                        }
+                    }
+                }
+            }
+
+            // Second pass: adjust durations for non-baseline groups
+            for (const [baseJobName, group] of groups) {
+                const isBaseline = baselinePlatforms.includes(baseJobName);
+
+                if (!isBaseline && baselineTimeoutFactors.size > 0) {
+                    // Mark this group as adjusted
+                    group.isAdjusted = true;
+                    group.baselineTimeoutFactors = baselineTimeoutFactors;
+
+                    // Adjust durations by dividing by timeout factor
+                    const adjustedDurations = [];
+                    const adjustedTestDurations = new Map();
+                    const adjustedTestsExceeding30s = new Set();
+
+                    // Rebuild durations and allTestDurations with adjustments
+                    for (const {duration, testId} of group.durationsWithTestId) {
+                        const factor = baselineTimeoutFactors.get(testId) || 1;
+                        const adjustedDuration = duration / factor;
+                        adjustedDurations.push(adjustedDuration);
+
+                        if (!adjustedTestDurations.has(testId)) {
+                            adjustedTestDurations.set(testId, []);
+                        }
+                        adjustedTestDurations.get(testId).push(adjustedDuration);
+
+                        // Track tests exceeding effective timeout after adjustment (including manifest factor)
+                        // Get test name to check manifest factor
+                        const testPathId = currentData.testInfo.testPathIds[testId];
+                        const testNameId = currentData.testInfo.testNameIds[testId];
+                        const testPath = currentData.tables.testPaths[testPathId];
+                        const testName = currentData.tables.testNames[testNameId];
+                        const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+                        const manifestFactor = getManifestFactor(fullTestName);
+                        const effectiveTimeout = 30000 * manifestFactor;
+
+                        if (adjustedDuration > effectiveTimeout) {
+                            adjustedTestsExceeding30s.add(testId);
+                        }
+                    }
+
+                    group.durations = adjustedDurations;
+                    group.allTestDurations = adjustedTestDurations;
+                    group.testsExceeding30s = adjustedTestsExceeding30s;
+
+                    // Adjust individual job durations too
+                    for (const [taskIdId, jobData] of group.jobsByTaskIdId) {
+                        const adjustedJobDurations = [];
+                        const adjustedJobTestsExceeding30s = new Set();
+
+                        for (const {duration, testId} of jobData.durationsWithTestId) {
+                            const factor = baselineTimeoutFactors.get(testId) || 1;
+                            const adjustedDuration = duration / factor;
+                            adjustedJobDurations.push(adjustedDuration);
+
+                            // Get test name to check manifest factor
+                            const testPathId = currentData.testInfo.testPathIds[testId];
+                            const testNameId = currentData.testInfo.testNameIds[testId];
+                            const testPath = currentData.tables.testPaths[testPathId];
+                            const testName = currentData.tables.testNames[testNameId];
+                            const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+                            const manifestFactor = getManifestFactor(fullTestName);
+                            const effectiveTimeout = 30000 * manifestFactor;
+
+                            if (adjustedDuration > effectiveTimeout) {
+                                adjustedJobTestsExceeding30s.add(testId);
+                            }
+                        }
+
+                        jobData.durations = adjustedJobDurations;
+                        jobData.testsExceeding30s = adjustedJobTestsExceeding30s;
+                    }
+                } else {
+                    group.isAdjusted = false;
                 }
             }
 
@@ -484,6 +931,7 @@
                         jobName: jobData.jobName,
                         repositoryId: jobData.repositoryId,
                         testCount: jobCount,
+                        testsExceeding30s: jobData.testsExceeding30s.size,
                         average: jobAverage,
                         median: jobMedian,
                         max: jobMax,
@@ -491,16 +939,143 @@
                     });
                 }
 
+                // Calculate statistics for tests exceeding 30s
+                const slowTests = [];
+                for (const testId of group.testsExceeding30s) {
+                    const allDurations = group.allTestDurations.get(testId);
+                    if (!allDurations || allDurations.length === 0) continue;
+
+                    // Get test name from testInfo first
+                    const testPathId = currentData.testInfo.testPathIds[testId];
+                    const testNameId = currentData.testInfo.testNameIds[testId];
+                    const testPath = currentData.tables.testPaths[testPathId];
+                    const testFileName = currentData.tables.testNames[testNameId];
+                    const fullTestName = testPath ? `${testPath}/${testFileName}` : testFileName;
+
+                    // Get manifest factor for this test
+                    const manifestFactor = getManifestFactor(fullTestName);
+                    const baseTimeout = 30000 * manifestFactor;
+
+                    const sorted = [...allDurations].sort((a, b) => a - b);
+                    const totalCount = sorted.length;
+                    const slowCount = sorted.filter(d => d > baseTimeout).length;
+                    const testSum = sorted.reduce((acc, val) => acc + val, 0);
+                    const testAverage = testSum / totalCount;
+                    const testMedian = totalCount % 2 === 0
+                        ? (sorted[totalCount / 2 - 1] + sorted[totalCount / 2]) / 2
+                        : sorted[Math.floor(totalCount / 2)];
+                    const testMax = sorted[totalCount - 1];
+
+                    // Calculate 90th percentile for suggested timeout factor
+                    const p90Index = Math.floor(totalCount * 0.9);
+                    const p90Duration = sorted[p90Index];
+                    const suggestedTimeoutFactor = p90Duration / baseTimeout; // Relative to base timeout (with manifest)
+
+                    slowTests.push({
+                        testId,
+                        testName: fullTestName,
+                        totalRunCount: totalCount,
+                        slowRunCount: slowCount,
+                        average: testAverage,
+                        median: testMedian,
+                        max: testMax,
+                        p90: p90Duration,
+                        suggestedTimeoutFactor,
+                        durations: sorted
+                    });
+                }
+
+                // Sort slow tests by timeout percentage descending (default sort)
+                slowTests.sort((a, b) => {
+                    const percentA = (a.slowRunCount / a.totalRunCount) * 100;
+                    const percentB = (b.slowRunCount / b.totalRunCount) * 100;
+                    return percentB - percentA;
+                });
+
+                // Calculate suggested platform-specific timeout factor
+                let suggestedPlatformTimeoutFactor = 1;
+                const isBaseline = baselinePlatforms.includes(baseJobName);
+
+                if (!isBaseline && group.allTestDurations.size > 0) {
+                    // Note: group.allTestDurations are already adjusted by baseline test factors
+                    // We need to find the additional platform multiplier needed
+                    for (const [testId, testDurations] of group.allTestDurations) {
+                        // Get test name to check manifest factor
+                        const testPathId = currentData.testInfo.testPathIds[testId];
+                        const testNameId = currentData.testInfo.testNameIds[testId];
+                        const testPath = currentData.tables.testPaths[testPathId];
+                        const testName = currentData.tables.testNames[testNameId];
+                        const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+                        const manifestFactor = getManifestFactor(fullTestName);
+                        const baseTimeout = 30000 * manifestFactor;
+
+                        const sorted = [...testDurations].sort((a, b) => a - b);
+                        const timeoutCount = sorted.filter(d => d > baseTimeout).length;
+                        const timeoutRate = timeoutCount / sorted.length;
+
+                        if (timeoutRate > 0.1) {
+                            // Calculate what additional factor would bring 90th percentile under base timeout
+                            // Durations are already adjusted, so this is the additional factor needed
+                            const p90Index = Math.floor(sorted.length * 0.9);
+                            const p90Duration = sorted[p90Index];
+                            if (p90Duration > baseTimeout) {
+                                const additionalFactor = Math.ceil(p90Duration / baseTimeout);
+
+                                if (additionalFactor > suggestedPlatformTimeoutFactor) {
+                                    suggestedPlatformTimeoutFactor = additionalFactor;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Store original testsExceeding30s before any additional platform adjustment
+                const originalTestsExceeding30s = group.testsExceeding30s;
+
+                // If we need a platform-specific factor, calculate adjusted counts
+                // Apply additional platform factor to already-adjusted durations
+                let adjustedTestsExceeding30s = originalTestsExceeding30s;
+                if (suggestedPlatformTimeoutFactor > 1) {
+                    const adjustedSet = new Set();
+
+                    // Check already-adjusted durations against effective timeout (platform * manifest)
+                    for (const [testId, durations] of group.allTestDurations) {
+                        // Get test name to check manifest factor
+                        const testPathId = currentData.testInfo.testPathIds[testId];
+                        const testNameId = currentData.testInfo.testNameIds[testId];
+                        const testPath = currentData.tables.testPaths[testPathId];
+                        const testName = currentData.tables.testNames[testNameId];
+                        const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+                        const manifestFactor = getManifestFactor(fullTestName);
+                        const effectiveTimeout = 30000 * suggestedPlatformTimeoutFactor * manifestFactor;
+
+                        const hasTimeout = durations.some(d => d > effectiveTimeout);
+                        if (hasTimeout) {
+                            adjustedSet.add(testId);
+                        }
+                    }
+                    adjustedTestsExceeding30s = adjustedSet;
+                }
+
                 result.push({
                     baseJobName,
                     jobCount: group.taskIdIds.size,
                     testCount: count,
+                    testsExceeding30s: group.testsExceeding30s,
+                    originalTestsExceeding30s,
+                    adjustedTestsExceeding30s,
+                    slowTests,
                     average,
                     median,
                     max,
                     durations,
+                    allTestDurations: group.allTestDurations,
                     taskIdIds: group.taskIdIds,
-                    jobs
+                    jobs,
+                    isAdjusted: group.isAdjusted,
+                    baselineTimeoutFactors: group.baselineTimeoutFactors,
+                    isBaseline,
+                    suggestedPlatformTimeoutFactor
                 });
             }
 
@@ -510,42 +1085,77 @@
         // Format milliseconds to human readable
         function formatTime(milliseconds) {
             const seconds = milliseconds / 1000;
-            if (seconds < 60) return seconds.toFixed(1) + 's';
+            if (seconds < 60) {
+                // Show whole numbers without decimal point
+                if (Number.isInteger(seconds)) {
+                    return seconds + 's';
+                }
+                return seconds.toFixed(1) + 's';
+            }
 
             const totalMinutes = Math.floor(seconds / 60);
             const secs = Math.floor(seconds % 60);
 
             if (totalMinutes < 60) {
-                return `${totalMinutes}m ${secs}s`;
+                if (secs === 0) {
+                    return `${totalMinutes}m`;
+                } else if (secs === 30) {
+                    return `${totalMinutes}.5m`;
+                } else {
+                    return `${totalMinutes}m ${secs}s`;
+                }
             }
 
             const hours = Math.floor(totalMinutes / 60);
             const minutes = totalMinutes % 60;
+            if (minutes === 0) {
+                return `${hours}h`;
+            }
             return `${hours}h ${minutes}m`;
+        }
+
+        // Format numbers with thousand separators
+        function formatNumber(num) {
+            return num.toLocaleString();
+        }
+
+        // Escape HTML special characters
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
         }
 
         // Generate Fibonacci sequence up to a maximum value
         function generateFibonacciBuckets(maxSeconds) {
-            // Start with smaller buckets: 0-0.1s, 0.1-0.2s, 0.2-0.5s, 0.5-1s, then 1-2s, 2-3s
-            const buckets = [0, 0.1, 0.2, 0.5, 1, 2, 3];
-            let a = 2, b = 3;
+            // Define bucket boundaries: sub-second, then 1-8 (Fibonacci), then 10, 15, 20, 30, 60 (1m), 90 (1.5m), 120 (2m)
+            const buckets = [0, 0.1, 0.2, 0.5, 1, 2, 3, 5, 8, 10, 15, 20, 30, 60, 90, 120];
 
-            // Cap at 5 minutes (300 seconds)
+            // Continue with Fibonacci for values above 120, rounded to nearest 30s
+            let a = 89, b = 144;
             const maxBucket = 300;
 
             while (b < maxBucket) {
                 const next = a + b;
                 if (next >= maxBucket) break;
-                buckets.push(next);
+                const rounded = Math.round(next / 30) * 30;
+                if (rounded > 120 && !buckets.includes(rounded)) {
+                    buckets.push(rounded);
+                }
                 a = b;
                 b = next;
             }
 
             // Add final bucket for 5 minutes or more
             buckets.push(maxBucket);
-            buckets.push(Infinity);
+            buckets.sort((a, b) => a - b);
 
-            return buckets;
+            // Remove duplicates
+            const uniqueBuckets = [...new Set(buckets)];
+            uniqueBuckets.push(Infinity);
+
+            return uniqueBuckets;
         }
 
         // Create histogram with Fibonacci-based buckets
@@ -600,6 +1210,99 @@
                     html += `<div class="histogram-bar" style="width: ${widthPercent}%; height: 0; background: transparent;"></div>`;
                 }
             }
+            html += '</div>';
+
+            return html;
+        }
+
+        // Create heatmap-style histogram for test lines (colored backgrounds)
+        function createTestHistogram(durations) {
+            if (durations.length === 0 || globalMaxDuration === 0) {
+                return '';
+            }
+
+            // Convert max duration to seconds and generate Fibonacci buckets
+            const maxSeconds = Math.ceil(globalMaxDuration / 1000);
+            const fibBuckets = generateFibonacciBuckets(maxSeconds);
+            const numBuckets = fibBuckets.length - 1;
+            const buckets = new Array(numBuckets).fill(0);
+
+            // Fill buckets
+            for (const duration of durations) {
+                const seconds = duration / 1000;
+
+                // Find which bucket this duration belongs to
+                for (let i = 0; i < numBuckets; i++) {
+                    if (seconds >= fibBuckets[i] && seconds < fibBuckets[i + 1]) {
+                        buckets[i]++;
+                        break;
+                    }
+                }
+            }
+
+            // Find max count for scaling
+            const maxCount = Math.max(...buckets);
+            if (maxCount === 0) {
+                return '';
+            }
+
+            // Create heatmap cells
+            let html = '<div class="test-histogram">';
+            for (let i = 0; i < numBuckets; i++) {
+                const count = buckets[i];
+
+                const rangeStart = formatTime(fibBuckets[i] * 1000);
+                const rangeEnd = fibBuckets[i + 1] === Infinity
+                    ? 'and more'
+                    : formatTime(fibBuckets[i + 1] * 1000);
+                const tooltip = fibBuckets[i + 1] === Infinity
+                    ? `${rangeStart} and more: ${count} runs`
+                    : `${rangeStart} - ${rangeEnd}: ${count} runs`;
+
+                if (count > 0) {
+                    // Calculate opacity (0.1 to 1.0)
+                    const opacity = (count / maxCount) * 0.9 + 0.1;
+
+                    // Choose color based on whether bucket is above/below 30s timeout
+                    const isAboveTimeout = fibBuckets[i] >= 30;
+                    const color = isAboveTimeout ? 'rgba(220, 53, 69, ' : 'rgba(40, 167, 69, '; // red or green
+                    const bgColor = color + opacity + ')';
+
+                    html += `<div style="background: ${bgColor}" title="${tooltip}">${count}</div>`;
+                } else {
+                    html += `<div title="${tooltip}"></div>`;
+                }
+            }
+            html += '</div>';
+
+            return html;
+        }
+
+        // Create histogram legend showing bucket ranges
+        function createHistogramLegend(fibBuckets) {
+            const numBuckets = fibBuckets.length - 1;
+            let html = `<div class="histogram" style="height: auto; font-size: 11px; line-height: 1.2; color: #666;">`;
+
+            // Show bucket labels - only upper bound, full range in tooltip
+            html += '<div style="display: flex; width: 600px;">';
+            for (let i = 0; i < numBuckets; i++) {
+                const widthPercent = 100 / numBuckets;
+                const rangeStart = formatTime(fibBuckets[i] * 1000);
+                const rangeEnd = fibBuckets[i + 1] === Infinity
+                    ? 'and more'
+                    : formatTime(fibBuckets[i + 1] * 1000);
+
+                const tooltipText = fibBuckets[i + 1] === Infinity
+                    ? `${rangeStart} and more`
+                    : `${rangeStart} - ${rangeEnd}`;
+
+                const displayText = fibBuckets[i + 1] === Infinity ? '+' : rangeEnd;
+
+                html += `<div style="width: ${widthPercent}%; text-align: center; border-right: 1px solid #ddd; padding: 2px 0;" title="${tooltipText}">`;
+                html += displayText;
+                html += `</div>`;
+            }
+            html += '</div>';
             html += '</div>';
 
             return html;
@@ -666,6 +1369,11 @@
             const groups = cachedGroups;
             const filterText = document.getElementById('filterBox').value.toLowerCase();
 
+            // Find Linux baseline for timeout factor calculation reference
+            const baselineName = 'test-linux2404-64/opt-xpcshell';
+            const baseline = groups.find(g => g.baseJobName === baselineName);
+            const baselineMedian = baseline ? baseline.median : null;
+
             // Show/hide clear button
             const clearButton = document.getElementById('clearFilter');
             if (filterText) {
@@ -692,9 +1400,9 @@
             const filteredJobCount = filteredTaskIds.size;
             const jobCountEl = document.getElementById('jobCount');
             if (filterText) {
-                jobCountEl.textContent = `${filteredJobCount} / ${totalJobs} jobs`;
+                jobCountEl.textContent = `${formatNumber(filteredJobCount)} / ${formatNumber(totalJobs)} jobs`;
             } else {
-                jobCountEl.textContent = `${totalJobs} jobs`;
+                jobCountEl.textContent = `${formatNumber(totalJobs)} jobs`;
             }
 
             // Sort groups
@@ -714,6 +1422,10 @@
                             valA = a.testCount;
                             valB = b.testCount;
                             break;
+                        case 'timeout-exceeds':
+                            valA = a.testsExceeding30s.size;
+                            valB = b.testsExceeding30s.size;
+                            break;
                         case 'average':
                             valA = a.average;
                             valB = b.average;
@@ -726,6 +1438,10 @@
                             valA = a.max;
                             valB = b.max;
                             break;
+                        case 'timeout':
+                            valA = baselineMedian ? a.median / baselineMedian : 0;
+                            valB = baselineMedian ? b.median / baselineMedian : 0;
+                            break;
                         default:
                             return 0;
                     }
@@ -737,8 +1453,133 @@
             const tbody = document.getElementById('speedTableBody');
             tbody.innerHTML = '';
 
+            // Calculate totals across all filtered groups
+            let totalJobCount = 0;
+            let totalTestCount = 0;
+            const allDurations = [];
+            const allTestsExceeding30s = new Set();
+
+            for (const group of filteredGroups) {
+                totalJobCount += group.jobCount;
+                totalTestCount += group.testCount;
+                allDurations.push(...group.durations);
+                // Merge all unique test IDs that exceeded 30s
+                if (group.testsExceeding30s) {
+                    for (const testId of group.testsExceeding30s) {
+                        allTestsExceeding30s.add(testId);
+                    }
+                }
+            }
+
+            // Calculate overall statistics
+            let totalAverage = 0;
+            let totalMedian = 0;
+            let totalMax = 0;
+
+            if (allDurations.length > 0) {
+                allDurations.sort((a, b) => a - b);
+                const sum = allDurations.reduce((acc, val) => acc + val, 0);
+                totalAverage = sum / allDurations.length;
+                totalMedian = allDurations.length % 2 === 0
+                    ? (allDurations[allDurations.length / 2 - 1] + allDurations[allDurations.length / 2]) / 2
+                    : allDurations[Math.floor(allDurations.length / 2)];
+                totalMax = allDurations[allDurations.length - 1];
+            }
+
+            // Create histogram legend
+            const maxSeconds = Math.ceil(globalMaxDuration / 1000);
+            const fibBuckets = generateFibonacciBuckets(maxSeconds);
+            const legendHtml = createHistogramLegend(fibBuckets);
+
+            // Add total row at the top
+            const totalRow = document.createElement('tr');
+            totalRow.className = 'total-row';
+
+            totalRow.innerHTML = `
+                <td>Total</td>
+                <td class="number">${formatNumber(totalJobCount)}</td>
+                <td class="number">${formatNumber(totalTestCount)}</td>
+                <td class="number">${formatNumber(allTestsExceeding30s.size)}</td>
+                <td class="number">${totalTestCount > 0 ? formatTime(totalAverage) : '-'}</td>
+                <td class="number">${totalTestCount > 0 ? formatTime(totalMedian) : '-'}</td>
+                <td class="number">${totalTestCount > 0 ? formatTime(totalMax) : '-'}</td>
+                <td>${legendHtml}</td>
+                <td class="number timeout-factor-column">-</td>
+                <td class="number custom-factor-column">-</td>
+            `;
+
+            tbody.appendChild(totalRow);
+
             for (const group of filteredGroups) {
                 const isExpanded = expandedGroups.has(group.baseJobName);
+
+                // Check if custom factor is set
+                const customFactor = customPlatformFactors.get(group.baseJobName);
+                const hasCustomFactor = customFactor !== undefined;
+                const effectiveIsBaseline = hasCustomFactor ? (customFactor === 0) : group.isBaseline;
+                const effectivePlatformFactor = hasCustomFactor ? customFactor : group.suggestedPlatformTimeoutFactor;
+
+                // Timeout factor column
+                let timeoutFactorDisplay;
+                if (effectiveIsBaseline) {
+                    timeoutFactorDisplay = '-';
+                } else if (effectivePlatformFactor > 1) {
+                    timeoutFactorDisplay = effectivePlatformFactor.toString();
+                } else {
+                    timeoutFactorDisplay = '-';
+                }
+
+                // Timeouts column - only recalculate with custom factor
+                let timeoutsDisplay;
+                let effectiveAdjustedTestsExceeding30s;
+
+                if (hasCustomFactor && customFactor > 0 && !effectiveIsBaseline) {
+                    // Recalculate both original (with manifest) and adjusted (with manifest + platform) timeouts
+                    const originalWithManifestSet = new Set();
+                    const adjustedSet = new Set();
+
+                    for (const [testId, durations] of group.allTestDurations) {
+                        // Get test name to check manifest factor
+                        const testPathId = currentData.testInfo.testPathIds[testId];
+                        const testNameId = currentData.testInfo.testNameIds[testId];
+                        const testPath = currentData.tables.testPaths[testPathId];
+                        const testName = currentData.tables.testNames[testNameId];
+                        const fullTestName = testPath ? `${testPath}/${testName}` : testName;
+
+                        const manifestFactor = getManifestFactor(fullTestName);
+
+                        // Original with manifest factor only (no platform factor)
+                        const originalTimeout = 30000 * manifestFactor;
+                        const hasOriginalTimeout = durations.some(d => d > originalTimeout);
+                        if (hasOriginalTimeout) {
+                            originalWithManifestSet.add(testId);
+                        }
+
+                        // Adjusted with both platform and manifest factors
+                        const effectiveTimeout = 30000 * customFactor * manifestFactor;
+                        const hasTimeout = durations.some(d => d > effectiveTimeout);
+                        if (hasTimeout) {
+                            adjustedSet.add(testId);
+                        }
+                    }
+                    effectiveAdjustedTestsExceeding30s = adjustedSet;
+
+                    const originalCount = originalWithManifestSet.size;
+                    const adjustedCount = effectiveAdjustedTestsExceeding30s.size;
+                    timeoutsDisplay = `<span style="text-decoration: line-through; color: #999;">${formatNumber(originalCount)}</span> ${formatNumber(adjustedCount)}`;
+                } else {
+                    effectiveAdjustedTestsExceeding30s = group.testsExceeding30s;
+                    timeoutsDisplay = formatNumber(group.testsExceeding30s.size);
+                }
+
+                // Store effective values for use in test rows
+                group.effectiveIsBaseline = effectiveIsBaseline;
+                group.effectivePlatformFactor = effectivePlatformFactor;
+                group.effectiveAdjustedTestsExceeding30s = effectiveAdjustedTestsExceeding30s;
+                group.hasCustomFactor = hasCustomFactor;
+
+                // Custom factor input value
+                const customInputValue = hasCustomFactor ? customFactor : (group.isBaseline ? 0 : '');
 
                 // Group row
                 const groupRow = document.createElement('tr');
@@ -749,15 +1590,25 @@
                         <span class="expand-icon ${isExpanded ? 'expanded' : ''}">▶</span>
                         ${group.baseJobName}
                     </td>
-                    <td class="number">${group.jobCount}</td>
-                    <td class="number">${group.testCount}</td>
+                    <td class="number">${formatNumber(group.jobCount)}</td>
+                    <td class="number">${formatNumber(group.testCount)}</td>
+                    <td class="number">${timeoutsDisplay}</td>
                     <td class="number">${formatTime(group.average)}</td>
                     <td class="number">${formatTime(group.median)}</td>
                     <td class="number">${formatTime(group.max)}</td>
                     <td>${createHistogram(group.durations)}</td>
+                    <td class="number timeout-factor-column">${timeoutFactorDisplay}</td>
+                    <td class="number custom-factor-cell custom-factor-column"><input type="number" class="custom-factor-input" data-job="${escapeHtml(group.baseJobName)}" value="${customInputValue}" min="0" step="1" placeholder="-"></td>
                 `;
 
-                groupRow.addEventListener('click', () => {
+                groupRow.addEventListener('click', (e) => {
+                    // Don't expand/collapse if clicking on custom factor cell
+                    if (e.target.classList.contains('custom-factor-input') ||
+                        e.target.classList.contains('custom-factor-cell') ||
+                        e.target.closest('.custom-factor-cell')) {
+                        return;
+                    }
+
                     if (expandedGroups.has(group.baseJobName)) {
                         expandedGroups.delete(group.baseJobName);
                     } else {
@@ -768,8 +1619,210 @@
 
                 tbody.appendChild(groupRow);
 
+                // Slow tests rows (tests exceeding 30s)
+                if (isExpanded && showTestBreakdown && group.slowTests && group.slowTests.length > 0) {
+                    // Augment tests with resolution status
+                    let sortedTests = group.slowTests.map(test => {
+                        let isResolved = false;
+                        let effectiveTimeout = null;
+
+                        if (group.hasCustomFactor && group.effectivePlatformFactor > 0 && !group.effectiveIsBaseline) {
+                            // Calculate effective timeout including manifest factor
+                            const manifestFactor = getManifestFactor(test.testName);
+                            effectiveTimeout = 30000 * group.effectivePlatformFactor * manifestFactor;
+
+                            // Check if test would still timeout at all after platform + manifest factors
+                            const hasAnyTimeout = test.durations.some(d => d > effectiveTimeout);
+                            isResolved = !hasAnyTimeout;
+                        }
+
+                        return { ...test, isResolved, effectiveTimeout };
+                    });
+
+                    // Sort tests based on current sort column
+                    if (sortColumn) {
+                        sortedTests.sort((a, b) => {
+                            let valA, valB;
+                            switch (sortColumn) {
+                                case 'name':
+                                    valA = a.testName;
+                                    valB = b.testName;
+                                    return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                                case 'count':
+                                    valA = a.totalRunCount;
+                                    valB = b.totalRunCount;
+                                    break;
+                                case 'timeout-exceeds':
+                                    // Sort by adjusted percentage when effective timeout is set
+                                    if (a.effectiveTimeout && b.effectiveTimeout) {
+                                        const newTimeoutCountA = a.durations.filter(d => d > a.effectiveTimeout).length;
+                                        const newTimeoutCountB = b.durations.filter(d => d > b.effectiveTimeout).length;
+                                        valA = (newTimeoutCountA / a.totalRunCount) * 100;
+                                        valB = (newTimeoutCountB / b.totalRunCount) * 100;
+                                    } else {
+                                        valA = (a.slowRunCount / a.totalRunCount) * 100;
+                                        valB = (b.slowRunCount / b.totalRunCount) * 100;
+                                    }
+                                    break;
+                                case 'average':
+                                    valA = a.average;
+                                    valB = b.average;
+                                    break;
+                                case 'median':
+                                    valA = a.median;
+                                    valB = b.median;
+                                    break;
+                                case 'max':
+                                    valA = a.max;
+                                    valB = b.max;
+                                    break;
+                                case 'timeout':
+                                    valA = a.suggestedTimeoutFactor;
+                                    valB = b.suggestedTimeoutFactor;
+                                    break;
+                                default:
+                                    return 0;
+                            }
+                            return sortDirection === 'asc' ? valA - valB : valB - valA;
+                        });
+                    } else {
+                        // Default sort: unresolved tests first, then by timeout percentage
+                        sortedTests.sort((a, b) => {
+                            // First sort by resolution status (unresolved first)
+                            if (a.isResolved !== b.isResolved) {
+                                return a.isResolved ? 1 : -1;
+                            }
+                            // Then by adjusted timeout percentage if available
+                            let percentA, percentB;
+                            if (a.effectiveTimeout && b.effectiveTimeout) {
+                                const newTimeoutCountA = a.durations.filter(d => d > a.effectiveTimeout).length;
+                                const newTimeoutCountB = b.durations.filter(d => d > b.effectiveTimeout).length;
+                                percentA = (newTimeoutCountA / a.totalRunCount) * 100;
+                                percentB = (newTimeoutCountB / b.totalRunCount) * 100;
+                            } else {
+                                percentA = (a.slowRunCount / a.totalRunCount) * 100;
+                                percentB = (b.slowRunCount / b.totalRunCount) * 100;
+                            }
+                            return percentB - percentA;
+                        });
+                    }
+
+                    for (const test of sortedTests) {
+                        const testRow = document.createElement('tr');
+                        testRow.className = test.isResolved ? 'test-row test-row-resolved' : 'test-row';
+
+                        const percentage = ((test.slowRunCount / test.totalRunCount) * 100).toFixed(1);
+                        const testHistogram = createTestHistogram(test.durations);
+                        const roundedFactor = Math.ceil(test.suggestedTimeoutFactor);
+                        const p90Time = formatTime(test.p90);
+
+                        // Build timeout factor breakdown
+                        let factorDisplay, factorTooltip;
+                        const platformFactor = group.effectivePlatformFactor || 1;
+                        const manifestFactor = getManifestFactor(test.testName);
+                        const baselineFactor = group.baselineTimeoutFactors ? (group.baselineTimeoutFactors.get(test.testId) || 1) : 1;
+
+                        // roundedFactor is the TOTAL factor needed from baseline
+                        // If we have a platform factor, the per-test factor should be: total / platform
+                        // Test-level factor replaces manifest factor (not multiplies)
+                        const testLevelFactor = platformFactor > 1
+                            ? Math.ceil(roundedFactor / platformFactor)
+                            : roundedFactor;
+
+                        if (platformFactor > 1 || manifestFactor > 1 || baselineFactor > 1 || testLevelFactor > 1) {
+                            const parts = [];
+
+                            // Platform factor
+                            if (platformFactor > 1) {
+                                parts.push(platformFactor.toString());
+                            }
+
+                            // Show manifest or test factor (test replaces manifest)
+                            if (testLevelFactor > 1) {
+                                // Test-level factor present
+                                if (manifestFactor > 1) {
+                                    // Show manifest factor strikethrough since it's replaced
+                                    parts.push(`<span style="text-decoration: line-through; color: #999;"><i>${manifestFactor}</i></span>`);
+                                }
+
+                                // Show baseline factor if different from suggested
+                                if (baselineFactor > 1 && baselineFactor !== testLevelFactor) {
+                                    parts.push(`<span style="text-decoration: line-through; color: #999;">${baselineFactor}</span>`);
+                                }
+
+                                // Show suggested test-level factor in bold
+                                parts.push(`<b>${testLevelFactor}</b>`);
+                            } else if (manifestFactor > 1) {
+                                // Only manifest factor applies
+                                parts.push(`<i>${manifestFactor}</i>`);
+                            }
+
+                            factorDisplay = parts.length > 0 ? parts.join(' × ') : '-';
+
+                            let tooltipParts = [];
+                            if (platformFactor > 1) {
+                                tooltipParts.push(`Platform: ${platformFactor}x`);
+                            }
+                            if (manifestFactor > 1) {
+                                tooltipParts.push(`Manifest: ${manifestFactor}x`);
+                            }
+                            if (baselineFactor > 1) {
+                                tooltipParts.push(`Baseline per-test: ${baselineFactor}x`);
+                            }
+                            if (testLevelFactor > 1) {
+                                const replaces = manifestFactor > 1 ? ' (replaces manifest)' : '';
+                                tooltipParts.push(`Suggested test-specific${replaces}: ${testLevelFactor}x`);
+                            }
+                            tooltipParts.push(`Total: ${roundedFactor}x (90th percentile: ${p90Time})`);
+                            factorTooltip = tooltipParts.join(', ');
+                        } else {
+                            factorDisplay = '-';
+                            factorTooltip = `90th percentile: ${p90Time} (no timeout factor needed)`;
+                        }
+
+                        // Show which timeout factor was applied (if adjusted)
+                        const testTimeoutFactor = group.isAdjusted && group.baselineTimeoutFactors
+                            ? group.baselineTimeoutFactors.get(test.testId)
+                            : null;
+                        const testAdjustedIndicator = testTimeoutFactor
+                            ? `<span class="adjusted-indicator" title="Times adjusted by dividing by ${testTimeoutFactor}x baseline timeout factor">÷${testTimeoutFactor}</span>`
+                            : '';
+
+                        // Calculate timeout display with custom platform factor
+                        let timeoutsDisplay;
+                        if (test.effectiveTimeout) {
+                            // Calculate new timeout count with effective timeout (includes manifest factor)
+                            const newTimeoutCount = test.durations.filter(d => d > test.effectiveTimeout).length;
+                            const newPercentage = ((newTimeoutCount / test.totalRunCount) * 100).toFixed(1);
+                            if (newTimeoutCount === 0) {
+                                // Omit "0 (0.0%)" when resolved
+                                timeoutsDisplay = `<span style="text-decoration: line-through; color: #999;">${formatNumber(test.slowRunCount)} (${percentage}%)</span>`;
+                            } else {
+                                timeoutsDisplay = `<span style="text-decoration: line-through; color: #999;">${formatNumber(test.slowRunCount)} (${percentage}%)</span> ${formatNumber(newTimeoutCount)} (${newPercentage}%)`;
+                            }
+                        } else {
+                            timeoutsDisplay = `${formatNumber(test.slowRunCount)} (${percentage}%)`;
+                        }
+
+                        testRow.innerHTML = `
+                            <td style="padding-left: 60px; font-family: monospace;">${escapeHtml(test.testName)}</td>
+                            <td class="number">-</td>
+                            <td class="number">${formatNumber(test.totalRunCount)}</td>
+                            <td class="number" title="${formatNumber(test.slowRunCount)} of ${formatNumber(test.totalRunCount)} passing runs exceeded 30s${testTimeoutFactor ? ' (after adjustment)' : ''}">${timeoutsDisplay}${testAdjustedIndicator}</td>
+                            <td class="number">${formatTime(test.average)}${testAdjustedIndicator}</td>
+                            <td class="number">${formatTime(test.median)}${testAdjustedIndicator}</td>
+                            <td class="number">${formatTime(test.max)}${testAdjustedIndicator}</td>
+                            <td>${testHistogram}</td>
+                            <td class="number timeout-factor-column" title="${factorTooltip}">${factorDisplay}</td>
+                            <td class="number custom-factor-column">-</td>
+                        `;
+
+                        tbody.appendChild(testRow);
+                    }
+                }
+
                 // Individual job rows
-                if (isExpanded && group.jobs) {
+                if (isExpanded && showJobBreakdown && group.jobs) {
                     // Sort jobs based on current sort column
                     let sortedJobs = [...group.jobs];
                     if (sortColumn) {
@@ -784,6 +1837,10 @@
                                     valA = a.testCount;
                                     valB = b.testCount;
                                     break;
+                                case 'timeout-exceeds':
+                                    valA = a.testsExceeding30s;
+                                    valB = b.testsExceeding30s;
+                                    break;
                                 case 'average':
                                     valA = a.average;
                                     valB = b.average;
@@ -795,6 +1852,10 @@
                                 case 'max':
                                     valA = a.max;
                                     valB = b.max;
+                                    break;
+                                case 'timeout':
+                                    valA = baselineMedian ? a.median / baselineMedian : 0;
+                                    valB = baselineMedian ? b.median / baselineMedian : 0;
                                     break;
                                 default:
                                     return 0;
@@ -815,15 +1876,19 @@
                         const profileUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
 
                         const repository = currentData.tables.repositories[job.repositoryId];
+                        const jobTimeoutFactor = baselineMedian ? (job.median / baselineMedian).toFixed(2) : '-';
 
                         jobRow.innerHTML = `
                             <td>${job.jobName} <span style="color: #666; font-size: 11px;">(${repository})</span></td>
                             <td class="number">-</td>
-                            <td class="number">${job.testCount}</td>
+                            <td class="number">${formatNumber(job.testCount)}</td>
+                            <td class="number">${formatNumber(job.testsExceeding30s)}</td>
                             <td class="number">${formatTime(job.average)}</td>
                             <td class="number">${formatTime(job.median)}</td>
                             <td class="number">${formatTime(job.max)}</td>
                             <td>${createHistogram(job.durations)}</td>
+                            <td class="number timeout-factor-column">${jobTimeoutFactor}</td>
+                            <td class="number custom-factor-column">-</td>
                         `;
 
                         jobRow.addEventListener('click', (e) => {
@@ -847,10 +1912,294 @@
                     th.appendChild(arrow);
                 }
             }
+
+            // Generate timeout adjustments JSON from baseline platforms
+            // Calculate max timeout factor needed across all baseline platforms
+            const testTimeoutFactors = new Map(); // testName -> {factor, testId, platformFactors: Map<platform, factor>}
+
+            for (const baselineName of baselinePlatforms) {
+                const baselineGroup = filteredGroups.find(g => g.baseJobName === baselineName);
+                if (baselineGroup && baselineGroup.slowTests && baselineGroup.slowTests.length > 0) {
+                    for (const test of baselineGroup.slowTests) {
+                        const roundedFactor = Math.ceil(test.suggestedTimeoutFactor);
+                        const manifestFactor = getManifestFactor(test.testName);
+
+                        // Test-level factors replace manifest factors, don't divide
+                        // Only include if test needs more than manifest provides
+                        if (roundedFactor > manifestFactor) {
+                            const existing = testTimeoutFactors.get(test.testName);
+                            if (!existing) {
+                                testTimeoutFactors.set(test.testName, {
+                                    factor: roundedFactor,
+                                    testId: test.testId,
+                                    manifestFactor: manifestFactor,
+                                    platformFactors: new Map([[baselineName, roundedFactor]])
+                                });
+                            } else {
+                                // Track this platform's factor
+                                existing.platformFactors.set(baselineName, roundedFactor);
+                                // Update max if needed
+                                if (roundedFactor > existing.factor) {
+                                    existing.factor = roundedFactor;
+                                    existing.manifestFactor = manifestFactor;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Convert to array format for JSON
+            const timeoutAdjustments = [];
+            for (const [testName, {factor, manifestFactor, platformFactors}] of testTimeoutFactors) {
+                timeoutAdjustments.push({
+                    testName,
+                    factor,
+                    manifestFactor,
+                    platformFactors
+                });
+            }
+
+            // Sort by timeout factor (descending), then by test name
+            timeoutAdjustments.sort((a, b) => {
+                if (b.factor !== a.factor) {
+                    return b.factor - a.factor;
+                }
+                return a.testName.localeCompare(b.testName);
+            });
+
+            // Update list and store JSON for copy button
+            const list = document.getElementById('timeoutAdjustmentsList');
+            list.innerHTML = '';
+
+            // Update heading with count
+            const adjustmentsHeading = document.querySelector('.timeout-adjustments h2');
+            if (adjustmentsHeading) {
+                adjustmentsHeading.textContent = `Suggested Timeout Adjustments (${timeoutAdjustments.length})`;
+            }
+
+            if (timeoutAdjustments.length > 0) {
+                // Create JSON for copy button (simplified format)
+                const jsonOutput = timeoutAdjustments.map(item => ({
+                    [item.testName]: item.factor
+                }));
+
+                // Create bullet list with comments
+                for (const item of timeoutAdjustments) {
+                    // Build comment showing which platform needs which factor
+                    const platformDetails = [];
+                    for (const [platform, factor] of item.platformFactors) {
+                        // Shorten platform name for display
+                        const shortPlatform = platform
+                            .replace('test-', '')
+                            .replace('/opt-xpcshell', '');
+                        platformDetails.push(`${shortPlatform}: ${factor}x`);
+                    }
+                    let comment = `Platform factors: ${platformDetails.join(', ')}`;
+                    if (item.manifestFactor && item.manifestFactor > 1) {
+                        comment += ` (Replaces manifest ${item.manifestFactor}x)`;
+                    }
+
+                    const li = document.createElement('li');
+                    li.innerHTML = `<span class="timeout-factor-badge">${item.factor}x</span> ${escapeHtml(item.testName)} <span class="timeout-comment">// ${escapeHtml(comment)}</span>`;
+                    list.appendChild(li);
+                }
+
+                // Now add additional tests needed after applying platform factors (50% threshold)
+                const additionalTestTimeoutFactors = new Map(); // testName -> {factor, testId, manifestFactor, platformFactors: Map<platform, {factor, percentage}>}
+
+                for (const group of filteredGroups) {
+                    // Skip baseline platforms
+                    if (baselinePlatforms.includes(group.baseJobName)) continue;
+
+                    // Get custom or suggested platform factor
+                    const customFactor = customPlatformFactors.get(group.baseJobName);
+                    const platformFactor = customFactor !== undefined ? customFactor : group.suggestedPlatformTimeoutFactor;
+
+                    // Skip if no platform factor or is baseline
+                    if (platformFactor <= 0) continue;
+
+                    // Check each slow test
+                    for (const test of group.slowTests) {
+                        const manifestFactor = getManifestFactor(test.testName);
+                        const effectiveTimeout = 30000 * platformFactor * manifestFactor;
+
+                        // Calculate how many runs would still timeout
+                        const timeoutCount = test.durations.filter(d => d > effectiveTimeout).length;
+                        const timeoutPercentage = (timeoutCount / test.totalRunCount) * 100;
+
+                        // If more than 50% still timeout, we need an additional test factor
+                        if (timeoutPercentage > 50) {
+                            // Calculate what factor would bring it to 50% (median)
+                            const sorted = [...test.durations].sort((a, b) => a - b);
+                            const medianDuration = sorted[Math.floor(sorted.length / 2)];
+                            const neededFactor = Math.ceil(medianDuration / effectiveTimeout);
+
+                            if (neededFactor > 1) {
+                                const existing = additionalTestTimeoutFactors.get(test.testName);
+                                if (!existing) {
+                                    additionalTestTimeoutFactors.set(test.testName, {
+                                        factor: neededFactor,
+                                        testId: test.testId,
+                                        manifestFactor: manifestFactor,
+                                        platformFactors: new Map([[group.baseJobName, {factor: neededFactor, percentage: timeoutPercentage}]])
+                                    });
+                                } else {
+                                    // Track this platform's needs
+                                    existing.platformFactors.set(group.baseJobName, {factor: neededFactor, percentage: timeoutPercentage});
+                                    // Update max if needed
+                                    if (neededFactor > existing.factor) {
+                                        existing.factor = neededFactor;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Convert to array and sort
+                const additionalTimeoutAdjustments = [];
+                for (const [testName, {factor, manifestFactor, platformFactors}] of additionalTestTimeoutFactors) {
+                    additionalTimeoutAdjustments.push({
+                        testName,
+                        factor,
+                        manifestFactor,
+                        platformFactors
+                    });
+                }
+
+                additionalTimeoutAdjustments.sort((a, b) => {
+                    if (b.factor !== a.factor) {
+                        return b.factor - a.factor;
+                    }
+                    return a.testName.localeCompare(b.testName);
+                });
+
+                // Add HR and additional adjustments if any
+                if (additionalTimeoutAdjustments.length > 0) {
+                    const hr = document.createElement('hr');
+                    list.appendChild(hr);
+
+                    for (const item of additionalTimeoutAdjustments) {
+                        // Build comment showing which platform needs which factor
+                        const platformDetails = [];
+                        for (const [platform, {factor, percentage}] of item.platformFactors) {
+                            // Shorten platform name for display
+                            const shortPlatform = platform
+                                .replace('test-', '')
+                                .replace('/opt-xpcshell', '');
+                            platformDetails.push(`${shortPlatform}: ${factor}x (${percentage.toFixed(1)}% fail)`);
+                        }
+                        let comment = `After platform factors: ${platformDetails.join(', ')}`;
+                        if (item.manifestFactor && item.manifestFactor > 1) {
+                            comment += ` (Replaces manifest ${item.manifestFactor}x)`;
+                        }
+
+                        const li = document.createElement('li');
+                        li.innerHTML = `<span class="timeout-factor-badge">${item.factor}x</span> ${escapeHtml(item.testName)} <span class="timeout-comment">// ${escapeHtml(comment)}</span>`;
+                        list.appendChild(li);
+                    }
+
+                    // Merge both sets for JSON output with comments
+                    const allAdjustments = [...timeoutAdjustments, ...additionalTimeoutAdjustments];
+                    const mergedMap = new Map(); // testName -> {factor, comment}
+
+                    // Add first section tests
+                    for (const item of timeoutAdjustments) {
+                        const platformDetails = [];
+                        for (const [platform, factor] of item.platformFactors) {
+                            const shortPlatform = platform.replace('test-', '').replace('/opt-xpcshell', '');
+                            platformDetails.push(`${shortPlatform}: ${factor}x`);
+                        }
+                        let comment = `Platform factors: ${platformDetails.join(', ')}`;
+                        if (item.manifestFactor && item.manifestFactor > 1) {
+                            comment += ` (Replaces manifest ${item.manifestFactor}x)`;
+                        }
+                        mergedMap.set(item.testName, {factor: item.factor, comment});
+                    }
+
+                    // Add/merge second section tests
+                    for (const item of additionalTimeoutAdjustments) {
+                        const platformDetails = [];
+                        for (const [platform, {factor, percentage}] of item.platformFactors) {
+                            const shortPlatform = platform.replace('test-', '').replace('/opt-xpcshell', '');
+                            platformDetails.push(`${shortPlatform}: ${factor}x (${percentage.toFixed(1)}% fail)`);
+                        }
+                        let comment = `After platform factors: ${platformDetails.join(', ')}`;
+                        if (item.manifestFactor && item.manifestFactor > 1) {
+                            comment += ` (Replaces manifest ${item.manifestFactor}x)`;
+                        }
+
+                        const existing = mergedMap.get(item.testName);
+                        if (!existing || item.factor > existing.factor) {
+                            mergedMap.set(item.testName, {factor: item.factor, comment});
+                        }
+                    }
+
+                    // Convert to JSON string with comments
+                    const sortedTests = Array.from(mergedMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                    const jsonLines = [];
+                    jsonLines.push('{');
+
+                    // Add manifest timeout factors first
+                    const manifestEntries = Object.entries(manifestTimeoutFactors).sort((a, b) => a[0].localeCompare(b[0]));
+                    for (let i = 0; i < manifestEntries.length; i++) {
+                        const [path, factor] = manifestEntries[i];
+                        jsonLines.push(`  "${path}": ${factor}, // Manifest-level factor`);
+                    }
+                    if (manifestEntries.length > 0 && sortedTests.length > 0) {
+                        jsonLines.push('');
+                    }
+
+                    for (let i = 0; i < sortedTests.length; i++) {
+                        const [testName, {factor, comment}] = sortedTests[i];
+                        const comma = i < sortedTests.length - 1 ? ',' : '';
+                        jsonLines.push(`  "${testName}": ${factor}${comma} // ${comment}`);
+                    }
+                    jsonLines.push('}');
+                    list.dataset.json = jsonLines.join('\n');
+                } else {
+                    // Build JSON with comments for first section only
+                    const jsonLines = [];
+                    jsonLines.push('{');
+
+                    // Add manifest timeout factors first
+                    const manifestEntries = Object.entries(manifestTimeoutFactors).sort((a, b) => a[0].localeCompare(b[0]));
+                    for (let i = 0; i < manifestEntries.length; i++) {
+                        const [path, factor] = manifestEntries[i];
+                        jsonLines.push(`  "${path}": ${factor}, // Manifest-level factor`);
+                    }
+                    if (manifestEntries.length > 0 && timeoutAdjustments.length > 0) {
+                        jsonLines.push('');
+                    }
+
+                    const sortedTests = timeoutAdjustments.sort((a, b) => a.testName.localeCompare(b.testName));
+                    for (let i = 0; i < sortedTests.length; i++) {
+                        const item = sortedTests[i];
+                        const platformDetails = [];
+                        for (const [platform, factor] of item.platformFactors) {
+                            const shortPlatform = platform.replace('test-', '').replace('/opt-xpcshell', '');
+                            platformDetails.push(`${shortPlatform}: ${factor}x`);
+                        }
+                        let comment = `Platform factors: ${platformDetails.join(', ')}`;
+                        if (item.manifestFactor && item.manifestFactor > 1) {
+                            comment += ` (Replaces manifest ${item.manifestFactor}x)`;
+                        }
+                        const comma = i < sortedTests.length - 1 ? ',' : '';
+                        jsonLines.push(`  "${item.testName}": ${item.factor}${comma} // ${comment}`);
+                    }
+                    jsonLines.push('}');
+                    list.dataset.json = jsonLines.join('\n');
+                }
+            } else {
+                list.innerHTML = '<div class="no-adjustments">No tests require timeout adjustments</div>';
+                list.dataset.json = '';
+            }
         }
 
         // Event listeners
         document.getElementById('dateSelector').addEventListener('change', (e) => {
+            document.getElementById('jobCount').textContent = 'Loading...';
             loadData(e.target.value);
             updateHash();
         });
@@ -866,6 +2215,86 @@
             updateHash();
         });
 
+        document.getElementById('breakdownByTests').addEventListener('change', (e) => {
+            showTestBreakdown = e.target.checked;
+            renderTable();
+        });
+
+        document.getElementById('breakdownByJobs').addEventListener('change', (e) => {
+            showJobBreakdown = e.target.checked;
+            renderTable();
+        });
+
+        document.getElementById('showTimeoutFactors').addEventListener('change', (e) => {
+            const body = document.body;
+            if (e.target.checked) {
+                body.classList.remove('hide-timeout-factors');
+            } else {
+                body.classList.add('hide-timeout-factors');
+            }
+        });
+
+        document.getElementById('copyJsonButton').addEventListener('click', () => {
+            const list = document.getElementById('timeoutAdjustmentsList');
+            const json = list.dataset.json;
+
+            if (json) {
+                navigator.clipboard.writeText(json).then(() => {
+                    const button = document.getElementById('copyJsonButton');
+                    const originalText = button.textContent;
+                    button.textContent = 'Copied!';
+                    button.classList.add('copied');
+
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                        button.classList.remove('copied');
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy to clipboard:', err);
+                    alert('Failed to copy to clipboard. Please try again.');
+                });
+            }
+        });
+
+        document.getElementById('copyPlatformFactorsButton').addEventListener('click', () => {
+            if (customPlatformFactors.size === 0) {
+                alert('No custom platform factors set.');
+                return;
+            }
+
+            // Convert Map to sorted object, skipping platforms with factor 0 (baselines)
+            const factorsObj = {};
+            const sortedEntries = Array.from(customPlatformFactors.entries())
+                .filter(([platform, factor]) => factor !== 0)
+                .sort((a, b) => a[0].localeCompare(b[0]));
+
+            for (const [platform, factor] of sortedEntries) {
+                factorsObj[platform] = factor;
+            }
+
+            if (Object.keys(factorsObj).length === 0) {
+                alert('No non-baseline platform factors set.');
+                return;
+            }
+
+            const json = JSON.stringify(factorsObj, null, 2);
+
+            navigator.clipboard.writeText(json).then(() => {
+                const button = document.getElementById('copyPlatformFactorsButton');
+                const originalText = button.textContent;
+                button.textContent = 'Copied!';
+                button.classList.add('copied');
+
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy to clipboard:', err);
+                alert('Failed to copy to clipboard. Please try again.');
+            });
+        });
+
         // Handle browser back/forward
         window.addEventListener('hashchange', () => {
             if (!initialLoadComplete) return;
@@ -877,6 +2306,7 @@
             // Update date if changed
             if (hash.date && hash.date !== currentDate) {
                 document.getElementById('dateSelector').value = hash.date;
+                document.getElementById('jobCount').textContent = 'Loading...';
                 loadData(hash.date);
             }
 
@@ -900,8 +2330,59 @@
             });
         });
 
-        // Load data on page load
-        loadDates();
+        // Handle custom platform factor inputs
+        document.getElementById('speedTableBody').addEventListener('input', (e) => {
+            if (e.target.classList.contains('custom-factor-input')) {
+                const jobName = e.target.dataset.job;
+                const value = e.target.value.trim();
+
+                if (value === '') {
+                    // Remove custom factor
+                    customPlatformFactors.delete(jobName);
+                } else {
+                    const numValue = parseInt(value, 10);
+                    if (!isNaN(numValue) && numValue >= 0) {
+                        customPlatformFactors.set(jobName, numValue);
+                    }
+                }
+
+                // Save to localStorage
+                saveCustomFactors();
+
+                // Re-render the table
+                renderTable();
+            }
+        });
+
+        // Prevent row expansion when clicking on custom factor cell or input
+        document.getElementById('speedTableBody').addEventListener('click', (e) => {
+            if (e.target.classList.contains('custom-factor-input') ||
+                e.target.classList.contains('custom-factor-cell')) {
+                e.stopPropagation();
+            }
+        });
+
+        // Load custom factors from localStorage
+        loadCustomFactors();
+
+        // Apply timeout factors visibility based on checkbox state
+        if (!document.getElementById('showTimeoutFactors').checked) {
+            document.body.classList.add('hide-timeout-factors');
+        }
+
+        // Check URL parameters for try revision
+        const urlParams = new URLSearchParams(window.location.search);
+        const tryRevision = urlParams.get('try');
+
+        if (tryRevision) {
+            // Load try revision from URL
+            document.getElementById('dateSelector').innerHTML = '<option value="">Try revision</option>';
+            document.getElementById('jobCount').textContent = 'Loading...';
+            loadData(tryRevision);
+        } else {
+            // Load data on page load
+            loadDates();
+        }
 
         // Setup histogram tooltips
         setupHistogramTooltips();
