@@ -2779,7 +2779,10 @@
                 await populateDateSelector();
 
                 // Then load data only if we have dates
-                if (document.getElementById('date-select').value) {
+                // Set the hash first, which will trigger loadData via hashchange
+                if (document.getElementById('date-select').value && !window.location.hash) {
+                    updateUrlHash();
+                } else if (document.getElementById('date-select').value) {
                     loadData();
                 }
             }
