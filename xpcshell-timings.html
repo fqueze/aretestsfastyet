@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>XPCShell Test Timings</title>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="shared.js"></script>
+    <script src="fetch-utils.js"></script>
+    <script defer src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
         .tree-table {
@@ -375,7 +375,6 @@
         </div>
     </div>
 
-    <script src="fetch-utils.js"></script>
     <script>
         let currentData = null;
         let aggregatedData = null;
@@ -2206,7 +2205,22 @@
         }
 
         // Render scatter plots for a test
-        function renderChart(testPath) {
+        // Wait for Plotly to be available
+        async function waitForPlotly() {
+            if (typeof Plotly !== 'undefined') return;
+            await new Promise(resolve => {
+                const check = setInterval(() => {
+                    if (typeof Plotly !== 'undefined') {
+                        clearInterval(check);
+                        resolve();
+                    }
+                }, 50);
+            });
+        }
+
+        async function renderChart(testPath) {
+            await waitForPlotly();
+
             const testData = aggregatedData[testPath];
             if (!testData) return;
 
@@ -2869,5 +2883,6 @@
             });
         });
     </script>
+    <script async src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 </body>
 </html>
