@@ -257,7 +257,7 @@
                                 taskId: d.task_id,
                                 retryId: d.retry_id,
                                 duration: d.duration_seconds,
-                                durationStr: formatDuration(d.duration_seconds),
+                                durationStr: formatDurationS(d.duration_seconds),
                                 platform: d.platform,
                                 repository: d.repository
                             })),
@@ -293,7 +293,7 @@
                                 taskId: d.task_id,
                                 retryId: d.retry_id,
                                 duration: d.duration_seconds,
-                                durationStr: formatDuration(d.duration_seconds),
+                                durationStr: formatDurationS(d.duration_seconds),
                                 repository: d.repository
                             })),
                             hovertemplate: '<b>%{customdata.name}</b><br>' +

@@ -48,7 +48,7 @@ function extractPlatform(name) {
     return platform;
 }
 
-function formatDuration(totalSeconds) {
+function formatDurationS(totalSeconds) {
     if (totalSeconds >= 3600) {
         const hours = Math.floor(totalSeconds / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -92,7 +92,7 @@ function createScatterPlot(container, platformData, platform, currentRepository,
                     taskId: d.task_id,
                     retryId: d.retry_id,
                     buildType: d.build_type,
-                    durationStr: formatDuration(d.duration_seconds),
+                    durationStr: formatDurationS(d.duration_seconds),
                     date: d.date,
                     repository: d.repository,
                     machineRow: (d.machine_name && d.machine_name.trim() !== '') ? `Machine: ${d.machine_name}<br>` : ''

@@ -386,7 +386,7 @@
         let listObserver = null; // Intersection Observer for list view lazy loading
 
         // Format duration in milliseconds to human readable
-        function formatDuration(ms, hasData = true) {
+        function formatDurationMs(ms, hasData = true) {
             if (!hasData || ms === 0) {
                 return '—';  // Em dash for no data
             }
@@ -452,10 +452,10 @@
                 (stats.passCount > 0 ? stats.totalDuration / stats.passCount : 0);
 
             let html = '';
-            html += generateStatItem('Min', formatDuration(stats.min, hasRuns), '', stats.min > 0 ? 'lazy-tooltip' : '', '', stats.min > 0 ? ` data-test-path="${testPath}" data-tooltip-type="min"` : '');
-            html += generateStatItem('Avg', formatDuration(avgDuration, hasRuns), '', avgDuration > 0 ? 'lazy-tooltip' : '', '', avgDuration > 0 ? ` data-test-path="${testPath}" data-tooltip-type="avg"` : '');
-            html += generateStatItem('Max', formatDuration(stats.max, hasRuns), '', stats.max > 0 ? 'lazy-tooltip' : '', '', stats.max > 0 ? ` data-test-path="${testPath}" data-tooltip-type="max"` : '');
-            html += generateStatItem('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDuration(stats.totalDuration, hasRuns)}`);
+            html += generateStatItem('Min', formatDurationMs(stats.min, hasRuns), '', stats.min > 0 ? 'lazy-tooltip' : '', '', stats.min > 0 ? ` data-test-path="${testPath}" data-tooltip-type="min"` : '');
+            html += generateStatItem('Avg', formatDurationMs(avgDuration, hasRuns), '', avgDuration > 0 ? 'lazy-tooltip' : '', '', avgDuration > 0 ? ` data-test-path="${testPath}" data-tooltip-type="avg"` : '');
+            html += generateStatItem('Max', formatDurationMs(stats.max, hasRuns), '', stats.max > 0 ? 'lazy-tooltip' : '', '', stats.max > 0 ? ` data-test-path="${testPath}" data-tooltip-type="max"` : '');
+            html += generateStatItem('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDurationMs(stats.totalDuration, hasRuns)}`);
 
             const passPercentageClass = stats.passPercentage < 100 && stats.runCount > 0 ? (stats.passPercentage === 0 ? 'fail' : '') : 'zero';
             html += generateStatItem('Pass %', `${stats.passPercentage}%`, passPercentageClass);
@@ -1327,7 +1327,7 @@
 
                 sortedPlatforms.forEach(([platform, data]) => {
                     const value = data[type];
-                    const formattedValue = formatDuration(value, true);
+                    const formattedValue = formatDurationMs(value, true);
                     const percentage = type === 'avg' ? '' : ` (${data.count} run${data.count !== 1 ? 's' : ''})`;
                     content += `<div class="tooltip-platform">`;
                     content += `<span class="tooltip-platform-name">${platform}:</span>`;
@@ -1511,7 +1511,7 @@
                 html += generateStatItem('Tests', formatNumber(totalStats.testCount));
             }
 
-            html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDuration(totalStats.totalDuration, totalStats.runCount > 0)}`);
+            html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDurationMs(totalStats.totalDuration, totalStats.runCount > 0)}`);
 
             const totalPassPercentageClass = totalStats.passPercentage < 100 && totalStats.runCount > 0 ? (totalStats.passPercentage === 0 ? 'fail' : '') : 'zero';
             html += generateStatItem('Pass %', `${totalStats.passPercentage}%`, totalPassPercentageClass);
@@ -1664,7 +1664,7 @@
                 html += `</div>`;
                 html += `<div class="tree-stats">`;
                 html += generateStatItem('Tests', formatNumber(folderStats.testCount));
-                html += generateStatItem('Runs', formatNumber(folderStats.runCount), folderStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDuration(folderStats.totalDuration, folderStats.runCount > 0)}`);
+                html += generateStatItem('Runs', formatNumber(folderStats.runCount), folderStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDurationMs(folderStats.totalDuration, folderStats.runCount > 0)}`);
 
                 const folderPassPercentageClass = folderStats.passPercentage < 100 && folderStats.runCount > 0 ? (folderStats.passPercentage === 0 ? 'fail' : '') : 'zero';
                 html += generateStatItem('Pass %', `${folderStats.passPercentage}%`, folderPassPercentageClass);
@@ -2306,7 +2306,7 @@
                         taskIdString: run.taskIdString,
                         jobName: run.jobName,
                         status: 'TIMEOUT',
-                        durationStr: formatDuration(run.duration),
+                        durationStr: formatDurationMs(run.duration),
                         timestamp: run.timestamp,
                         dateStr: new Date(run.timestamp).toLocaleString()
                     });
@@ -2348,7 +2348,7 @@
                         taskIdString: run.taskIdString,
                         jobName: run.jobName,
                         status: run.status || 'UNKNOWN',
-                        durationStr: formatDuration(run.duration),
+                        durationStr: formatDurationMs(run.duration),
                         timestamp: run.timestamp,
                         dateStr: new Date(run.timestamp).toLocaleString()
                     });
@@ -2482,7 +2482,7 @@
                     jobName: run.jobName,
                     signature: run.crashSignature || 'Unknown',
                     minidump: run.minidump,
-                    durationStr: formatDuration(run.duration),
+                    durationStr: formatDurationMs(run.duration),
                     timestamp: run.timestamp,
                     dateStr: new Date(run.timestamp).toLocaleString()
                 });

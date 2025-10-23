@@ -173,7 +173,7 @@
         let aggregatedData = null;
 
         // Format duration in milliseconds to human readable
-        function formatDuration(ms, hasData = true) {
+        function formatDurationMs(ms, hasData = true) {
             if (!hasData || ms === 0) {
                 return '—';
             }
@@ -303,8 +303,8 @@
 
                 document.getElementById('total-tests').textContent = totalTestJobs.toLocaleString();
                 document.getElementById('total-runs').textContent = totalRuns.toLocaleString();
-                document.getElementById('median-time').textContent = formatDuration(median * 1000);
-                document.getElementById('avg-time').textContent = formatDuration(average * 1000);
+                document.getElementById('median-time').textContent = formatDurationMs(median * 1000);
+                document.getElementById('avg-time').textContent = formatDurationMs(average * 1000);
                 document.getElementById('stats-summary').style.display = 'grid';
             }
 
