@@ -167,6 +167,7 @@
         </div>
     </div>
 
+    <script src="fetch-utils.js"></script>
     <script>
         let currentData = null;
         let aggregatedData = null;
@@ -550,7 +551,7 @@
             document.getElementById('no-data').style.display = 'none';
 
             try {
-                const response = await fetch(`xpcshell-data/xpcshell-${selectedDate}.json`);
+                const response = await fetchData(`xpcshell-${selectedDate}.json`);
                 if (!response.ok) {
                     throw new Error(`Failed to load data: ${response.status}`);
                 }
@@ -581,7 +582,7 @@
         async function init() {
             try {
                 // Populate date selector using index.json
-                const response = await fetch('xpcshell-data/index.json');
+                const response = await fetchData('index.json');
                 const indexData = await response.json();
 
                 const dateSelect = document.getElementById('date-select');

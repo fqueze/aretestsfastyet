@@ -375,6 +375,7 @@
         </div>
     </div>
 
+    <script src="fetch-utils.js"></script>
     <script>
         let currentData = null;
         let aggregatedData = null;
@@ -2603,7 +2604,7 @@
 
             try {
                 const file = `xpcshell-try-${revision}.json`;
-                const response = await fetch(`./xpcshell-data/${file}`);
+                const response = await fetchData(file);
 
                 if (!response.ok) {
                     throw new Error(`Try revision data not found. Run: node fetch-xpcshell-data.js --try ${revision}`);
@@ -2646,7 +2647,7 @@
                 }
 
                 const file = `xpcshell-${dateToLoad}.json`;
-                const response = await fetch(`./xpcshell-data/${file}`);
+                const response = await fetchData(file);
 
                 if (!response.ok) {
                     throw new Error('No data available');
@@ -2700,7 +2701,7 @@
             const select = document.getElementById('date-select');
 
             try {
-                const response = await fetch('./xpcshell-data/index.json');
+                const response = await fetchData('index.json');
                 if (response.ok) {
                     const index = await response.json();
 

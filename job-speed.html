@@ -469,6 +469,7 @@
 
     <div id="histogramTooltip" class="histogram-tooltip"></div>
 
+    <script src="fetch-utils.js"></script>
     <script>
         let currentData = null;
         let sortColumn = null;
@@ -557,7 +558,7 @@
         // Load available dates
         async function loadDates() {
             try {
-                const response = await fetch('xpcshell-data/index.json');
+                const response = await fetchData('index.json');
                 const data = await response.json();
 
                 const selector = document.getElementById('dateSelector');
@@ -600,10 +601,10 @@
                 // Determine if this is a try revision or a date
                 const isTryRevision = dateOrRevision.length === 40; // Try revisions are 40-char hashes
                 const filename = isTryRevision
-                    ? `xpcshell-data/xpcshell-try-${dateOrRevision}.json`
-                    : `xpcshell-data/xpcshell-${dateOrRevision}.json`;
+                    ? `xpcshell-try-${dateOrRevision}.json`
+                    : `xpcshell-${dateOrRevision}.json`;
 
-                const response = await fetch(filename);
+                const response = await fetchData(filename);
                 currentData = await response.json();
 
                 // Update job count display

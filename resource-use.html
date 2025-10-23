@@ -249,6 +249,7 @@
         </tbody>
     </table>
 
+    <script src="fetch-utils.js"></script>
     <script>
         let currentData = null;
         let expandedGroups = new Set();
@@ -300,7 +301,7 @@
         // Load available dates
         async function loadDates() {
             try {
-                const response = await fetch('xpcshell-data/index.json');
+                const response = await fetchData('index.json');
                 const data = await response.json();
 
                 const selector = document.getElementById('dateSelector');
@@ -336,7 +337,7 @@
         // Load resource usage data for a date
         async function loadData(date) {
             try {
-                const response = await fetch(`xpcshell-data/xpcshell-${date}-resources.json`);
+                const response = await fetchData(`xpcshell-${date}-resources.json`);
                 currentData = await response.json();
 
                 // Decompress timestamps
