@@ -1050,9 +1050,14 @@
                 return null; // Not Mozilla code
             }
 
+            // Extract the repository name from the repo URL
+            // e.g., "hg.mozilla.org/releases/mozilla-beta" -> "mozilla-beta"
+            // e.g., "hg.mozilla.org/mozilla-central" -> "mozilla-central"
+            const repoName = fileInfo.repo.split('/').pop();
+
             // Create searchfox direct link to the file at this revision and line
-            // Format: https://searchfox.org/mozilla-central/hgrev/{revision}/{path}#{line}
-            return `https://searchfox.org/mozilla-central/hgrev/${fileInfo.revision}/${fileInfo.path}#${frame.line}`;
+            // Format: https://searchfox.org/{repo}/hgrev/{revision}/{path}#{line}
+            return `https://searchfox.org/${repoName}/hgrev/${fileInfo.revision}/${fileInfo.path}#${frame.line}`;
         }
 
         function getTrustDescription(trust) {
