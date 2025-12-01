@@ -817,6 +817,12 @@
                         run.minidump = statusGroup.minidumps[i];
                     }
 
+                    // Add failure message for FAIL-* statuses
+                    if (status && status.startsWith('FAIL-') && statusGroup.messageIds) {
+                        const messageId = statusGroup.messageIds[i];
+                        run.failureMessage = messageId !== null ? currentData.tables.messages[messageId] : null;
+                    }
+
                     runs.push(run);
                 }
             }
@@ -1273,6 +1279,56 @@
                 .map(([message, count]) => ({ message, count }));
         }
 
+        // Helper to truncate long messages for display in tooltips
+        function truncateMessage(message, maxLength = 100) {
+            if (!message) return '';
+            const firstLine = message.split('\n')[0];
+            if (firstLine.length > maxLength) {
+                return firstLine.substring(0, maxLength) + '...';
+            } else if (message.includes('\n')) {
+                return firstLine + '...';
+            }
+            return firstLine;
+        }
+
+        // Get failure message counts for a test
+        function getFailureMessageCounts(testId) {
+            const messageCounts = new Map();
+
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return [];
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find all FAIL-* status IDs
+            const failStatusIds = currentData.tables.statuses
+                .map((status, idx) => status.startsWith('FAIL-') ? idx : -1)
+                .filter(idx => idx !== -1);
+
+            if (failStatusIds.length === 0) return [];
+
+            // Collect messages from all failure statuses
+            failStatusIds.forEach(statusId => {
+                const statusGroup = testGroup[statusId];
+                if (statusGroup && statusGroup.messageIds) {
+                    statusGroup.messageIds.forEach(messageId => {
+                        if (messageId !== null) {
+                            const message = currentData.tables.messages[messageId];
+                            if (message) {
+                                messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                            }
+                        }
+                    });
+                }
+            });
+
+            // Convert to array and sort by count (descending)
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
         // Get crash data for a test
         function getCrashData(testId) {
             if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
@@ -1370,6 +1426,23 @@
                     skipMessageCounts.forEach(({message, count}) => {
                         content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
                         content += `<span style="font-family: monospace;">${escapeHtml(message)}</span>`;
+                        content += ` <span style="color: #999;">(${count})</span>`;
+                        content += `</div>`;
+                    });
+                    content += `</div>`;
+                }
+            }
+
+            // Add failure messages for failures tooltip
+            if (type === 'failures' && testData && testData.testId !== undefined) {
+                const failureMessageCounts = getFailureMessageCounts(testData.testId);
+                if (failureMessageCounts.length > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #555;">`;
+                    content += `<strong>Failure messages:</strong><br/>`;
+                    failureMessageCounts.forEach(({message, count}) => {
+                        const displayMessage = truncateMessage(message, 100);
+                        content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
+                        content += `<span style="font-family: monospace; word-break: break-word;">${escapeHtml(displayMessage)}</span>`;
                         content += ` <span style="color: #999;">(${count})</span>`;
                         content += `</div>`;
                     });
@@ -2334,6 +2407,7 @@
                             hovertemplate: '<b>%{customdata.jobName}</b><br>' +
                                            'Repository: %{customdata.repository}<br>' +
                                            'Status: %{customdata.status}<br>' +
+                                           (isFail ? '%{customdata.details}<br>' : '') +
                                            'Duration: %{customdata.durationStr}<br>' +
                                            'Date: %{customdata.dateStr}<br>' +
                                            '<i>Click to view profile</i><br>' +
@@ -2343,11 +2417,23 @@
 
                     traces[traceKey].x.push(new Date(run.timestamp));
                     traces[traceKey].y.push(run.duration / 1000); // Convert to seconds
+
+                    // Build details string for failures (crash signature or failure message)
+                    let details = '';
+                    if (isFail) {
+                        if (run.crashSignature) {
+                            details = `Crash: ${run.crashSignature}`;
+                        } else if (run.failureMessage) {
+                            details = `Message: ${truncateMessage(run.failureMessage, 80)}`;
+                        }
+                    }
+
                     traces[traceKey].customdata.push({
                         repository: run.repository,
                         taskIdString: run.taskIdString,
                         jobName: run.jobName,
                         status: run.status || 'UNKNOWN',
+                        details: details,
                         durationStr: formatDurationMs(run.duration),
                         timestamp: run.timestamp,
                         dateStr: new Date(run.timestamp).toLocaleString()
