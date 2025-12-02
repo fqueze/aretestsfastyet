@@ -655,7 +655,21 @@
 
                 // Add counts for this status group
                 if (isSkip) {
-                    skipCount += runCount;
+                    // Only count as skip if the message doesn't start with "run-if"
+                    // (run-if indicates platform-specific tests, not actual skips due to broken tests)
+                    if (statusGroup.messageIds) {
+                        for (const messageId of statusGroup.messageIds) {
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            // Count as skip if there's no message or if it doesn't start with run-if
+                            if (!message || !message.startsWith('run-if')) {
+                                skipCount++;
+                            }
+                            // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
+                        }
+                    } else {
+                        // If there are no message IDs, count all as skips
+                        skipCount += runCount;
+                    }
                 } else if (status === 'TIMEOUT-PARALLEL') {
                     timeoutCount += runCount;
                     parallelTimeoutCount += runCount;
@@ -1185,6 +1199,11 @@
                         const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
 
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            // Skip run-if annotations early (platform-irrelevant tests)
+                            if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
+                                continue; // Don't count run-if skips at all
+                            }
+
                             const taskIdIndex = statusGroup.taskIdIds[i];
                             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
                             const platform = extractPlatform(jobName) || 'unknown';
@@ -1217,6 +1236,11 @@
             } else if (testData.runs) {
                 // Fall back to runs if raw data is no longer available
                 testData.runs.forEach(run => {
+                    // Skip run-if annotations (platform-irrelevant tests)
+                    if (run.isSkip && run.message?.startsWith('run-if')) {
+                        return; // Don't count run-if skips at all
+                    }
+
                     const platform = extractPlatform(run.jobName) || 'unknown';
                     if (!platforms[platform]) {
                         platforms[platform] = {
@@ -1281,7 +1305,7 @@
             return platforms;
         }
 
-        // Get skip message counts for a test
+        // Get skip message counts for a test (excluding run-if annotations)
         function getSkipMessageCounts(testId) {
             const messageCounts = new Map();
             if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
@@ -1297,11 +1321,12 @@
             const statusGroup = testGroup[skipStatusId];
             if (!statusGroup || !statusGroup.messageIds) return [];
 
-            // Count messages
+            // Count messages, excluding run-if (platform-specific tests that are irrelevant)
             statusGroup.messageIds.forEach(messageId => {
                 if (messageId !== null) {
                     const message = currentData.tables.messages[messageId];
-                    if (message) {
+                    // Only include skip-if and other skip annotations, not run-if
+                    if (message && !message.startsWith('run-if')) {
                         messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
                     }
                 }
@@ -1458,8 +1483,10 @@
                     content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #555;">`;
                     content += `<strong>Skip reasons:</strong><br/>`;
                     skipMessageCounts.forEach(({message, count}) => {
+                        // Remove "skip-if:" prefix and following whitespace
+                        const displayMessage = message.replace(/^skip-if:\s*/, '');
                         content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
-                        content += `<span style="font-family: monospace;">${escapeHtml(message)}</span>`;
+                        content += `<span style="font-family: monospace;">${escapeHtml(displayMessage)}</span>`;
                         content += ` <span style="color: #999;">(${count})</span>`;
                         content += `</div>`;
                     });
@@ -2043,13 +2070,13 @@
                         };
                     }));
 
-                    // Render tests in this component (only tests not passing 100%)
+                    // Render tests in this component (only tests not passing 100% or with skips)
                     sortedTests.forEach(test => {
                         const testData = aggregatedData[test.testPath];
                         const hasRuns = test.stats.runCount > 0;
 
-                        // Skip tests that are passing 100%
-                        if (test.stats.passPercentage === 100 && test.stats.runCount > 0) {
+                        // Skip tests that are passing 100%, unless they have been skipped at least once (skip-if, not run-if)
+                        if (test.stats.passPercentage === 100 && test.stats.runCount > 0 && (test.stats.skipCount || 0) === 0) {
                             return;
                         }
 
