@@ -354,9 +354,18 @@
                 <span id="status-text" class="status-text">Loading data...</span>
             </div>
             <div class="date-selector">
+                <label>Show as</label>
+                <label id="components-view-label">
+                    <input id="view-components" type="radio" name="view-mode" value="components" onchange="changeView()" checked>
+                    bugzilla components
+                </label>
                 <label>
-                    <input type="checkbox" id="list-view" onchange="changeView()">
-                    Show as list
+                    <input id="view-tree" type="radio" name="view-mode" value="tree" onchange="changeView()">
+                    source tree
+                </label>
+                <label>
+                    <input id="view-list" type="radio" name="view-mode" value="list" onchange="changeView()">
+                    list
                 </label>
             </div>
             <div class="search-container">
@@ -530,15 +539,35 @@
         }
 
         // URL hash management
+        // Helper to check if component data is available
+        function hasComponentData() {
+            return currentData && currentData.testInfo && currentData.testInfo.componentIds && currentData.tables && currentData.tables.components;
+        }
+
+        // Helper to get current view mode
+        function getCurrentView() {
+            if (document.getElementById('view-components').checked) {
+                // If components is selected but no component data, fall back to tree
+                return hasComponentData() ? 'components' : 'tree';
+            } else if (document.getElementById('view-tree').checked) {
+                return 'tree';
+            } else if (document.getElementById('view-list').checked) {
+                return 'list';
+            }
+            // Default: components if available, otherwise tree
+            return hasComponentData() ? 'components' : 'tree';
+        }
+
         function updateUrlHash() {
             const date = document.getElementById('date-select').value;
             const search = document.getElementById('search-box').value.trim();
-            const listView = document.getElementById('list-view').checked;
+            const view = getCurrentView();
 
             const params = new URLSearchParams();
             if (date) params.set('date', date);
             if (search) params.set('q', search);
-            if (listView) params.set('view', 'list');
+            // Only add view to URL if not the default
+            if (view !== 'components') params.set('view', view);
 
             const hash = params.toString();
             if (hash) {
@@ -567,8 +596,13 @@
                 const testName = currentData.tables.testNames[currentData.testInfo.testNameIds[testId]];
                 const fullPath = testPath ? `${testPath}/${testName}` : testName;
 
+                // Get component if available
+                const componentId = currentData.testInfo.componentIds ? currentData.testInfo.componentIds[testId] : null;
+                const component = (componentId !== null && currentData.tables.components) ? currentData.tables.components[componentId] : null;
+
                 testEntries[fullPath] = {
-                    testId: testId
+                    testId: testId,
+                    component: component
                 };
             }
 
@@ -986,10 +1020,10 @@
                 </div>`;
             };
 
-            // Check if we're in list view or if we have tests to show appropriate headers
-            const listViewCheckbox = document.getElementById('list-view');
-            const isListView = listViewCheckbox && listViewCheckbox.checked;
-            const hasTests = isListView || (treeData && Object.values(treeData.children).some(folder => Object.keys(folder.tests).length > 0));
+            // Check if we're in list/components view or if we have tests to show appropriate headers
+            const view = getCurrentView();
+            const isListLike = view === 'list' || view === 'components';
+            const hasTests = isListLike || (treeData && Object.values(treeData.children).some(folder => Object.keys(folder.tests).length > 0));
 
             // Special button for Path (left-aligned)
             const getPathButton = (field, label) => {
@@ -1779,7 +1813,9 @@
                 html += `<div class="tree-name">`;
                 html += `<span class="tree-indent" style="width: ${level * 20}px"></span>`;
                 html += `<span class="test-icon"></span>`;
-                html += `${testName}`;
+                const component = test.data.component;
+                const componentTitle = component ? ` title="Component: ${escapeHtml(component)}"` : '';
+                html += `<span${componentTitle}>${testName}</span>`;
                 html += generateTestButtons(testPath);
                 html += `</div>`;
                 html += `<div class="tree-stats">`;
@@ -1797,40 +1833,9 @@
             return html;
         }
 
-        // Render list view of all tests
-        function renderListView() {
-            if (!aggregatedData) {
-                document.getElementById('no-data').style.display = 'block';
-                document.getElementById('tree-container').style.display = 'none';
-                return;
-            }
-
-            hideError();
-            document.getElementById('tree-container').style.display = 'block';
-
-            // Get search term for filtering
-            const searchTerm = document.getElementById('search-box').value.toLowerCase().trim();
-
-            // Convert aggregated data to array and calculate metrics
-            let testList = Object.entries(aggregatedData).map(([testPath, testData]) => {
-                const stats = testData.stats;
-                const avgDuration = stats.passCount > 0 ? stats.totalDuration / stats.passCount : 0;
-                const totalFailures = stats.failCount + stats.timeoutCount; // Count timeouts as failures
-                return {
-                    testPath,
-                    stats,
-                    avgDuration,
-                    totalFailures
-                };
-            }).filter(test => test.stats.runCount > 0 || test.stats.skipCount > 0); // Include tests with runs or skips
-
-            // Apply search filtering if search term exists
-            if (searchTerm) {
-                testList = testList.filter(test => test.testPath.toLowerCase().includes(searchTerm));
-            }
-
-            // Apply sorting based on current sortField and sortDirection
-            testList.sort((a, b) => {
+        // Sort test list based on current sortField and sortDirection
+        function sortTestList(testList) {
+            return testList.sort((a, b) => {
                 let valueA, valueB;
 
                 switch(sortField) {
@@ -1883,6 +1888,253 @@
 
                 return sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
             });
+        }
+
+        // Render components view - tests grouped by bugzilla component
+        function renderComponentsView() {
+            if (!aggregatedData) {
+                document.getElementById('no-data').style.display = 'block';
+                document.getElementById('tree-container').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('no-data').style.display = 'none';
+            document.getElementById('tree-container').style.display = 'block';
+
+            const searchTerm = document.getElementById('search-box').value.toLowerCase().trim();
+
+            // Group tests by component
+            const componentGroups = {};
+            const testsWithoutComponent = [];
+
+            for (const testPath in aggregatedData) {
+                const testData = aggregatedData[testPath];
+                if (searchTerm && !testPath.toLowerCase().includes(searchTerm)) {
+                    continue;
+                }
+
+                const component = testData.component || '(no component)';
+                if (!componentGroups[component]) {
+                    componentGroups[component] = {
+                        tests: [],
+                        failedTestCount: 0,
+                        totalStats: {
+                            runCount: 0,
+                            failCount: 0,
+                            timeoutCount: 0,
+                            skipCount: 0,
+                            passCount: 0
+                        }
+                    };
+                }
+
+                componentGroups[component].tests.push({ testPath, data: testData });
+
+                // Accumulate stats
+                const stats = testData.stats || computeTestStats(testData.testId);
+                componentGroups[component].totalStats.runCount += stats.runCount || 0;
+                componentGroups[component].totalStats.failCount += stats.failCount || 0;
+                componentGroups[component].totalStats.timeoutCount += stats.timeoutCount || 0;
+                componentGroups[component].totalStats.skipCount += stats.skipCount || 0;
+                componentGroups[component].totalStats.passCount += stats.passCount || 0;
+
+                // Count tests with failures or timeouts
+                if ((stats.failCount || 0) > 0 || (stats.timeoutCount || 0) > 0) {
+                    componentGroups[component].failedTestCount++;
+                }
+            }
+
+            // Sort components based on current sortField and sortDirection
+            const sortedComponents = Object.entries(componentGroups).sort(([nameA, groupA], [nameB, groupB]) => {
+                let valueA, valueB;
+
+                switch(sortField) {
+                    case 'name':
+                        valueA = nameA;
+                        valueB = nameB;
+                        break;
+                    case 'runCount':
+                        valueA = groupA.totalStats.runCount || 0;
+                        valueB = groupB.totalStats.runCount || 0;
+                        break;
+                    case 'passPercentage':
+                        const passPercentageA = groupA.totalStats.runCount > 0
+                            ? Math.round((groupA.totalStats.passCount / groupA.totalStats.runCount) * 100)
+                            : 0;
+                        const passPercentageB = groupB.totalStats.runCount > 0
+                            ? Math.round((groupB.totalStats.passCount / groupB.totalStats.runCount) * 100)
+                            : 0;
+                        valueA = passPercentageA;
+                        valueB = passPercentageB;
+                        break;
+                    case 'skipCount':
+                        valueA = groupA.totalStats.skipCount || 0;
+                        valueB = groupB.totalStats.skipCount || 0;
+                        break;
+                    case 'failCount':
+                        valueA = groupA.totalStats.failCount || 0;
+                        valueB = groupB.totalStats.failCount || 0;
+                        break;
+                    case 'timeoutCount':
+                        valueA = groupA.totalStats.timeoutCount || 0;
+                        valueB = groupB.totalStats.timeoutCount || 0;
+                        break;
+                    default:
+                        // Default sort by total failures (failCount + timeoutCount)
+                        valueA = (groupA.totalStats.failCount || 0) + (groupA.totalStats.timeoutCount || 0);
+                        valueB = (groupB.totalStats.failCount || 0) + (groupB.totalStats.timeoutCount || 0);
+                        break;
+                }
+
+                if (sortField === 'name') {
+                    return sortDirection === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
+                }
+
+                return sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
+            });
+
+            // Generate HTML
+            let html = '<div class="tree-table">';
+            html += buildSortHeader();
+
+            // Render each component group
+            sortedComponents.forEach(([componentName, group]) => {
+                const isExpanded = expandedRows.has(componentName);
+
+                // Component header row
+                html += `<div class="tree-row folder-row" data-path="${escapeHtml(componentName)}">`;
+                html += `<div class="tree-name">`;
+                html += `<span class="folder-icon ${isExpanded ? 'expanded' : ''}"></span>`;
+                html += `<strong>${escapeHtml(componentName)}</strong>`;
+                if (group.failedTestCount > 0) {
+                    html += ` <span style="color: #888;">(${group.failedTestCount} test${group.failedTestCount !== 1 ? 's' : ''} failed, out of ${group.tests.length})</span>`;
+                } else {
+                    html += ` <span style="color: #888;">(${group.tests.length} test${group.tests.length !== 1 ? 's' : ''})</span>`;
+                }
+                html += `</div>`;
+                html += `<div class="tree-stats">`;
+
+                // Show aggregate stats for component
+                const totalStats = group.totalStats;
+                const passPercentage = totalStats.runCount > 0
+                    ? Math.round((totalStats.passCount / totalStats.runCount) * 100)
+                    : 0;
+
+                html += generateStatItem('Runs', formatNumber(totalStats.runCount));
+                html += generateStatItem('Pass %', `${passPercentage}%`, passPercentage < 100 && totalStats.runCount > 0 ? (passPercentage === 0 ? 'fail' : '') : 'zero');
+                html += generateStatItem('Skips', formatNumber(totalStats.skipCount), 'skip');
+                html += generateStatItem('Failures', formatNumber(totalStats.failCount), totalStats.failCount > 0 ? 'fail' : 'zero');
+                html += generateStatItem('Timeouts', formatNumber(totalStats.timeoutCount), totalStats.timeoutCount > 0 ? 'timeout' : 'zero');
+
+                html += `</div>`;
+                html += `</div>`;
+
+                // Only render tests if component is expanded
+                if (isExpanded) {
+                    // Sort tests within component by current sort order
+                    const sortedTests = sortTestList(group.tests.map(t => {
+                        const stats = t.data.stats || computeTestStats(t.data.testId);
+                        const totalFailures = (stats.failCount || 0) + (stats.timeoutCount || 0);
+                        return {
+                            testPath: t.testPath,
+                            stats: stats,
+                            avgDuration: stats.avgDuration,
+                            totalFailures: totalFailures
+                        };
+                    }));
+
+                    // Render tests in this component (only tests not passing 100%)
+                    sortedTests.forEach(test => {
+                        const testData = aggregatedData[test.testPath];
+                        const hasRuns = test.stats.runCount > 0;
+
+                        // Skip tests that are passing 100%
+                        if (test.stats.passPercentage === 100 && test.stats.runCount > 0) {
+                            return;
+                        }
+
+                        const hasChart = chartRows.has(test.testPath);
+                        const componentTitle = testData.component ? ` title="Component: ${escapeHtml(testData.component)}"` : '';
+
+                        html += `<div class="tree-row test-row list-row" data-path="${test.testPath}" data-level="1">`;
+                        html += `<div class="tree-name">`;
+                        html += `<span class="tree-indent" style="width: 20px"></span>`;
+                        html += `<span class="test-icon"></span>`;
+                        html += `<span${componentTitle}>${test.testPath}</span>`;
+                        html += generateTestButtons(test.testPath);
+                        html += `</div>`;
+                        html += `<div class="tree-stats">`;
+                        html += generateStatsHtml(test.stats, test.testPath, hasRuns);
+                        html += `</div>`;
+                        html += `</div>`;
+
+                        if (hasChart) {
+                            html += generateChartHtml(test.testPath);
+                        }
+                    });
+                }
+            });
+
+            html += '</div>';
+
+            document.getElementById('tree-table').innerHTML = html;
+
+            // Add click handlers for folder rows (component headers)
+            document.querySelectorAll('.folder-row').forEach(row => {
+                row.addEventListener('click', () => toggleFolder(row));
+            });
+
+            // Add click handlers for test rows
+            document.querySelectorAll('.test-row').forEach(row => {
+                row.addEventListener('click', () => toggleTestChart(row));
+            });
+
+            // Re-render any open charts
+            chartRows.forEach(testPath => {
+                renderChart(testPath);
+            });
+
+            // Add tooltip handlers
+            document.querySelectorAll('.lazy-tooltip').forEach(element => {
+                element.addEventListener('mouseenter', handleTooltipMouseEnter);
+                element.addEventListener('mouseleave', handleTooltipMouseLeave);
+            });
+        }
+
+        // Render list view of all tests
+        function renderListView() {
+            if (!aggregatedData) {
+                document.getElementById('no-data').style.display = 'block';
+                document.getElementById('tree-container').style.display = 'none';
+                return;
+            }
+
+            hideError();
+            document.getElementById('tree-container').style.display = 'block';
+
+            // Get search term for filtering
+            const searchTerm = document.getElementById('search-box').value.toLowerCase().trim();
+
+            // Convert aggregated data to array and calculate metrics
+            let testList = Object.entries(aggregatedData).map(([testPath, testData]) => {
+                const stats = testData.stats;
+                const avgDuration = stats.passCount > 0 ? stats.totalDuration / stats.passCount : 0;
+                const totalFailures = stats.failCount + stats.timeoutCount; // Count timeouts as failures
+                return {
+                    testPath,
+                    stats,
+                    avgDuration,
+                    totalFailures
+                };
+            }).filter(test => test.stats.runCount > 0 || test.stats.skipCount > 0); // Include tests with runs or skips
+
+            // Apply search filtering if search term exists
+            if (searchTerm) {
+                testList = testList.filter(test => test.testPath.toLowerCase().includes(searchTerm));
+            }
+
+            // Apply sorting using shared function
+            testList = sortTestList(testList);
 
             let html = '<div class="tree-table">';
             html += buildSortHeader();
@@ -1903,9 +2155,12 @@
                 if (shouldPreRender) {
                     // Render immediately for visible rows
                     const hasRuns = test.stats.runCount > 0;
+                    const testData = aggregatedData[test.testPath];
+                    const component = testData?.component;
+                    const componentTitle = component ? ` title="Component: ${escapeHtml(component)}"` : '';
                     html += `<div class="tree-name">`;
                     html += `<span class="test-icon"></span>`;
-                    html += test.testPath;
+                    html += `<span${componentTitle}>${test.testPath}</span>`;
                     html += generateTestButtons(test.testPath);
                     html += `</div>`;
                     html += `<div class="tree-stats">`;
@@ -1981,12 +2236,15 @@
         // Render content for a specific list row
         function renderListRowContent(row, test) {
             const hasRuns = test.stats.runCount > 0;
+            const testData = aggregatedData[test.testPath];
+            const component = testData?.component;
+            const componentTitle = component ? ` title="Component: ${escapeHtml(component)}"` : '';
 
             // Update the tree-name content
             const treeName = row.querySelector('.tree-name');
             treeName.innerHTML = `
                 <span class="test-icon"></span>
-                ${test.testPath}
+                <span${componentTitle}>${test.testPath}</span>
                 ${generateTestButtons(test.testPath)}
             `;
 
@@ -2194,10 +2452,10 @@
                 chartRows.add(path);
             }
 
-            // Check if we're in list view
-            const listViewCheckbox = document.getElementById('list-view');
-            if (listViewCheckbox && listViewCheckbox.checked) {
-                // In list view, toggle chart without full re-render
+            // Check if we're in list/components view
+            const view = getCurrentView();
+            if (view === 'list' || view === 'components') {
+                // In list/components view, toggle chart without full re-render
                 toggleListViewChart(row, path);
             } else {
                 // In tree view, do full re-render
@@ -2651,30 +2909,33 @@
             }
         }
 
-        // Change view based on checkbox
+        // Change view based on radio buttons
         function changeView() {
-            const listViewCheckbox = document.getElementById('list-view');
-            const isListView = listViewCheckbox.checked;
+            const view = getCurrentView();
 
             // Update URL hash to reflect view change
             updateUrlHash();
 
-            if (isListView) {
+            if (view === 'list') {
                 renderListView();
-            } else {
+            } else if (view === 'tree') {
                 renderTree();
+            } else {
+                renderComponentsView();
             }
         }
 
-        // Apply filtering to current view (tree or list)
+        // Apply filtering to current view
         function applyFiltering() {
-            const listViewCheckbox = document.getElementById('list-view');
-            const isListView = listViewCheckbox.checked;
+            const view = getCurrentView();
             const searchTerm = document.getElementById('search-box').value.toLowerCase().trim();
 
-            if (isListView) {
+            if (view === 'list') {
                 // List view filtering - re-render with filtered data
                 renderListView();
+            } else if (view === 'components') {
+                // Components view filtering - re-render with filtered data
+                renderComponentsView();
             } else {
                 // Tree view filtering
                 if (!searchTerm) {
@@ -2754,6 +3015,19 @@
                 }
 
                 currentData = await response.json();
+
+                // Show/hide components view radio based on data availability
+                const componentsLabel = document.getElementById('components-view-label');
+                if (hasComponentData()) {
+                    componentsLabel.style.display = '';
+                } else {
+                    componentsLabel.style.display = 'none';
+                    // If components was selected, switch to tree
+                    const componentsRadio = document.getElementById('view-components');
+                    if (componentsRadio.checked) {
+                        document.getElementById('view-tree').checked = true;
+                    }
+                }
 
                 // Process raw data to create test entries and tree structure
                 aggregatedData = createTestEntries();
@@ -2836,11 +3110,10 @@
                                 updateClearButton();
                             }
 
-                            // Restore list view state
-                            const view = params.get('view');
-                            if (view === 'list') {
-                                document.getElementById('list-view').checked = true;
-                            }
+                            // Restore view selection (default to 'components' if not in hash)
+                            const view = params.get('view') || 'components';
+                            const radio = document.querySelector(`input[name="view-mode"][value="${view}"]`);
+                            if (radio) radio.checked = true;
                         }
                     } else {
                         // No dates available
@@ -2934,9 +3207,11 @@
                     updateClearButton();
                 }
 
-                // Restore view selection (or clear if not in hash)
-                const view = params.get('view');
-                document.getElementById('list-view').checked = view === 'list';
+                // Restore view selection
+                const availableViews = hasComponentData() ? ['components', 'tree', 'list'] : ['tree', 'list'];
+                const requestedView = params.get('view');
+                const view = availableViews.includes(requestedView) ? requestedView : availableViews[0];
+                document.getElementById(`view-${view}`).checked = true;
             }
 
             // URL hash will be loaded after the date index is fetched
