@@ -1,0 +1,2823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Issues</title>
+    <script src="fetch-utils.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .tree-table {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .tree-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            min-height: 28px; /* Ensure consistent height even when empty */
+        }
+
+        .tree-row:hover {
+            background-color: #f5f5f5;
+        }
+
+        .tree-row.expanded {
+            background-color: #f0f8ff;
+        }
+
+        .tree-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .tree-stats {
+            display: flex;
+            gap: 30px;
+            font-size: 13px;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            text-align: right;
+            min-width: 60px;
+        }
+
+        /* Reduce opacity for zero-valued stats that are hideable */
+        .stat-item.hideable-zero {
+            opacity: 0.15;
+            transition: opacity 0.2s ease;
+        }
+
+        /* Show all stats on row hover */
+        .tree-row:hover .stat-item.hideable-zero {
+            opacity: 1;
+        }
+
+        /* Non-clickable rows (components with no issues) shouldn't show pointer cursor */
+        .tree-row.non-clickable {
+            cursor: default;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-value.fail {
+            color: #d00;
+        }
+
+        .stat-value.orange {
+            color: #ff8c00;
+        }
+
+        .stat-value.yellow {
+            color: #c9a500;
+        }
+
+        .stat-value.skip, .stat-value.zero {
+            color: #888;
+        }
+
+        .stat-value.timeout {
+            color: #f60;
+        }
+
+        .folder-icon, .test-icon {
+            margin-right: 5px;
+        }
+
+        .folder-icon::before {
+            content: "🧩 ";
+        }
+
+        .test-icon::before {
+            content: "📄 ";
+        }
+
+        .tree-indent {
+            display: inline-block;
+            width: 20px;
+        }
+
+        .chart-expansion {
+            padding: 20px;
+            background: #f9f9f9;
+            border-top: 1px solid #ddd;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            gap: 20px;
+        }
+
+        .search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .search-box {
+            padding: 8px 30px 8px 12px;
+            width: 300px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #999;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-clear:hover {
+            color: #666;
+        }
+
+        .date-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+            margin: 0;
+            padding: 0;
+            vertical-align: baseline;
+        }
+
+        .explanation {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px 20px;
+            margin: 15px 0;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .explanation strong {
+            color: #000;
+        }
+
+        .explanation ul {
+            margin: 8px 0;
+            padding-left: 25px;
+        }
+
+        .explanation li {
+            margin: 4px 0;
+        }
+
+        .explanation code {
+            background-color: #e9ecef;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .sort-header {
+            background: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .sort-header .tree-stats {
+            gap: 30px; /* Match the gap from regular tree-stats */
+        }
+
+        .sort-header .tree-name {
+            color: #666;
+        }
+
+        .sort-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 10px;
+            margin: 0 -10px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            text-align: right;
+            width: 100%;
+            white-space: nowrap;
+        }
+
+        .sort-button:hover {
+            background-color: #e9ecef;
+        }
+
+        .sort-button.active {
+            color: #007bff;
+            background-color: #e7f3ff;
+        }
+
+        .sort-arrow {
+            font-size: 10px;
+            margin-right: 2px;
+            width: 8px;
+            display: inline-block;
+            text-align: left;
+        }
+
+        .tooltip {
+            position: relative;
+            cursor: help;
+        }
+
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 200px;
+            background-color: #2a2a2a;
+            color: white;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            right: 0;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            line-height: 1.4;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .tooltip .tooltiptext::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            right: 20px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #2a2a2a transparent transparent transparent;
+        }
+
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .tooltip-platform {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 0;
+        }
+
+        .tooltip-platform-name {
+            font-weight: bold;
+        }
+
+        .total-row {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            font-weight: bold;
+        }
+
+        .total-row:hover {
+            background-color: #f8f9fa;
+        }
+
+        .total-row .tree-name {
+            color: #495057;
+        }
+
+        .lazy-row .loading {
+            color: #999;
+            font-style: italic;
+        }
+
+        .dynamic-tooltip {
+            position: absolute;
+            background: #333;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            z-index: 1000;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 6px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .tree-row:hover .action-button,
+        .folder-row:hover .action-button {
+            opacity: 1;
+        }
+
+        .action-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .action-button:active {
+            background-color: #007bff;
+            color: white;
+        }
+
+        /* Issue details styles */
+        .issue-details-row {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #eee;
+            padding: 15px 20px;
+        }
+
+        .issue-details-content {
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .issue-section {
+            margin-bottom: 20px;
+        }
+
+        .issue-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .issue-section h4 {
+            margin: 0 0 10px 0;
+            font-size: 13px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .issue-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .issue-item:hover {
+            background-color: #e9ecef;
+        }
+
+        .issue-item:last-child {
+            border-bottom: none;
+        }
+
+        .issue-runs {
+            margin-left: 50px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .issue-run-item {
+            padding: 3px 0;
+        }
+
+        .issue-run-item a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .issue-run-item a:hover {
+            text-decoration: underline;
+        }
+
+        .issue-count {
+            font-weight: bold;
+            margin-right: 10px;
+            min-width: 30px;
+            text-align: right;
+            flex-shrink: 0;
+            color: #333;
+        }
+
+        .issue-badge {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-right: 10px;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+
+        .badge-skip {
+            background-color: #ffc107;
+            color: #000;
+        }
+
+        .badge-fail {
+            background-color: #ff8c00;
+            color: #fff;
+        }
+
+        .badge-crash {
+            background-color: #dc3545;
+            color: #fff;
+        }
+
+        .badge-timeout {
+            background-color: #ffc107;
+            color: #000;
+        }
+
+        .issue-message {
+            flex: 1;
+            color: #333;
+            line-height: 1.4;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Issues</h1>
+
+        <div class="controls">
+            <div class="date-selector">
+                <label for="date-select">Select Date: </label>
+                <select id="date-select" onchange="loadData()">
+                </select>
+                <span id="status-text" class="status-text">Loading data...</span>
+            </div>
+            <div class="search-container">
+                <input type="text" class="search-box" id="search-box" placeholder="Search for test paths or components...">
+                <button class="search-clear" id="search-clear" title="Clear search">×</button>
+            </div>
+        </div>
+
+        <div class="explanation">
+            <strong>Issues</strong> include:
+            <ul>
+                <li><strong>Failures:</strong> Tests that ran but failed</li>
+                <li><strong>Timeouts:</strong> Tests that exceeded their time limit and didn't finish</li>
+                <li><strong>Crashes:</strong> Tests that caused a process to crash</li>
+                <li><strong>Skips (<code>skip-if</code>):</strong> Tests that didn't run because they are known to be unreliable on some platforms or configurations.<br><strong>Note:</strong> Tests annotated with <code>run-if</code> are explicitly platform-specific and are not considered issues when they don't run on other platforms.</li>
+            </ul>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="tree-container" style="display: none;">
+            <div class="tree-table" id="tree-table"></div>
+        </div>
+
+        <div id="no-data" class="no-data" style="display: none;">
+            No data available. Click "Fetch New Data" to fetch xpcshell test data.
+        </div>
+    </div>
+
+    <script>
+        let currentData = null;
+        let aggregatedData = null;
+        let treeData = null;
+        let expandedRows = new Set();
+        let sortField = 'issueCount';
+        let sortDirection = 'desc'; // Start with descending for failure count (most failing first)
+        let isNavigating = false; // Flag to prevent hash updates during navigation
+        let listObserver = null; // Intersection Observer for list view lazy loading
+
+        // Format duration in milliseconds to human readable
+        function formatDurationMs(ms, hasData = true) {
+            if (!hasData || ms === 0) {
+                return '—';  // Em dash for no data
+            }
+            if (ms < 1000) {
+                return `${Math.round(ms)}ms`;
+            } else if (ms < 60000) {
+                return `${(ms / 1000).toFixed(1)}s`;
+            } else if (ms < 3600000) {  // Less than 1 hour
+                const minutes = Math.floor(ms / 60000);
+                const seconds = Math.floor((ms % 60000) / 1000);
+                if (seconds === 0) {
+                    return `${minutes}m`;
+                }
+                return `${minutes}m ${seconds}s`;
+            } else if (ms < 86400000) {  // Less than 1 day
+                const hours = Math.floor(ms / 3600000);
+                const minutes = Math.floor((ms % 3600000) / 60000);
+                if (minutes === 0) {
+                    return `${hours}h`;
+                }
+                return `${hours}h ${minutes}m`;
+            } else {  // Days
+                const days = Math.floor(ms / 86400000);
+                const hours = Math.floor((ms % 86400000) / 3600000);
+                if (hours === 0) {
+                    return `${days}d`;
+                }
+                return `${days}d ${hours}h`;
+            }
+        }
+
+
+        // Format numbers with thousand separators
+        function formatNumber(num) {
+            return num.toLocaleString();
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Get CSS class and display value for issue percentage
+        function getIssuePercentageDisplay(issueCount, totalCount) {
+            if (totalCount === 0) {
+                return { displayValue: '0%', cssClass: 'zero' };
+            }
+
+            const exactPercentage = (issueCount / totalCount) * 100;
+
+            if (exactPercentage === 0) {
+                return { displayValue: '0%', cssClass: 'zero' };
+            } else if (exactPercentage < 1) {
+                return { displayValue: '<1%', cssClass: '' }; // Black (no special class)
+            } else {
+                const roundedPercentage = Math.round(exactPercentage);
+                let cssClass;
+                if (roundedPercentage >= 20) {
+                    cssClass = 'fail'; // Red
+                } else if (roundedPercentage >= 10) {
+                    cssClass = 'orange';
+                } else if (roundedPercentage > 1) {
+                    cssClass = 'yellow';
+                } else {
+                    cssClass = ''; // Black (shouldn't reach here, but just in case)
+                }
+                return { displayValue: `${roundedPercentage}%`, cssClass };
+            }
+        }
+
+        // Generate individual stat item HTML
+        function generateStatItem(label, value, valueCssClass = '', containerClass = '', title = '', extraAttrs = '') {
+            const titleAttr = title ? ` title="${title}"` : '';
+            const containerClassAttr = containerClass ? ` class="stat-item ${containerClass}"` : ' class="stat-item"';
+            const valueClassAttr = valueCssClass ? ` class="stat-value ${valueCssClass}"` : ' class="stat-value"';
+            return `<div${containerClassAttr}${titleAttr}${extraAttrs}><span class="stat-label">${label}</span><span${valueClassAttr}>${value}</span></div>`;
+        }
+
+        // Generate stats HTML for a test (shared between tree and list views)
+        function generateStatsHtml(stats, testPath, hasRuns) {
+            let html = '';
+            html += generateStatItem('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'fail' : '');
+
+            const issuePercentageDisplay = getIssuePercentageDisplay(stats.issueCount, stats.runCount + stats.skipCount);
+            html += generateStatItem('Issue %', issuePercentageDisplay.displayValue, issuePercentageDisplay.cssClass);
+
+            const issueClass = stats.issueCount > 0 ? 'fail' : 'zero';
+            const issueContainerClass = stats.issueCount === 0 ? 'hideable-zero' : '';
+            html += generateStatItem('Issues', formatNumber(stats.issueCount), issueClass, issueContainerClass);
+
+            const skipContainerClass = stats.skipCount === 0 ? 'hideable-zero' : (stats.skipCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Skips', formatNumber(stats.skipCount), 'skip', skipContainerClass, '', stats.skipCount > 0 ? ` data-test-path="${testPath}" data-tooltip-type="skips"` : '');
+
+            const failClass = stats.failCount > 0 ? 'fail' : 'zero';
+            const failContainerClass = stats.failCount === 0 ? 'hideable-zero' : (stats.failCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Failures', formatNumber(stats.failCount), failClass, failContainerClass, '', stats.failCount > 0 ? ` data-test-path="${testPath}" data-tooltip-type="failures"` : '');
+
+            const timeoutClass = stats.timeoutCount > 0 ? 'timeout' : 'zero';
+            const timeoutContainerClass = stats.timeoutCount === 0 ? 'hideable-zero' : (stats.timeoutCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Timeouts', formatNumber(stats.timeoutCount), timeoutClass, timeoutContainerClass, '', stats.timeoutCount > 0 ? ` data-test-path="${testPath}" data-tooltip-type="timeouts"` : '');
+
+            const crashClass = stats.crashCount > 0 ? 'fail' : 'zero';
+            const crashContainerClass = stats.crashCount === 0 ? 'hideable-zero' : '';
+            html += generateStatItem('Crashes', formatNumber(stats.crashCount), crashClass, crashContainerClass, '', stats.crashCount > 0 ? ` data-test-path="${testPath}" data-tooltip-type="crashes"` : '');
+
+            return html;
+        }
+
+        // Generate copy button for test paths
+        function generateCopyButton(testPath) {
+            return `<button class="action-button" onclick="copyTestName('${testPath}'); event.stopPropagation();" title="Copy test path">📋</button>`;
+        }
+
+        // Generate Searchfox button for test paths
+        function generateSearchfoxButton(testPath) {
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}`;
+            return `<a href="${searchfoxUrl}" class="action-button" target="_blank" onclick="event.stopPropagation();" title="Open in Searchfox">🔍</a>`;
+        }
+
+        // Generate both copy and Searchfox buttons for test paths
+        function generateTestButtons(testPath) {
+            return generateCopyButton(testPath) + generateSearchfoxButton(testPath);
+        }
+
+        // Generate Searchfox button for folder paths
+        function generateFolderButtons(folderPath) {
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${folderPath}`;
+            return `<a href="${searchfoxUrl}" class="action-button" target="_blank" onclick="event.stopPropagation();" title="Open folder in Searchfox">🔍</a>`;
+        }
+
+        // Error display management (shared across all error scenarios)
+        function showError(message, showNoData = false) {
+            const errorElement = document.getElementById('error');
+            errorElement.style.display = 'block';
+            errorElement.textContent = message;
+
+            if (showNoData) {
+                document.getElementById('no-data').style.display = 'block';
+            }
+        }
+
+        function hideError() {
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('no-data').style.display = 'none';
+        }
+
+        // Status text management (shared for loading states)
+        function setStatusText(text) {
+            document.getElementById('status-text').textContent = text;
+        }
+
+        // URL hash management
+        // Helper to get current view mode
+        function getCurrentView() {
+            // Always use components view for issues page
+            return 'components';
+        }
+
+        function updateUrlHash() {
+            const date = document.getElementById('date-select').value;
+            const search = document.getElementById('search-box').value.trim();
+            const view = getCurrentView();
+
+            const params = new URLSearchParams();
+            if (date) params.set('date', date);
+            if (search) params.set('q', search);
+            // Only add view to URL if not the default
+            if (view !== 'components') params.set('view', view);
+
+            const hash = params.toString();
+            if (hash) {
+                window.location.hash = hash;
+            } else {
+                // Preserve search parameters when clearing hash
+                const url = window.location.pathname + window.location.search;
+                history.replaceState(null, '', url);
+            }
+        }
+
+        // Create test data entries with only testIds - everything computed from global currentData
+        function createTestEntries() {
+            const testEntries = {};
+
+            if (!currentData.testRuns || !currentData.tables || !currentData.taskInfo || !currentData.testInfo) {
+                return testEntries;
+            }
+
+            // Create minimal entries for each test with only testId
+            for (let testId = 0; testId < currentData.testRuns.length; testId++) {
+                const testGroup = currentData.testRuns[testId];
+                if (!testGroup) continue;
+
+                const testPath = currentData.tables.testPaths[currentData.testInfo.testPathIds[testId]];
+                const testName = currentData.tables.testNames[currentData.testInfo.testNameIds[testId]];
+                const fullPath = testPath ? `${testPath}/${testName}` : testName;
+
+                // Get component if available
+                const componentId = currentData.testInfo.componentIds ? currentData.testInfo.componentIds[testId] : null;
+                const component = (componentId !== null && currentData.tables.components) ? currentData.tables.components[componentId] : null;
+
+                testEntries[fullPath] = {
+                    testId: testId,
+                    component: component
+                };
+            }
+
+            return testEntries;
+        }
+
+        // Compute statistics for a single test from global currentData
+        function computeTestStats(testId) {
+            const testGroup = currentData.testRuns[testId];
+
+            if (!testGroup) {
+                return {
+                    runCount: 0,
+                    skipCount: 0,
+                    passCount: 0,
+                    failCount: 0,
+                    timeoutCount: 0,
+                    crashCount: 0,
+                    issueCount: 0,
+                    issuePercentage: 0,
+                    max: 0,
+                    min: 0,
+                    avg: 0
+                };
+            }
+
+            let skipCount = 0;
+            let timeoutCount = 0;
+            let failCount = 0;
+            let crashCount = 0;
+            let passCount = 0;
+            let maxDuration = 0;
+            let minDuration = Infinity;
+            let totalDuration = 0;
+            let parallelFailCount = 0;
+            let parallelPassCount = 0;
+            let parallelTimeoutCount = 0;
+            let sequentialPassCount = 0;
+            let sequentialFailCount = 0;
+            let sequentialTimeoutCount = 0;
+
+            // Process each status group within this test
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                const runCount = statusGroup.taskIdIds.length;
+
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
+                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'CRASH', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
+
+                // Add counts for this status group
+                if (isSkip) {
+                    // Only count as skip if the message doesn't start with "run-if"
+                    // (run-if indicates platform-specific tests, not actual skips due to broken tests)
+                    if (statusGroup.messageIds) {
+                        for (const messageId of statusGroup.messageIds) {
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            // Count as skip if there's no message or if it doesn't start with run-if
+                            if (!message || !message.startsWith('run-if')) {
+                                skipCount++;
+                            }
+                            // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
+                        }
+                    } else {
+                        // If there are no message IDs, count all as skips
+                        skipCount += runCount;
+                    }
+                } else if (status === 'TIMEOUT-PARALLEL') {
+                    timeoutCount += runCount;
+                    parallelTimeoutCount += runCount;
+                } else if (status === 'TIMEOUT-SEQUENTIAL') {
+                    timeoutCount += runCount;
+                    sequentialTimeoutCount += runCount;
+                } else if (isTimeout) {
+                    // Old TIMEOUT without parallel/sequential designation
+                    timeoutCount += runCount;
+                } else if (isCrash) {
+                    crashCount += runCount;
+                } else if (status === 'UNKNOWN') {
+                    // Split UNKNOWN by duration: skips, timeouts, or passes
+                    for (const duration of statusGroup.durations) {
+                        if (duration < 100) {
+                            skipCount++;
+                        } else if (duration > 300000) {
+                            timeoutCount++;
+                        } else {
+                            passCount++;
+                            totalDuration += duration;
+                            if (duration > maxDuration) {
+                                maxDuration = duration;
+                            }
+                            if (duration < minDuration) {
+                                minDuration = duration;
+                            }
+                        }
+                    }
+                } else if (status === 'FAIL-PARALLEL') {
+                    failCount += runCount;
+                    parallelFailCount += runCount;
+                } else if (status === 'FAIL-SEQUENTIAL') {
+                    failCount += runCount;
+                    sequentialFailCount += runCount;
+                } else if (status === 'PASS-PARALLEL') {
+                    passCount += runCount;
+                    parallelPassCount += runCount;
+                    for (const duration of statusGroup.durations) {
+                        totalDuration += duration;
+                        if (duration > maxDuration) {
+                            maxDuration = duration;
+                        }
+                        if (duration < minDuration) {
+                            minDuration = duration;
+                        }
+                    }
+                } else if (status === 'PASS-SEQUENTIAL') {
+                    passCount += runCount;
+                    sequentialPassCount += runCount;
+                    for (const duration of statusGroup.durations) {
+                        totalDuration += duration;
+                        if (duration > maxDuration) {
+                            maxDuration = duration;
+                        }
+                        if (duration < minDuration) {
+                            minDuration = duration;
+                        }
+                    }
+                } else if (isFail) {
+                    failCount += runCount;
+                } else {
+                    // PASS or EXPECTED-FAIL (or old PASS without parallel/sequential designation)
+                    passCount += runCount;
+                    for (const duration of statusGroup.durations) {
+                        totalDuration += duration;
+                        if (duration > maxDuration) {
+                            maxDuration = duration;
+                        }
+                        if (duration < minDuration) {
+                            minDuration = duration;
+                        }
+                    }
+                }
+            }
+
+            const runCount = skipCount + timeoutCount + failCount + crashCount + passCount - skipCount; // Total minus skips
+
+            // Calculate parallel failure rate correctly:
+            // This is the percentage of parallel runs that failed or timed out
+            const parallelTotalRuns = parallelFailCount + parallelTimeoutCount + parallelPassCount;
+            const parallelProblematicCount = parallelFailCount + parallelTimeoutCount;
+            const parallelFailPercentage = parallelTotalRuns > 0
+                ? Math.round((parallelProblematicCount * 100) / parallelTotalRuns)
+                : 0;
+
+            // Handle case where no durations were found
+            const finalMinDuration = minDuration === Infinity ? 0 : minDuration;
+
+            return {
+                runCount: runCount,
+                skipCount: skipCount,
+                passCount: passCount,
+                timeoutCount: timeoutCount,
+                failCount: failCount,
+                crashCount: crashCount,
+                issueCount: skipCount + failCount + timeoutCount + crashCount,
+                parallelFailCount: parallelFailCount,
+                parallelTimeoutCount: parallelTimeoutCount,
+                parallelPassCount: parallelPassCount,
+                sequentialPassCount: sequentialPassCount,
+                sequentialFailCount: sequentialFailCount,
+                sequentialTimeoutCount: sequentialTimeoutCount,
+                parallelFailPercentage: parallelFailPercentage,
+                issuePercentage: (runCount + skipCount) > 0 ? Math.round((skipCount + failCount + timeoutCount + crashCount) / (runCount + skipCount) * 100) : 0,
+                max: maxDuration,
+                min: finalMinDuration,
+                totalDuration: totalDuration
+            };
+        }
+
+        // Lazy function to get platforms for a test
+        function getTestPlatforms(testPath) {
+            const testData = aggregatedData[testPath];
+            if (!testData) return [];
+
+            if (testData.platforms) {
+                return testData.platforms;
+            }
+
+            const platforms = new Set();
+            const testGroup = currentData.testRuns[testData.testId];
+
+            if (testGroup) {
+                // Process each status group to collect platforms
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup) continue;
+
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        const taskIdIndex = statusGroup.taskIdIds[i];
+                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                        platforms.add(extractPlatform(jobName) || 'unknown');
+                    }
+                }
+            }
+
+            // Cache platforms
+            testData.platforms = Array.from(platforms);
+            return testData.platforms;
+        }
+
+        // Lazy function to create run objects only when needed for charts
+        function getTestRuns(testPath) {
+            const testData = aggregatedData[testPath];
+            if (!testData || testData.runs) {
+                // Already computed or no data
+                return testData?.runs || [];
+            }
+
+            const testGroup = currentData.testRuns[testData.testId];
+            const runs = [];
+            const startTime = (currentData.metadata.startTime || 0) * 1000; // Convert seconds to ms
+
+            if (!testGroup) return runs;
+
+            // Process each status group for this test
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                const runCount = statusGroup.taskIdIds.length;
+
+                // Decompress differential timestamps back to absolute values
+                const decompressedTimestamps = [];
+                if (statusGroup.timestamps.length > 0) {
+                    let currentTimestamp = 0;
+                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                        currentTimestamp += statusGroup.timestamps[i];
+                        decompressedTimestamps.push(currentTimestamp);
+                    }
+                }
+
+                for (let i = 0; i < runCount; i++) {
+                    const duration = statusGroup.durations[i];
+                    const taskIdIndex = statusGroup.taskIdIds[i];
+                    const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+
+                    const run = {
+                        duration: duration,
+                        repository: currentData.tables.repositories[currentData.taskInfo.repositoryIds[taskIdIndex]],
+                        jobName: jobName,
+                        taskIdString: taskIdString,
+                        status: status,
+                        timestamp: startTime + (decompressedTimestamps[i] * 1000), // Convert relative seconds to absolute ms
+                        isFail: status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status),
+                        isSkip: status === 'SKIP',
+                        isTimeout: status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL' || (status === 'UNKNOWN' && duration > 300000)
+                    };
+
+                    // Add crash data for CRASH status
+                    if (status === 'CRASH' && statusGroup.crashSignatureIds && statusGroup.minidumps) {
+                        const crashSigId = statusGroup.crashSignatureIds[i];
+                        run.crashSignature = crashSigId !== null ? currentData.tables.crashSignatures[crashSigId] : null;
+                        run.minidump = statusGroup.minidumps[i];
+                    }
+
+                    // Add failure message for FAIL-* statuses
+                    if (status && status.startsWith('FAIL-') && statusGroup.messageIds) {
+                        const messageId = statusGroup.messageIds[i];
+                        run.failureMessage = messageId !== null ? currentData.tables.messages[messageId] : null;
+                    }
+
+                    runs.push(run);
+                }
+            }
+
+            // Cache the runs for future use
+            testData.runs = runs;
+            return runs;
+        }
+
+        // Build tree structure from test entries, computing statistics directly from raw data
+        function buildTreeStructure(testEntries) {
+            const tree = {
+                name: 'root',
+                path: '',
+                children: {},
+                tests: {}
+            };
+
+            for (const testPath in testEntries) {
+                const parts = testPath.split('/');
+                let currentNode = tree;
+
+                // Navigate/create folder structure
+                for (let i = 0; i < parts.length - 1; i++) {
+                    const folder = parts[i];
+
+                    if (!currentNode.children[folder]) {
+                        currentNode.children[folder] = {
+                            name: folder,
+                            path: parts.slice(0, i + 1).join('/'),
+                            children: {},
+                            tests: {}
+                        };
+                    }
+
+                    currentNode = currentNode.children[folder];
+                }
+
+                // Compute test statistics from global currentData
+                const testData = testEntries[testPath];
+                const testStats = computeTestStats(testData.testId);
+
+                // Add computed stats to test data
+                testData.stats = testStats;
+
+                // Add test to the final folder
+                const testName = parts[parts.length - 1];
+                currentNode.tests[testName] = {
+                    name: testName,
+                    path: testPath,
+                    data: testData
+                };
+            }
+
+            return tree;
+        }
+
+        // Build sort header
+        function buildSortHeader() {
+            const getSortButton = ([field, label]) => {
+                const isActive = sortField === field;
+                const arrow = isActive ? (sortDirection === 'asc' ? '↑' : '↓') : ' '; // Always show space
+                return `<div class="stat-item">
+                    <button class="sort-button ${isActive ? 'active' : ''}" data-field="${field}" onclick="changeSortOrder('${field}')">
+                        <span class="sort-arrow">${arrow}</span>${label}
+                    </button>
+                </div>`;
+            };
+
+            // Check if we're in list/components view or if we have tests to show appropriate headers
+            const view = getCurrentView();
+            const isListLike = view === 'list' || view === 'components';
+            const hasTests = isListLike || (treeData && Object.values(treeData.children).some(folder => Object.keys(folder.tests).length > 0));
+
+            // Special button for Path (left-aligned)
+            const getPathButton = (field, label) => {
+                const isActive = sortField === field;
+                const arrow = isActive ? (sortDirection === 'asc' ? '↑' : '↓') : ' '; // Always show space
+                return `<button class="sort-button ${isActive ? 'active' : ''}" data-field="${field}" onclick="changeSortOrder('${field}')" style="justify-content: flex-start;">
+                    <span class="sort-arrow">${arrow}</span>${label}
+                </button>`;
+            };
+
+            // Generate appropriate stats buttons based on view type
+            const statsFields = [['runCount', 'Runs'], ['issuePercentage', 'Issue %'], ['issueCount', 'Issues'], ['skipCount', 'Skips'], ['failCount', 'Failures'], ['timeoutCount', 'Timeouts'], ['crashCount', 'Crashes']];
+
+            const statsButtons = statsFields.map(getSortButton).join('');
+
+            return `<div class="sort-header">
+                <div class="tree-name">${getPathButton('name', 'Component / Test')}</div>
+                <div class="tree-stats">
+                    ${statsButtons}
+                </div>
+            </div>`;
+        }
+
+        // Change sort order
+        function changeSortOrder(field) {
+            if (sortField === field) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortField = field;
+                // Default to descending for most fields, ascending for path and pass percentage
+                if (field === 'name' || field === 'issuePercentage') {
+                    sortDirection = 'asc';
+                } else {
+                    sortDirection = 'desc';
+                }
+            }
+            changeView();
+        }
+
+        // Calculate parallel platform breakdown for test data
+        function calculateParallelPlatformBreakdown(testData) {
+            const platforms = {};
+
+            if (currentData && currentData.testRuns && testData.testId !== undefined) {
+                const testGroup = currentData.testRuns[testData.testId];
+                if (testGroup) {
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const statusGroup = testGroup[statusId];
+                        if (!statusGroup) continue;
+
+                        const status = currentData.tables.statuses[statusId];
+
+                        // Only count parallel statuses
+                        if (!status || !status.includes('PARALLEL')) continue;
+
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const taskIdIndex = statusGroup.taskIdIds[i];
+                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                            const platform = extractPlatform(jobName) || 'unknown';
+
+                            if (!platforms[platform]) {
+                                platforms[platform] = {
+                                    parallelFails: 0,
+                                    parallelTimeouts: 0,
+                                    parallelPasses: 0
+                                };
+                            }
+
+                            if (status === 'FAIL-PARALLEL') {
+                                platforms[platform].parallelFails++;
+                            } else if (status === 'TIMEOUT-PARALLEL') {
+                                platforms[platform].parallelTimeouts++;
+                            } else if (status === 'PASS-PARALLEL') {
+                                platforms[platform].parallelPasses++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return platforms;
+        }
+
+        // Calculate platform timing breakdown for test data
+        function calculateTestPlatformTimingBreakdown(testData) {
+            const platforms = {};
+
+            // Use global currentData to avoid creating run objects just for tooltips
+            if (testData.testId !== undefined) {
+                const testGroup = currentData.testRuns[testData.testId];
+
+                if (testGroup) {
+                    // Process each status group
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const statusGroup = testGroup[statusId];
+                        if (!statusGroup) continue;
+
+                        const status = currentData.tables.statuses[statusId];
+                        const isPass = status === 'PASS' || status === 'PASS-PARALLEL' || status === 'PASS-SEQUENTIAL';
+
+                        // Only track timing for passing tests
+                        if (isPass) {
+                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                const platform = extractPlatform(jobName) || 'unknown';
+                                const duration = statusGroup.durations[i];
+
+                                if (!platforms[platform]) {
+                                    platforms[platform] = {
+                                        durations: [],
+                                        min: Infinity,
+                                        max: 0,
+                                        total: 0,
+                                        count: 0
+                                    };
+                                }
+
+                                platforms[platform].durations.push(duration);
+                                platforms[platform].total += duration;
+                                platforms[platform].count++;
+                                platforms[platform].min = Math.min(platforms[platform].min, duration);
+                                platforms[platform].max = Math.max(platforms[platform].max, duration);
+                            }
+                        }
+                    }
+                }
+
+                // Calculate averages and handle edge cases
+                Object.keys(platforms).forEach(platform => {
+                    const p = platforms[platform];
+                    p.avg = p.count > 0 ? p.total / p.count : 0;
+                    if (p.min === Infinity) p.min = 0;
+                });
+            }
+
+            return platforms;
+        }
+
+        // Calculate platform breakdown for test data
+        function calculateTestPlatformBreakdown(testData) {
+            const platforms = {};
+
+            // Use global currentData to avoid creating run objects just for tooltips
+            if (testData.testId !== undefined) {
+                const testGroup = currentData.testRuns[testData.testId];
+
+                if (testGroup) {
+                    // Process each status group
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const statusGroup = testGroup[statusId];
+                        if (!statusGroup) continue;
+
+                        const status = currentData.tables.statuses[statusId];
+                        const isSkip = status === 'SKIP';
+                        const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
+                        const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
+
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            // Skip run-if annotations early (platform-irrelevant tests)
+                            if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
+                                continue; // Don't count run-if skips at all
+                            }
+
+                            const taskIdIndex = statusGroup.taskIdIds[i];
+                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                            const platform = extractPlatform(jobName) || 'unknown';
+                            const duration = statusGroup.durations[i];
+                            const isTimeoutByDuration = status === 'UNKNOWN' && duration > 300000;
+
+                            if (!platforms[platform]) {
+                                platforms[platform] = {
+                                    total: 0,
+                                    skips: 0,
+                                    failures: 0,
+                                    timeouts: 0,
+                                    passes: 0
+                                };
+                            }
+
+                            platforms[platform].total++;
+                            if (isSkip) {
+                                platforms[platform].skips++;
+                            } else if (isTimeout || isTimeoutByDuration) {
+                                platforms[platform].timeouts++;
+                            } else if (isFail) {
+                                platforms[platform].failures++;
+                            } else {
+                                platforms[platform].passes++;
+                            }
+                        }
+                    }
+                }
+            } else if (testData.runs) {
+                // Fall back to runs if raw data is no longer available
+                testData.runs.forEach(run => {
+                    // Skip run-if annotations (platform-irrelevant tests)
+                    if (run.isSkip && run.message?.startsWith('run-if')) {
+                        return; // Don't count run-if skips at all
+                    }
+
+                    const platform = extractPlatform(run.jobName) || 'unknown';
+                    if (!platforms[platform]) {
+                        platforms[platform] = {
+                            total: 0,
+                            skips: 0,
+                            failures: 0,
+                            timeouts: 0,
+                            passes: 0
+                        };
+                    }
+
+                    platforms[platform].total++;
+                    if (run.isSkip) {
+                        platforms[platform].skips++;
+                    } else if (run.isTimeout) {
+                        platforms[platform].timeouts++;
+                    } else if (run.isFail) {
+                        platforms[platform].failures++;
+                    } else {
+                        platforms[platform].passes++;
+                    }
+                });
+            }
+
+            return platforms;
+        }
+
+        // Calculate platform breakdown for folder data (recursive)
+        function calculateFolderPlatformBreakdown(node) {
+            const platforms = {};
+
+            // Collect from tests
+            Object.values(node.tests).forEach(test => {
+                const testBreakdown = calculateTestPlatformBreakdown(test.data);
+                Object.entries(testBreakdown).forEach(([platform, counts]) => {
+                    if (!platforms[platform]) {
+                        platforms[platform] = { skips: 0, failures: 0, timeouts: 0, passes: 0, total: 0 };
+                    }
+                    platforms[platform].skips += counts.skips;
+                    platforms[platform].failures += counts.failures;
+                    platforms[platform].timeouts += counts.timeouts;
+                    platforms[platform].passes += counts.passes;
+                    platforms[platform].total += counts.total;
+                });
+            });
+
+            // Collect from child folders
+            Object.values(node.children).forEach(child => {
+                const childBreakdown = calculateFolderPlatformBreakdown(child);
+                Object.entries(childBreakdown).forEach(([platform, counts]) => {
+                    if (!platforms[platform]) {
+                        platforms[platform] = { skips: 0, failures: 0, timeouts: 0, passes: 0, total: 0 };
+                    }
+                    platforms[platform].skips += counts.skips;
+                    platforms[platform].failures += counts.failures;
+                    platforms[platform].timeouts += counts.timeouts;
+                    platforms[platform].passes += counts.passes;
+                    platforms[platform].total += counts.total;
+                });
+            });
+
+            return platforms;
+        }
+
+        // Get skip message counts for a test (excluding run-if annotations)
+        function getSkipMessageCounts(testId) {
+            const messageCounts = new Map();
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return [];
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find SKIP status ID
+            const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
+            if (skipStatusId === -1) return [];
+
+            const statusGroup = testGroup[skipStatusId];
+            if (!statusGroup || !statusGroup.messageIds) return [];
+
+            // Count messages, excluding run-if (platform-specific tests that are irrelevant)
+            statusGroup.messageIds.forEach(messageId => {
+                if (messageId !== null) {
+                    const message = currentData.tables.messages[messageId];
+                    // Only include skip-if and other skip annotations, not run-if
+                    if (message && !message.startsWith('run-if')) {
+                        messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                    }
+                }
+            });
+
+            // Convert to array and sort by count (descending)
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
+        // Helper to truncate long messages for display in tooltips
+        function truncateMessage(message, maxLength = 100) {
+            if (!message) return '';
+            const firstLine = message.split('\n')[0];
+            if (firstLine.length > maxLength) {
+                return firstLine.substring(0, maxLength) + '...';
+            } else if (message.includes('\n')) {
+                return firstLine + '...';
+            }
+            return firstLine;
+        }
+
+        // Get failure message counts for a test
+        function getFailureMessageCounts(testId) {
+            const messageCounts = new Map();
+
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return [];
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find all FAIL-* status IDs
+            const failStatusIds = currentData.tables.statuses
+                .map((status, idx) => status.startsWith('FAIL-') ? idx : -1)
+                .filter(idx => idx !== -1);
+
+            if (failStatusIds.length === 0) return [];
+
+            // Collect messages from all failure statuses
+            failStatusIds.forEach(statusId => {
+                const statusGroup = testGroup[statusId];
+                if (statusGroup && statusGroup.messageIds) {
+                    statusGroup.messageIds.forEach(messageId => {
+                        if (messageId !== null) {
+                            const message = currentData.tables.messages[messageId];
+                            if (message) {
+                                messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                            }
+                        }
+                    });
+                }
+            });
+
+            // Convert to array and sort by count (descending)
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
+        // Get crash data for a test
+        function getCrashData(testId) {
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return { signatures: [], minidumps: [] };
+            }
+
+            const testGroup = currentData.testRuns[testId];
+
+            // Find CRASH status ID
+            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+            if (crashStatusId === -1) return { signatures: [], minidumps: [] };
+
+            const statusGroup = testGroup[crashStatusId];
+            if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [], minidumps: [] };
+
+            // Collect unique signatures with counts
+            const signatureCounts = new Map();
+            statusGroup.crashSignatureIds.forEach(sigId => {
+                if (sigId !== null) {
+                    const signature = currentData.tables.crashSignatures[sigId];
+                    if (signature) {
+                        signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + 1);
+                    }
+                }
+            });
+
+            // Collect unique minidumps
+            const minidumps = [...new Set(statusGroup.minidumps.filter(m => m !== null))];
+
+            return {
+                signatures: Array.from(signatureCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([signature, count]) => ({ signature, count })),
+                minidumps: minidumps
+            };
+        }
+
+        // Generate tooltip content for platform breakdown
+        function generateTooltipContent(platforms, type, testData, testPath) {
+            // Handle timing tooltips differently
+            if (['min', 'avg', 'max'].includes(type)) {
+                const sortedPlatforms = Object.entries(platforms)
+                    .filter(([platform, data]) => data.count > 0)
+                    .sort(([,a], [,b]) => b[type] - a[type]);
+
+                if (sortedPlatforms.length === 0) {
+                    return '';
+                }
+
+                const typeLabel = type === 'min' ? 'Minimum Time' : type === 'avg' ? 'Average Time' : 'Maximum Time';
+                let content = `<strong>${typeLabel} by Platform:</strong><br/>`;
+
+                sortedPlatforms.forEach(([platform, data]) => {
+                    const value = data[type];
+                    const formattedValue = formatDurationMs(value, true);
+                    const percentage = type === 'avg' ? '' : ` (${data.count} run${data.count !== 1 ? 's' : ''})`;
+                    content += `<div class="tooltip-platform">`;
+                    content += `<span class="tooltip-platform-name">${platform}:</span>`;
+                    content += `<span>${formattedValue}${percentage}</span>`;
+                    content += `</div>`;
+                });
+
+                return content;
+            }
+
+            // Handle regular count-based tooltips
+            const sortedPlatforms = Object.entries(platforms)
+                .filter(([platform, counts]) => counts[type] > 0)
+                .sort(([,a], [,b]) => b[type] - a[type]);
+
+            if (sortedPlatforms.length === 0) {
+                return '';
+            }
+
+            const total = sortedPlatforms.reduce((sum, [,counts]) => sum + counts[type], 0);
+            const typeLabel = type === 'failures' ? 'Failures' : type === 'skips' ? 'Skips' : 'Timeouts';
+
+            let content = `<strong>${typeLabel} by Platform:</strong><br/>`;
+
+            sortedPlatforms.forEach(([platform, counts]) => {
+                const platformName = platforms[platform] || platform;
+                const percentage = ((counts[type] / total) * 100).toFixed(1);
+                content += `<div class="tooltip-platform">`;
+                content += `<span class="tooltip-platform-name">${platform}:</span>`;
+                content += `<span>${counts[type]} (${percentage}%)</span>`;
+                content += `</div>`;
+            });
+
+            // Add skip messages for skips tooltip
+            if (type === 'skips' && testData && testData.testId !== undefined) {
+                const skipMessageCounts = getSkipMessageCounts(testData.testId);
+                if (skipMessageCounts.length > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #555;">`;
+                    content += `<strong>Skip reasons:</strong><br/>`;
+                    skipMessageCounts.forEach(({message, count}) => {
+                        // Remove "skip-if:" prefix and following whitespace
+                        const displayMessage = message.replace(/^skip-if:\s*/, '');
+                        content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
+                        content += `<span style="font-family: monospace;">${escapeHtml(displayMessage)}</span>`;
+                        content += ` <span style="color: #999;">(${count})</span>`;
+                        content += `</div>`;
+                    });
+                    content += `</div>`;
+                }
+            }
+
+            // Add failure messages for failures tooltip
+            if (type === 'failures' && testData && testData.testId !== undefined) {
+                const failureMessageCounts = getFailureMessageCounts(testData.testId);
+                if (failureMessageCounts.length > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #555;">`;
+                    content += `<strong>Failure messages:</strong><br/>`;
+                    failureMessageCounts.forEach(({message, count}) => {
+                        const displayMessage = truncateMessage(message, 100);
+                        content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
+                        content += `<span style="font-family: monospace; word-break: break-word;">${escapeHtml(displayMessage)}</span>`;
+                        content += ` <span style="color: #999;">(${count})</span>`;
+                        content += `</div>`;
+                    });
+                    content += `</div>`;
+                }
+            }
+
+            // Add parallel failure summary at the end for failures tooltip on individual tests
+            if (type === 'failures' && testData && testData.stats) {
+                const stats = testData.stats;
+                const parallelTotalRuns = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0) + (stats.parallelPassCount || 0);
+                const parallelProblematicCount = (stats.parallelFailCount || 0) + (stats.parallelTimeoutCount || 0);
+                const parallelFailPercentage = stats.parallelFailPercentage || 0;
+
+                if (parallelTotalRuns > 0) {
+                    let tooltipDetails = [];
+                    if (stats.parallelFailCount > 0) tooltipDetails.push(`${stats.parallelFailCount} failures`);
+                    if (stats.parallelTimeoutCount > 0) tooltipDetails.push(`${stats.parallelTimeoutCount} timeouts`);
+
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                    content += `<strong>Parallel runs:</strong> ${parallelProblematicCount}/${parallelTotalRuns} had issues (${parallelFailPercentage}%)`;
+                    if (tooltipDetails.length > 0) {
+                        content += `<br/>${tooltipDetails.join(', ')}`;
+                    }
+                    if ((stats.sequentialPassCount || 0) > 0) {
+                        content += `<br/>${stats.sequentialPassCount} sequential passes`;
+                    }
+                    content += `</div>`;
+
+                    // Add per-platform parallel breakdown for tests with >= 10% parallel fail rate
+                    if (parallelFailPercentage >= 10 && testPath && typeof aggregatedData !== 'undefined' && aggregatedData[testPath]) {
+                        const platformBreakdown = calculateParallelPlatformBreakdown(aggregatedData[testPath]);
+                        const platforms = Object.entries(platformBreakdown)
+                            .filter(([platform, counts]) => (counts.parallelFails + counts.parallelTimeouts) > 0)
+                            .sort(([,a], [,b]) => (b.parallelFails + b.parallelTimeouts) - (a.parallelFails + a.parallelTimeouts));
+
+                        if (platforms.length > 0) {
+                            content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                            content += `<strong>Parallel issues by platform:</strong>`;
+                            platforms.forEach(([platform, counts]) => {
+                                const totalParallel = counts.parallelFails + counts.parallelTimeouts + counts.parallelPasses;
+                                const problemCount = counts.parallelFails + counts.parallelTimeouts;
+                                const percentage = totalParallel > 0 ? Math.round((problemCount * 100) / totalParallel) : 0;
+                                content += `<br/>${platform}: ${problemCount}/${totalParallel} (${percentage}%)`;
+                            });
+                            content += `</div>`;
+                        }
+                    }
+                }
+
+                // Add crash count and breakdown
+                if (testData.testId !== undefined) {
+                    const crashData = getCrashData(testData.testId);
+                    const totalCrashes = crashData.signatures.reduce((sum, sig) => sum + sig.count, 0);
+
+                    if (totalCrashes > 0) {
+                        content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                        content += `<strong>Crashes: ${totalCrashes}</strong><br/>`;
+
+                        // Add crash breakdown by platform
+                        const crashesByPlatform = {};
+                        if (currentData && currentData.testRuns && currentData.testRuns[testData.testId]) {
+                            const testGroup = currentData.testRuns[testData.testId];
+                            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+                            if (crashStatusId !== -1) {
+                                const statusGroup = testGroup[crashStatusId];
+                                if (statusGroup) {
+                                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                        const taskIdIndex = statusGroup.taskIdIds[i];
+                                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                        const platform = extractPlatform(jobName) || 'unknown';
+                                        crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        const sortedPlatforms = Object.entries(crashesByPlatform)
+                            .sort((a, b) => b[1] - a[1]);
+
+                        sortedPlatforms.forEach(([platform, count]) => {
+                            const percentage = ((count / totalCrashes) * 100).toFixed(1);
+                            content += `<div class="tooltip-platform">`;
+                            content += `<span class="tooltip-platform-name">${platform}:</span>`;
+                            content += `<span>${count} (${percentage}%)</span>`;
+                            content += `</div>`;
+                        });
+
+                        content += `</div>`;
+                    }
+                }
+            }
+
+            // Add parallel/sequential breakdown for timeouts tooltip on individual tests
+            if (type === 'timeouts' && testData && testData.stats) {
+                const stats = testData.stats;
+                const parallelTimeouts = stats.parallelTimeoutCount || 0;
+                const sequentialTimeouts = stats.sequentialTimeoutCount || 0;
+                const totalTimeouts = stats.timeoutCount || 0;
+
+                if (parallelTimeouts > 0 || sequentialTimeouts > 0) {
+                    content += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">`;
+                    content += `<strong>Breakdown:</strong>`;
+                    if (parallelTimeouts > 0) {
+                        content += `<br/>${parallelTimeouts} in parallel execution`;
+                    }
+                    if (sequentialTimeouts > 0) {
+                        content += `<br/>${sequentialTimeouts} in sequential execution`;
+                    }
+                    // Show unclassified timeouts if any
+                    const unclassified = totalTimeouts - parallelTimeouts - sequentialTimeouts;
+                    if (unclassified > 0) {
+                        content += `<br/>${unclassified} unclassified`;
+                    }
+                    content += `</div>`;
+                }
+            }
+
+            return content;
+        }
+
+        // Build total summary row
+        function buildTotalSummaryRow(totalStats) {
+            // Tooltips will be computed lazily on hover
+
+            let html = `<div class="tree-row total-row">`;
+            html += `<div class="tree-name"><strong>📊 Total</strong></div>`;
+            html += `<div class="tree-stats">`;
+
+            // Check if we're showing test-specific columns or folder-specific columns
+            const hasTests = treeData && Object.values(treeData.children).some(folder => Object.keys(folder.tests).length > 0);
+
+            if (hasTests) {
+                // Test view: show avg/max columns
+                html += generateStatItem('Avg', '—');
+                html += generateStatItem('Max', '—');
+            } else {
+                // Folder view: show test count
+                html += generateStatItem('Tests', formatNumber(totalStats.testCount));
+            }
+
+            html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDurationMs(totalStats.totalDuration, totalStats.runCount > 0)}`);
+
+            const totalIssuePercentageDisplay = getIssuePercentageDisplay(totalStats.issueCount, totalStats.runCount + totalStats.skipCount);
+            html += generateStatItem('Issue %', totalIssuePercentageDisplay.displayValue, totalIssuePercentageDisplay.cssClass);
+
+            // Skips with lazy tooltip
+            const totalSkipContainerClass = totalStats.skipCount === 0 ? 'hideable-zero' : (totalStats.skipCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Skips', formatNumber(totalStats.skipCount), 'skip', totalSkipContainerClass, '', ' data-total-root="true" data-tooltip-type="skips"');
+
+            // Failures with lazy tooltip
+            const totalFailClass = totalStats.failCount > 0 ? 'fail' : 'zero';
+            const totalFailContainerClass = totalStats.failCount === 0 ? 'hideable-zero' : (totalStats.failCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Failures', formatNumber(totalStats.failCount), totalFailClass, totalFailContainerClass, '', ' data-total-root="true" data-tooltip-type="failures"');
+
+            // Timeouts with lazy tooltip
+            const totalTimeoutClass = totalStats.timeoutCount > 0 ? 'timeout' : 'zero';
+            const totalTimeoutContainerClass = totalStats.timeoutCount === 0 ? 'hideable-zero' : (totalStats.timeoutCount > 0 ? 'lazy-tooltip' : '');
+            html += generateStatItem('Timeouts', formatNumber(totalStats.timeoutCount), totalTimeoutClass, totalTimeoutContainerClass, '', ' data-total-root="true" data-tooltip-type="timeouts"');
+
+            html += `</div>`;
+            html += `</div>`;
+
+            return html;
+        }
+
+        // Check if a node or its children contain matches
+
+        // Sort test list based on current sortField and sortDirection
+        function sortTestList(testList) {
+            return testList.sort((a, b) => {
+                let valueA, valueB;
+
+                switch(sortField) {
+                    case 'name':
+                        valueA = a.testPath;
+                        valueB = b.testPath;
+                        break;
+                    case 'runCount':
+                        valueA = a.stats.runCount || 0;
+                        valueB = b.stats.runCount || 0;
+                        break;
+                    case 'issuePercentage':
+                        valueA = parseFloat(a.stats.issuePercentage) || 0;
+                        valueB = parseFloat(b.stats.issuePercentage) || 0;
+                        break;
+                    case 'issueCount':
+                        valueA = a.stats.issueCount || 0;
+                        valueB = b.stats.issueCount || 0;
+                        break;
+                    case 'skipCount':
+                        valueA = a.stats.skipCount || 0;
+                        valueB = b.stats.skipCount || 0;
+                        break;
+                    case 'failCount':
+                        valueA = a.stats.failCount || 0;
+                        valueB = b.stats.failCount || 0;
+                        break;
+                    case 'timeoutCount':
+                        valueA = a.stats.timeoutCount || 0;
+                        valueB = b.stats.timeoutCount || 0;
+                        break;
+                    case 'crashCount':
+                        valueA = a.stats.crashCount || 0;
+                        valueB = b.stats.crashCount || 0;
+                        break;
+                    default:
+                        // Default sort by total issues
+                        valueA = a.stats.issueCount || 0;
+                        valueB = b.stats.issueCount || 0;
+                        break;
+                }
+
+                if (sortField === 'name') {
+                    return sortDirection === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
+                }
+
+                return sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
+            });
+        }
+
+        // Render components view - tests grouped by bugzilla component
+        function renderComponentsView() {
+            if (!aggregatedData) {
+                document.getElementById('no-data').style.display = 'block';
+                document.getElementById('tree-container').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('no-data').style.display = 'none';
+            document.getElementById('tree-container').style.display = 'block';
+
+            const searchTerm = document.getElementById('search-box').value.toLowerCase().trim();
+
+            // Group tests by component
+            const componentGroups = {};
+            const testsWithoutComponent = [];
+
+            // First pass: count all tests per component (before filtering)
+            const componentTotalTests = {};
+            const componentTotalTestsWithIssues = {};
+            for (const testPath in aggregatedData) {
+                const testData = aggregatedData[testPath];
+                const component = testData.component || '(no component)';
+                const stats = testData.stats || computeTestStats(testData.testId);
+                testData.stats = stats;
+
+                // Count all tests
+                componentTotalTests[component] = (componentTotalTests[component] || 0) + 1;
+
+                // Count tests with issues
+                if (stats.issueCount > 0) {
+                    componentTotalTestsWithIssues[component] = (componentTotalTestsWithIssues[component] || 0) + 1;
+                }
+            }
+
+            // Second pass: build component groups and accumulate stats
+            for (const testPath in aggregatedData) {
+                const testData = aggregatedData[testPath];
+                const component = testData.component || '(no component)';
+                const stats = testData.stats; // Already computed in first pass
+
+                // Determine if test matches search criteria
+                const componentMatchesSearch = !searchTerm || component.toLowerCase().includes(searchTerm);
+                const testPathMatchesSearch = !searchTerm || testPath.toLowerCase().includes(searchTerm);
+                const matchesSearch = componentMatchesSearch || testPathMatchesSearch;
+
+                // When filtering by test name only (not component name), skip tests that don't match
+                if (searchTerm && !componentMatchesSearch && !testPathMatchesSearch) {
+                    continue;
+                }
+
+                // Initialize component group if needed
+                if (!componentGroups[component]) {
+                    componentGroups[component] = {
+                        tests: [],
+                        testsWithIssuesCount: 0,
+                        matchingTestsCount: 0, // Count of all tests matching the filter (for "out of X")
+                        totalTests: componentTotalTests[component] || 0,
+                        totalTestsWithIssues: componentTotalTestsWithIssues[component] || 0,
+                        totalStats: {
+                            runCount: 0,
+                            failCount: 0,
+                            timeoutCount: 0,
+                            crashCount: 0,
+                            skipCount: 0,
+                            passCount: 0,
+                            issueCount: 0
+                        }
+                    };
+                }
+
+                // Count all tests that match the filter (including issue-free)
+                componentGroups[component].matchingTestsCount++;
+
+                // Accumulate stats for all tests that match the filter
+                componentGroups[component].totalStats.runCount += stats.runCount || 0;
+                componentGroups[component].totalStats.failCount += stats.failCount || 0;
+                componentGroups[component].totalStats.timeoutCount += stats.timeoutCount || 0;
+                componentGroups[component].totalStats.crashCount += stats.crashCount || 0;
+                componentGroups[component].totalStats.skipCount += stats.skipCount || 0;
+                componentGroups[component].totalStats.passCount += stats.passCount || 0;
+                componentGroups[component].totalStats.issueCount += stats.issueCount || 0;
+
+                // Only add test to display list if it has issues
+                const hasIssues = stats.issueCount > 0;
+                if (hasIssues) {
+                    componentGroups[component].tests.push({ testPath, data: testData });
+                    componentGroups[component].testsWithIssuesCount++;
+                }
+            }
+
+            // Filter components: only show if component name matches search OR has tests to display
+            const filteredComponents = Object.entries(componentGroups).filter(([componentName, group]) => {
+                if (!searchTerm) return true; // No search, show all components
+                const componentMatchesSearch = componentName.toLowerCase().includes(searchTerm);
+                const hasMatchingTests = group.tests.length > 0;
+                return componentMatchesSearch || hasMatchingTests;
+            });
+
+            // Sort components based on current sortField and sortDirection
+            const sortedComponents = filteredComponents.sort(([nameA, groupA], [nameB, groupB]) => {
+                let valueA, valueB;
+
+                switch(sortField) {
+                    case 'name':
+                        valueA = nameA;
+                        valueB = nameB;
+                        break;
+                    case 'runCount':
+                        valueA = groupA.totalStats.runCount || 0;
+                        valueB = groupB.totalStats.runCount || 0;
+                        break;
+                    case 'issuePercentage':
+                        const issuePercentageA = (groupA.totalStats.runCount + groupA.totalStats.skipCount) > 0
+                            ? Math.round(groupA.totalStats.issueCount / (groupA.totalStats.runCount + groupA.totalStats.skipCount) * 100)
+                            : 0;
+                        const issuePercentageB = (groupB.totalStats.runCount + groupB.totalStats.skipCount) > 0
+                            ? Math.round(groupB.totalStats.issueCount / (groupB.totalStats.runCount + groupB.totalStats.skipCount) * 100)
+                            : 0;
+                        valueA = issuePercentageA;
+                        valueB = issuePercentageB;
+                        break;
+                    case 'skipCount':
+                        valueA = groupA.totalStats.skipCount || 0;
+                        valueB = groupB.totalStats.skipCount || 0;
+                        break;
+                    case 'failCount':
+                        valueA = groupA.totalStats.failCount || 0;
+                        valueB = groupB.totalStats.failCount || 0;
+                        break;
+                    case 'timeoutCount':
+                        valueA = groupA.totalStats.timeoutCount || 0;
+                        valueB = groupB.totalStats.timeoutCount || 0;
+                        break;
+                    case 'crashCount':
+                        valueA = groupA.totalStats.crashCount || 0;
+                        valueB = groupB.totalStats.crashCount || 0;
+                        break;
+                    case 'issueCount':
+                        valueA = groupA.totalStats.issueCount || 0;
+                        valueB = groupB.totalStats.issueCount || 0;
+                        break;
+                    default:
+                        // Default sort by total issues
+                        valueA = groupA.totalStats.issueCount || 0;
+                        valueB = groupB.totalStats.issueCount || 0;
+                        break;
+                }
+
+                if (sortField === 'name') {
+                    return sortDirection === 'asc' ? valueA.localeCompare(valueB) : valueB.localeCompare(valueA);
+                }
+
+                return sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
+            });
+
+            // Generate HTML
+            let html = '<div class="tree-table">';
+            html += buildSortHeader();
+
+            // Render each component group
+            sortedComponents.forEach(([componentName, group]) => {
+                const isExpanded = expandedRows.has(componentName);
+                const hasIssues = group.testsWithIssuesCount > 0;
+
+                // Component header row
+                html += `<div class="tree-row folder-row ${!hasIssues ? 'non-clickable' : ''}" data-path="${escapeHtml(componentName)}">`;
+                html += `<div class="tree-name">`;
+                html += `<span class="folder-icon ${isExpanded ? 'expanded' : ''}"></span>`;
+                html += `<strong>${escapeHtml(componentName)}</strong>`;
+                if (group.testsWithIssuesCount > 0) {
+                    // Determine what count to show for "out of X":
+                    // - If filtering by test name: show matching tests count
+                    // - Otherwise: show total tests in component
+                    const isFilteringByTestName = searchTerm && group.matchingTestsCount < group.totalTests;
+                    const totalCount = isFilteringByTestName ? group.matchingTestsCount : group.totalTests;
+
+                    if (group.testsWithIssuesCount < totalCount) {
+                        html += ` <span style="color: #888;">(${group.testsWithIssuesCount} test${group.testsWithIssuesCount !== 1 ? 's' : ''} with issues, out of ${totalCount})</span>`;
+                    } else {
+                        // All (matching) tests have issues - no need to show "out of"
+                        html += ` <span style="color: #888;">(${group.testsWithIssuesCount} test${group.testsWithIssuesCount !== 1 ? 's' : ''} with issues)</span>`;
+                    }
+                } else {
+                    html += ` <span style="color: #888;">(${group.totalTests} test${group.totalTests !== 1 ? 's' : ''})</span>`;
+                }
+                html += `</div>`;
+                html += `<div class="tree-stats">`;
+
+                // Show aggregate stats for component
+                const totalStats = group.totalStats;
+                const componentIssuePercentageDisplay = getIssuePercentageDisplay(totalStats.issueCount, totalStats.runCount + totalStats.skipCount);
+
+                html += generateStatItem('Runs', formatNumber(totalStats.runCount));
+                html += generateStatItem('Issue %', componentIssuePercentageDisplay.displayValue, componentIssuePercentageDisplay.cssClass);
+                html += generateStatItem('Issues', formatNumber(totalStats.issueCount), totalStats.issueCount > 0 ? 'fail' : 'zero', totalStats.issueCount === 0 ? 'hideable-zero' : '');
+                html += generateStatItem('Skips', formatNumber(totalStats.skipCount), 'skip', totalStats.skipCount === 0 ? 'hideable-zero' : '');
+                html += generateStatItem('Failures', formatNumber(totalStats.failCount), totalStats.failCount > 0 ? 'fail' : 'zero', totalStats.failCount === 0 ? 'hideable-zero' : '');
+                html += generateStatItem('Timeouts', formatNumber(totalStats.timeoutCount), totalStats.timeoutCount > 0 ? 'timeout' : 'zero', totalStats.timeoutCount === 0 ? 'hideable-zero' : '');
+                html += generateStatItem('Crashes', formatNumber(totalStats.crashCount), totalStats.crashCount > 0 ? 'fail' : 'zero', totalStats.crashCount === 0 ? 'hideable-zero' : '');
+
+                html += `</div>`;
+                html += `</div>`;
+
+                // Only render tests if component is expanded
+                if (isExpanded) {
+                    // Sort tests within component by current sort order
+                    const sortedTests = sortTestList(group.tests.map(t => {
+                        const stats = t.data.stats || computeTestStats(t.data.testId);
+                        const totalFailures = (stats.failCount || 0) + (stats.timeoutCount || 0);
+                        return {
+                            testPath: t.testPath,
+                            stats: stats,
+                            avgDuration: stats.avgDuration,
+                            totalFailures: totalFailures
+                        };
+                    }));
+
+                    // Render tests in this component (only tests not passing 100% or with skips)
+                    sortedTests.forEach(test => {
+                        const testData = aggregatedData[test.testPath];
+                        const hasRuns = test.stats.runCount > 0;
+
+                        // Skip tests with no issues
+                        if (test.stats.issuePercentage === 0) {
+                            return;
+                        }
+
+                        const componentTitle = testData.component ? ` title="Component: ${escapeHtml(testData.component)}"` : '';
+
+                        html += `<div class="tree-row test-row list-row" data-path="${test.testPath}" data-level="1">`;
+                        html += `<div class="tree-name">`;
+                        html += `<span class="tree-indent" style="width: 20px"></span>`;
+                        html += `<span class="test-icon"></span>`;
+                        html += `<span${componentTitle}>${test.testPath}</span>`;
+                        html += generateTestButtons(test.testPath);
+                        html += `</div>`;
+                        html += `<div class="tree-stats">`;
+                        html += generateStatsHtml(test.stats, test.testPath, hasRuns);
+                        html += `</div>`;
+                        html += `</div>`;
+                    });
+                }
+            });
+
+            html += '</div>';
+
+            document.getElementById('tree-table').innerHTML = html;
+
+            // Add click handlers for folder rows (component headers)
+            document.querySelectorAll('.folder-row:not(.non-clickable)').forEach(row => {
+                row.addEventListener('click', () => toggleFolder(row));
+            });
+
+            // Add click handlers for test rows
+            document.querySelectorAll('.test-row').forEach(row => {
+                row.addEventListener('click', () => toggleTestChart(row));
+            });
+
+            // Add tooltip handlers
+            document.querySelectorAll('.lazy-tooltip').forEach(element => {
+                element.addEventListener('mouseenter', handleTooltipMouseEnter);
+                element.addEventListener('mouseleave', handleTooltipMouseLeave);
+            });
+        }
+
+        // Handle tooltip mouse enter event
+        function handleTooltipMouseEnter(event) {
+            const element = event.target;
+            const tooltipType = element.dataset.tooltipType;
+
+            // Determine the data source
+            let platformBreakdown;
+            let testData = null;
+            if (element.dataset.totalRoot) {
+                // Total row - calculate for entire tree
+                platformBreakdown = treeData ? calculateFolderPlatformBreakdown(treeData) : {};
+            } else if (element.dataset.folderPath) {
+                // Folder - find the folder node and calculate breakdown
+                const folderPath = element.dataset.folderPath;
+                const folderNode = findFolderNode(treeData, folderPath);
+                platformBreakdown = folderNode ? calculateFolderPlatformBreakdown(folderNode) : {};
+            } else if (element.dataset.testPath) {
+                // Test - get the test data and calculate breakdown
+                const testPath = element.dataset.testPath;
+                testData = aggregatedData[testPath];
+
+                if (['min', 'avg', 'max'].includes(tooltipType)) {
+                    // For timing tooltips, use the timing breakdown function
+                    platformBreakdown = testData ? calculateTestPlatformTimingBreakdown(testData) : {};
+                } else {
+                    // For other tooltips, use the regular breakdown function
+                    platformBreakdown = testData ? calculateTestPlatformBreakdown(testData) : {};
+                }
+            }
+
+            // Generate and show tooltip
+            const testPath = element.dataset.testPath || null;
+            const tooltipContent = generateTooltipContent(platformBreakdown, tooltipType, testData, testPath);
+            if (tooltipContent) {
+                showTooltip(element, tooltipContent);
+            }
+        }
+
+        // Handle tooltip mouse leave event
+        function handleTooltipMouseLeave(event) {
+            hideTooltip();
+        }
+
+        // Find folder node by path
+        function findFolderNode(node, targetPath) {
+            if (node.path === targetPath) {
+                return node;
+            }
+
+            for (const child of Object.values(node.children)) {
+                const found = findFolderNode(child, targetPath);
+                if (found) return found;
+            }
+
+            return null;
+        }
+
+        // Show tooltip
+        function showTooltip(element, content) {
+            // Remove any existing tooltip
+            hideTooltip();
+
+            const tooltip = document.createElement('div');
+            tooltip.className = 'dynamic-tooltip';
+            tooltip.innerHTML = content;
+
+            document.body.appendChild(tooltip);
+
+            // Position tooltip near the element
+            const rect = element.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+
+            // Account for scroll position
+            const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+
+            let left = rect.left + scrollLeft + (rect.width / 2) - (tooltipRect.width / 2);
+            let top = rect.top + scrollTop - tooltipRect.height - 8;
+
+            // Adjust if tooltip would go off screen (using viewport coordinates)
+            if (left - scrollLeft < 8) left = scrollLeft + 8;
+            if (left - scrollLeft + tooltipRect.width > window.innerWidth - 8) {
+                left = scrollLeft + window.innerWidth - tooltipRect.width - 8;
+            }
+            if (top - scrollTop < 8) {
+                top = rect.bottom + scrollTop + 8;
+            }
+
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        }
+
+        // Hide tooltip
+        function hideTooltip() {
+            const existing = document.querySelector('.dynamic-tooltip');
+            if (existing) {
+                existing.remove();
+            }
+        }
+
+        // Toggle folder expansion
+        function toggleFolder(row) {
+            const path = row.dataset.path;
+
+            // Save scroll position before DOM changes
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+
+            if (expandedRows.has(path)) {
+                expandedRows.delete(path);
+            } else {
+                expandedRows.add(path);
+            }
+
+            changeView();
+
+            // Restore scroll position after DOM rebuild
+            window.scrollTo(0, scrollTop);
+        }
+
+        // Toggle test issue details
+        function toggleTestChart(row) {
+            const path = row.dataset.path;
+            toggleIssueDetails(row, path);
+        }
+
+        // Toggle issue details display
+        function toggleIssueDetails(row, path) {
+            let existingDetailsRow = row.nextElementSibling;
+            if (existingDetailsRow && existingDetailsRow.classList.contains('issue-details-row')) {
+                // Remove existing details
+                existingDetailsRow.remove();
+            } else {
+                // Get test data
+                const testData = aggregatedData[path];
+                if (!testData) return;
+
+                // Generate issue details HTML
+                const detailsHtml = generateIssueDetailsHtml(path, testData);
+                row.insertAdjacentHTML('afterend', detailsHtml);
+            }
+        }
+
+        // Generate HTML for issue details
+        function generateIssueDetailsHtml(testPath, testData) {
+            let html = `<div class="issue-details-row">`;
+            html += `<div class="issue-details-content">`;
+
+            // Collect all issues into a single array
+            const allIssues = [];
+
+            // Get skip messages
+            const skipMessages = getSkipMessageCounts(testData.testId);
+            skipMessages.forEach(({message, count}) => {
+                const displayMessage = message.replace(/^skip-if:\s*/, '');
+                allIssues.push({
+                    count: count,
+                    type: 'SKIP',
+                    message: displayMessage
+                });
+            });
+
+            // Get failure messages
+            const failureMessages = getFailureMessageCounts(testData.testId);
+            let failureMessagesCount = 0;
+            failureMessages.forEach(({message, count}) => {
+                // Show full message, allow wrapping
+                allIssues.push({
+                    count: count,
+                    type: 'FAIL',
+                    message: message
+                });
+                failureMessagesCount += count;
+            });
+
+            // Add fallback for failures without messages (Android logging issue)
+            const totalFailCount = testData.stats?.failCount || 0;
+            if (totalFailCount > failureMessagesCount) {
+                allIssues.push({
+                    count: totalFailCount - failureMessagesCount,
+                    type: 'FAIL',
+                    message: 'Failure details not recorded (likely Android or platform logging issue)'
+                });
+            }
+
+            // Get crash data
+            const crashData = getCrashData(testData.testId);
+            crashData.signatures.forEach(({signature, count}) => {
+                allIssues.push({
+                    count: count,
+                    type: 'CRASH',
+                    message: signature
+                });
+            });
+
+            // Get timeout data
+            const timeoutCount = testData.stats?.timeoutCount || 0;
+            if (timeoutCount > 0) {
+                allIssues.push({
+                    count: timeoutCount,
+                    type: 'TIMEOUT',
+                    message: 'Test exceeded time limit'
+                });
+            }
+
+            if (allIssues.length === 0) {
+                html += `<div class="issue-section"><p>No issues found for this test.</p></div>`;
+            } else {
+                // Sort by count descending
+                allIssues.sort((a, b) => b.count - a.count);
+
+                // Render single list
+                html += `<div class="issue-section">`;
+                allIssues.forEach(({count, type, message}, index) => {
+                    const badgeClass = type === 'SKIP' ? 'badge-skip' :
+                                      type === 'FAIL' ? 'badge-fail' :
+                                      type === 'CRASH' ? 'badge-crash' : 'badge-timeout';
+                    const issueId = `issue-${testPath.replace(/[^a-zA-Z0-9]/g, '-')}-${index}`;
+                    // Store message in a way that preserves it for matching
+                    const escapedMessage = message.replace(/"/g, '&quot;');
+                    html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${testPath}" data-test-id="${testData.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                    html += `<span class="issue-count">${count}</span>`;
+                    html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
+                    html += `<span class="issue-message">${escapeHtml(message)}</span>`;
+                    html += `</div>`;
+                    html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
+                });
+                html += `</div>`;
+            }
+
+            html += `</div>`;
+            html += `</div>`;
+            return html;
+        }
+
+        // Toggle issue runs expansion
+        function toggleIssueRuns(issueItem, event) {
+            event.stopPropagation(); // Prevent test row toggle
+
+            const issueId = issueItem.dataset.issueId;
+            const runsDiv = document.getElementById(`${issueId}-runs`);
+
+            if (runsDiv.style.display === 'none') {
+                // Expand - load and show runs
+                const testId = parseInt(issueItem.dataset.testId);
+                const testPath = issueItem.dataset.testPath;
+                const issueType = issueItem.dataset.issueType;
+                // Decode HTML entities from data attribute
+                const issueMessage = issueItem.dataset.issueMessage.replace(/&quot;/g, '"');
+
+                const runsHtml = getIssueRuns(testId, testPath, issueType, issueMessage);
+                runsDiv.innerHTML = runsHtml;
+                runsDiv.style.display = 'block';
+            } else {
+                // Collapse
+                runsDiv.style.display = 'none';
+            }
+        }
+
+        // Get runs for a specific issue
+        function getIssueRuns(testId, testPath, issueType, issueMessage) {
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return '<div class="issue-run-item">No run data available</div>';
+
+            const runs = [];
+
+            if (issueType === 'SKIP') {
+                // Find SKIP status
+                const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
+                if (skipStatusId !== -1) {
+                    const statusGroup = testGroup[skipStatusId];
+                    if (statusGroup) {
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            const displayMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
+
+                            if (displayMessage === issueMessage) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const duration = statusGroup.durations?.[i];
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                            }
+                        }
+                    }
+                }
+            } else if (issueType === 'FAIL') {
+                // Find all FAIL-* statuses
+                const failStatusIds = currentData.tables.statuses
+                    .map((status, idx) => status.startsWith('FAIL-') ? idx : -1)
+                    .filter(idx => idx !== -1);
+
+                failStatusIds.forEach(statusId => {
+                    const statusGroup = testGroup[statusId];
+                    if (statusGroup) {
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+
+                            if (message === issueMessage || (!message && issueMessage.includes('not recorded'))) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const duration = statusGroup.durations?.[i];
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                            }
+                        }
+                    }
+                });
+            } else if (issueType === 'CRASH') {
+                // Find CRASH status
+                const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+                if (crashStatusId !== -1) {
+                    const statusGroup = testGroup[crashStatusId];
+                    if (statusGroup) {
+                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const sigId = statusGroup.crashSignatureIds?.[i];
+                            const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
+
+                            if (signature === issueMessage) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const duration = statusGroup.durations?.[i];
+                                const minidump = statusGroup.minidumps?.[i];
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration, minidump));
+                            }
+                        }
+                    }
+                }
+            } else if (issueType === 'TIMEOUT') {
+                // Find TIMEOUT statuses
+                const timeoutStatuses = ['TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL'];
+                timeoutStatuses.forEach(status => {
+                    const statusId = currentData.tables.statuses.indexOf(status);
+                    if (statusId !== -1) {
+                        const statusGroup = testGroup[statusId];
+                        if (statusGroup) {
+                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
+                                const duration = statusGroup.durations?.[i];
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (runs.length === 0) {
+                return '<div class="issue-run-item">No matching runs found</div>';
+            }
+
+            return runs.map(run => {
+                const link = run.link ? `<a href="${run.link}" target="_blank">${run.jobName}</a>` : run.jobName;
+                // Don't show duration for skips (they don't run)
+                const showDuration = run.issueType !== 'SKIP' && run.duration !== null && run.duration !== undefined;
+                const formattedDuration = showDuration ? ` - ${formatDurationMs(run.duration, true)}` : '';
+                return `<div class="issue-run-item">${link}${formattedDuration}</div>`;
+            }).join('');
+        }
+
+        // Create run info object with link
+        function createRunInfo(taskIdIndex, issueType, testPath, duration = null, minidump = null) {
+            const taskIdString = currentData.tables.taskIds[taskIdIndex];
+            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            const [taskId, retryId] = taskIdString.split('.');
+
+            let link = null;
+            if (issueType === 'CRASH' && minidump) {
+                const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${minidump}.json`;
+                link = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
+            } else {
+                const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+                const profileName = `${jobName} (${taskIdString})`;
+                const testName = testPath.split('/').pop();
+                link = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+            }
+
+            return { jobName, link, taskIdString, duration, issueType };
+        }
+
+        // Show visual feedback for successful copy
+        function showCopySuccess(button) {
+            const originalText = button.textContent;
+            button.textContent = '✓';
+            button.style.color = '#28a745';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.color = '';
+            }, 1000);
+        }
+
+        // Copy test name to clipboard
+        function copyTestName(testPath) {
+            const button = event.target;
+
+            // Check if clipboard API is available (requires HTTPS or localhost)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(testPath).then(() => {
+                    showCopySuccess(button);
+                }).catch(() => {
+                    // Fallback for clipboard API errors
+                    fallbackCopyToClipboard(testPath, button);
+                });
+            } else {
+                // Fallback when clipboard API is not available (HTTP, older browsers)
+                fallbackCopyToClipboard(testPath, button);
+            }
+        }
+
+        // Fallback copy function for non-HTTPS environments
+        function fallbackCopyToClipboard(text, button) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    showCopySuccess(button);
+                } else {
+                    console.log('Copy command returned false');
+                }
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            document.body.removeChild(textArea);
+        }
+
+        // Render scatter plots for a test
+        // Wait for Plotly to be available
+
+
+        // Auto-expand folders that contain matching tests for a search term
+        function autoExpandForSearch(searchTerm) {
+            const lowerSearchTerm = searchTerm.toLowerCase();
+
+            // Function to recursively expand folders with matches
+            function expandMatchingFolders(node, currentPath = '') {
+                // Check tests in this node
+                for (const testName of Object.keys(node.tests)) {
+                    const fullPath = currentPath ? `${currentPath}/${testName}` : testName;
+                    if (fullPath.toLowerCase().includes(lowerSearchTerm)) {
+                        // Expand all parent folders of this test
+                        const parts = fullPath.split('/');
+                        for (let i = 1; i < parts.length; i++) {
+                            expandedRows.add(parts.slice(0, i).join('/'));
+                        }
+                    }
+                }
+
+                // Check child folders
+                for (const childName of Object.keys(node.children)) {
+                    const childPath = currentPath ? `${currentPath}/${childName}` : childName;
+                    expandMatchingFolders(node.children[childName], childPath);
+                }
+            }
+
+            if (treeData) {
+                expandMatchingFolders(treeData);
+            }
+        }
+
+        // Change view based on radio buttons
+        function changeView() {
+            // Always render components view for issues page
+            // Don't update hash if we're navigating (back/forward button)
+            if (!isNavigating) {
+                updateUrlHash();
+            }
+            renderComponentsView();
+        }
+
+        // Apply filtering to current view
+        function applyFiltering() {
+            // Always use components view for issues page
+            renderComponentsView();
+        }
+
+        // Load try revision data
+        async function loadTryRevision(revision = null) {
+            // If no revision provided, prompt for it
+            if (!revision) {
+                revision = prompt('Enter try revision hash:');
+                if (!revision || !revision.trim()) return;
+            }
+
+            setStatusText('Loading try revision...');
+            hideError();
+
+            try {
+                const file = `xpcshell-try-${revision}.json`;
+                const response = await fetchData(file);
+
+                if (!response.ok) {
+                    throw new Error(`Try revision data not found. Run: node fetch-xpcshell-data.js --try ${revision}`);
+                }
+
+                currentData = await response.json();
+
+                // Process raw data to create test entries and tree structure
+                aggregatedData = createTestEntries();
+                treeData = buildTreeStructure(aggregatedData);
+
+                // Clear date selector and show revision info
+                document.getElementById('date-select').value = '';
+                const jobCount = currentData.metadata.jobCount || 0;
+                setStatusText(`Try: ${revision.substring(0, 12)} (${jobCount.toLocaleString()} jobs)`);
+
+                // Update URL to include try parameter
+                const url = new URL(window.location);
+                url.searchParams.set('try', revision);
+                window.history.replaceState({}, '', url);
+
+                // Render the view
+                changeView();
+            } catch (error) {
+                showError(error.message);
+                setStatusText('');
+            }
+        }
+
+        // Load data from cache
+        async function loadData() {
+            setStatusText('Loading data...');
+            hideError();
+
+            try {
+                const dateToLoad = document.getElementById('date-select').value;
+
+                if (!dateToLoad) {
+                    throw new Error('No date selected');
+                }
+
+                const file = `xpcshell-${dateToLoad}.json`;
+                const response = await fetchData(file);
+
+                if (!response.ok) {
+                    throw new Error('No data available');
+                }
+
+                currentData = await response.json();
+
+                // Process raw data to create test entries and tree structure
+                aggregatedData = createTestEntries();
+                treeData = buildTreeStructure(aggregatedData);
+
+                // Update date selector and show job count
+                if (currentData.metadata && currentData.metadata.date) {
+                    updateDateSelector(currentData.metadata.date);
+                    const jobCount = currentData.metadata.jobCount || 0;
+                    setStatusText(`${jobCount.toLocaleString()} test jobs`);
+                }
+
+                changeView();
+            } catch (error) {
+                showError(`Error loading data: ${error.message}`, true);
+            } finally {
+                // Status text will show either job count (on success) or remain as loading (on error)
+            }
+        }
+
+        // Update date selector
+        function updateDateSelector(currentDate) {
+            const select = document.getElementById('date-select');
+
+            // Add current date if not already present
+            const existingOption = Array.from(select.options).find(opt => opt.value === currentDate);
+            if (!existingOption) {
+                const option = document.createElement('option');
+                option.value = currentDate;
+                option.text = currentDate;
+                option.selected = true;
+                select.insertBefore(option, select.options[0]); // Insert at the beginning
+            }
+        }
+
+        // Helper function to update clear button visibility (defined globally so it's accessible everywhere)
+        function updateClearButton() {
+            const searchBox = document.getElementById('search-box');
+            const clearButton = document.getElementById('search-clear');
+            clearButton.style.display = searchBox.value.trim() ? 'flex' : 'none';
+        }
+
+        // Populate date selector with available dates from index
+        async function populateDateSelector() {
+            const select = document.getElementById('date-select');
+
+            try {
+                const response = await fetchData('index.json');
+                if (response.ok) {
+                    const index = await response.json();
+
+                    // Clear all existing options
+                    select.innerHTML = '';
+
+                    // Add all available dates
+                    if (index.dates && index.dates.length > 0) {
+                        index.dates.forEach((date, dateIndex) => {
+                            const option = document.createElement('option');
+                            option.value = date;
+                            option.text = date;
+                            option.selected = dateIndex === 0; // Select first (most recent) date
+                            select.appendChild(option);
+                        });
+
+                        // After populating dropdown, restore state from URL hash
+                        const hash = window.location.hash.slice(1);
+                        if (hash) {
+                            const params = new URLSearchParams(hash);
+
+                            // Restore date selection
+                            const urlDate = params.get('date');
+                            if (urlDate && index.dates.includes(urlDate)) {
+                                select.value = urlDate;
+                            }
+
+                            // Restore search filter
+                            const search = params.get('q');
+                            if (search) {
+                                document.getElementById('search-box').value = search;
+                                updateClearButton();
+                            }
+                        }
+                    } else {
+                        // No dates available
+                        showError('No data available. Please run: node fetch-xpcshell-data.js', true);
+                    }
+                } else {
+                    // Index file doesn't exist
+                    showError('No data available. Please run: node fetch-xpcshell-data.js to fetch data.', true);
+                }
+            } catch (e) {
+                console.warn('Could not load date index:', e);
+                showError('Error loading data index. Please ensure xpcshell-data/index.json exists.', true);
+            }
+        }
+
+        // Fetch new data by running the Node.js script
+        async function fetchNewData() {
+            showError('To fetch new data, run: node fetch-xpcshell-data.js');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Get references to search elements
+            const searchBox = document.getElementById('search-box');
+            const clearButton = document.getElementById('search-clear');
+
+            // Check URL parameters for try revision
+            const urlParams = new URLSearchParams(window.location.search);
+            const tryRevision = urlParams.get('try');
+
+            if (tryRevision) {
+                // Load try revision from URL
+                await loadTryRevision(tryRevision);
+            } else {
+                // Populate date selector first
+                await populateDateSelector();
+
+                // Then load data only if we have dates
+                // Set the hash first, which will trigger loadData via hashchange
+                if (document.getElementById('date-select').value && !window.location.hash) {
+                    updateUrlHash();
+                } else if (document.getElementById('date-select').value) {
+                    loadData();
+                }
+            }
+
+            // Set up search box with debouncing
+            let filterTimeout;
+
+            searchBox.addEventListener('input', function(e) {
+                // Update clear button visibility
+                updateClearButton();
+
+                // Clear previous timeout
+                clearTimeout(filterTimeout);
+
+                // Debounce both the filtering operation and hash update together
+                filterTimeout = setTimeout(() => {
+                    // Update hash first (with current search box value)
+                    if (!isNavigating) {
+                        updateUrlHash();
+                    }
+                    // Then do the expensive filtering
+                    originalFilterTree();
+                }, 300); // 300ms delay
+            });
+
+            // Clear button functionality
+            clearButton.addEventListener('click', function() {
+                searchBox.value = '';
+                updateClearButton();
+                clearTimeout(filterTimeout);
+                applyFiltering(); // Clear filter immediately
+                updateUrlHash(); // Update URL to remove q= parameter
+                searchBox.focus(); // Keep focus on search box
+            });
+
+            function loadFromUrlHash() {
+                const hash = window.location.hash.slice(1); // Remove #
+                const params = new URLSearchParams(hash);
+
+                // Restore date selection (or clear if not in hash)
+                const date = params.get('date');
+                document.getElementById('date-select').value = date || '';
+
+                // Restore search filter (or clear if not in hash)
+                // Don't update if the search box is currently focused (user is typing)
+                const searchBox = document.getElementById('search-box');
+                if (document.activeElement !== searchBox) {
+                    const search = params.get('q');
+                    searchBox.value = search || '';
+                    updateClearButton();
+                }
+            }
+
+            // URL hash will be loaded after the date index is fetched
+
+            // Update hash when date changes (modify existing loadData function)
+            const originalOnChange = document.getElementById('date-select').onchange;
+            document.getElementById('date-select').onchange = function() {
+                updateUrlHash();
+                if (originalOnChange) originalOnChange.call(this);
+            };
+
+            // Store reference to filtering function (no wrapper needed since we handle hash in input handler)
+            const originalFilterTree = applyFiltering;
+
+            // Handle browser back/forward buttons
+            window.addEventListener('hashchange', async function() {
+                isNavigating = true;
+
+                // Cancel any pending debounced updates from search box input
+                clearTimeout(filterTimeout);
+
+                // Store the current date before loading from hash
+                const previousDate = document.getElementById('date-select').value;
+
+                loadFromUrlHash();
+
+                const newDate = document.getElementById('date-select').value;
+
+                // Only reload data if the date changed, otherwise just apply filtering
+                if (newDate && newDate !== previousDate) {
+                    await loadData(); // This will also call filtering after loading data
+                } else if (newDate) {
+                    applyFiltering(); // Update view with current filter state
+                }
+
+                // Keep isNavigating true briefly to prevent the search box value change from triggering hash update
+                setTimeout(() => {
+                    isNavigating = false;
+                }, 50);
+            });
+        });
+    </script>
+    <script async src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</body>
+</html>
