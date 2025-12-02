@@ -1902,13 +1902,13 @@
                         };
                     }));
 
-                    // Render tests in this component (only tests not passing 100% or with skips)
+                    // Render tests in this component (only tests with issues)
                     sortedTests.forEach(test => {
                         const testData = aggregatedData[test.testPath];
                         const hasRuns = test.stats.runCount > 0;
 
                         // Skip tests with no issues
-                        if (test.stats.issuePercentage === 0) {
+                        if (test.stats.issueCount === 0) {
                             return;
                         }
 
