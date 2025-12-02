@@ -118,12 +118,6 @@
             width: 20px;
         }
 
-        .chart-expansion {
-            padding: 20px;
-            background: #f9f9f9;
-            border-top: 1px solid #ddd;
-        }
-
         .controls {
             display: flex;
             align-items: center;
@@ -551,7 +545,6 @@
         let sortField = 'issueCount';
         let sortDirection = 'desc'; // Start with descending for failure count (most failing first)
         let isNavigating = false; // Flag to prevent hash updates during navigation
-        let listObserver = null; // Intersection Observer for list view lazy loading
 
         // Format duration in milliseconds to human readable
         function formatDurationMs(ms, hasData = true) {
@@ -940,109 +933,6 @@
                 min: finalMinDuration,
                 totalDuration: totalDuration
             };
-        }
-
-        // Lazy function to get platforms for a test
-        function getTestPlatforms(testPath) {
-            const testData = aggregatedData[testPath];
-            if (!testData) return [];
-
-            if (testData.platforms) {
-                return testData.platforms;
-            }
-
-            const platforms = new Set();
-            const testGroup = currentData.testRuns[testData.testId];
-
-            if (testGroup) {
-                // Process each status group to collect platforms
-                for (let statusId = 0; statusId < testGroup.length; statusId++) {
-                    const statusGroup = testGroup[statusId];
-                    if (!statusGroup) continue;
-
-                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                        const taskIdIndex = statusGroup.taskIdIds[i];
-                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                        platforms.add(extractPlatform(jobName) || 'unknown');
-                    }
-                }
-            }
-
-            // Cache platforms
-            testData.platforms = Array.from(platforms);
-            return testData.platforms;
-        }
-
-        // Lazy function to create run objects only when needed for charts
-        function getTestRuns(testPath) {
-            const testData = aggregatedData[testPath];
-            if (!testData || testData.runs) {
-                // Already computed or no data
-                return testData?.runs || [];
-            }
-
-            const testGroup = currentData.testRuns[testData.testId];
-            const runs = [];
-            const startTime = (currentData.metadata.startTime || 0) * 1000; // Convert seconds to ms
-
-            if (!testGroup) return runs;
-
-            // Process each status group for this test
-            for (let statusId = 0; statusId < testGroup.length; statusId++) {
-                const statusGroup = testGroup[statusId];
-                if (!statusGroup) continue;
-
-                const status = currentData.tables.statuses[statusId];
-                const runCount = statusGroup.taskIdIds.length;
-
-                // Decompress differential timestamps back to absolute values
-                const decompressedTimestamps = [];
-                if (statusGroup.timestamps.length > 0) {
-                    let currentTimestamp = 0;
-                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
-                        currentTimestamp += statusGroup.timestamps[i];
-                        decompressedTimestamps.push(currentTimestamp);
-                    }
-                }
-
-                for (let i = 0; i < runCount; i++) {
-                    const duration = statusGroup.durations[i];
-                    const taskIdIndex = statusGroup.taskIdIds[i];
-                    const taskIdString = currentData.tables.taskIds[taskIdIndex];
-                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-
-                    const run = {
-                        duration: duration,
-                        repository: currentData.tables.repositories[currentData.taskInfo.repositoryIds[taskIdIndex]],
-                        jobName: jobName,
-                        taskIdString: taskIdString,
-                        status: status,
-                        timestamp: startTime + (decompressedTimestamps[i] * 1000), // Convert relative seconds to absolute ms
-                        isFail: status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status),
-                        isSkip: status === 'SKIP',
-                        isTimeout: status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL' || (status === 'UNKNOWN' && duration > 300000)
-                    };
-
-                    // Add crash data for CRASH status
-                    if (status === 'CRASH' && statusGroup.crashSignatureIds && statusGroup.minidumps) {
-                        const crashSigId = statusGroup.crashSignatureIds[i];
-                        run.crashSignature = crashSigId !== null ? currentData.tables.crashSignatures[crashSigId] : null;
-                        run.minidump = statusGroup.minidumps[i];
-                    }
-
-                    // Add failure message for FAIL-* statuses
-                    if (status && status.startsWith('FAIL-') && statusGroup.messageIds) {
-                        const messageId = statusGroup.messageIds[i];
-                        run.failureMessage = messageId !== null ? currentData.tables.messages[messageId] : null;
-                    }
-
-                    runs.push(run);
-                }
-            }
-
-            // Cache the runs for future use
-            testData.runs = runs;
-            return runs;
         }
 
         // Build tree structure from test entries, computing statistics directly from raw data
@@ -2050,7 +1940,7 @@
 
             // Add click handlers for test rows
             document.querySelectorAll('.test-row').forEach(row => {
-                row.addEventListener('click', () => toggleTestChart(row));
+                row.addEventListener('click', () => toggleIssueDetails(row, row.dataset.path));
             });
 
             // Add tooltip handlers
@@ -2177,12 +2067,6 @@
 
             // Restore scroll position after DOM rebuild
             window.scrollTo(0, scrollTop);
-        }
-
-        // Toggle test issue details
-        function toggleTestChart(row) {
-            const path = row.dataset.path;
-            toggleIssueDetails(row, path);
         }
 
         // Toggle issue details display
@@ -2489,40 +2373,6 @@
             document.body.removeChild(textArea);
         }
 
-        // Render scatter plots for a test
-        // Wait for Plotly to be available
-
-
-        // Auto-expand folders that contain matching tests for a search term
-        function autoExpandForSearch(searchTerm) {
-            const lowerSearchTerm = searchTerm.toLowerCase();
-
-            // Function to recursively expand folders with matches
-            function expandMatchingFolders(node, currentPath = '') {
-                // Check tests in this node
-                for (const testName of Object.keys(node.tests)) {
-                    const fullPath = currentPath ? `${currentPath}/${testName}` : testName;
-                    if (fullPath.toLowerCase().includes(lowerSearchTerm)) {
-                        // Expand all parent folders of this test
-                        const parts = fullPath.split('/');
-                        for (let i = 1; i < parts.length; i++) {
-                            expandedRows.add(parts.slice(0, i).join('/'));
-                        }
-                    }
-                }
-
-                // Check child folders
-                for (const childName of Object.keys(node.children)) {
-                    const childPath = currentPath ? `${currentPath}/${childName}` : childName;
-                    expandMatchingFolders(node.children[childName], childPath);
-                }
-            }
-
-            if (treeData) {
-                expandMatchingFolders(treeData);
-            }
-        }
-
         // Change view based on radio buttons
         function changeView() {
             // Always render components view for issues page
@@ -2746,7 +2596,7 @@
                         updateUrlHash();
                     }
                     // Then do the expensive filtering
-                    originalFilterTree();
+                    applyFiltering();
                 }, 300); // 300ms delay
             });
 
@@ -2787,9 +2637,6 @@
                 if (originalOnChange) originalOnChange.call(this);
             };
 
-            // Store reference to filtering function (no wrapper needed since we handle hash in input handler)
-            const originalFilterTree = applyFiltering;
-
             // Handle browser back/forward buttons
             window.addEventListener('hashchange', async function() {
                 isNavigating = true;
@@ -2818,6 +2665,5 @@
             });
         });
     </script>
-    <script async src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 </body>
 </html>
