@@ -657,6 +657,20 @@
             return div.innerHTML;
         }
 
+        function linkifyFailureMessage(message, testPath) {
+            const pattern = /^\[([^\] :]+) : (\d+)\]/;
+            const match = message.match(pattern);
+
+            if (match) {
+                const [fullMatch, , lineNumber] = match;
+                const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}#${lineNumber}`;
+                const link = `<a href="${searchfoxUrl}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(fullMatch)}</a>`;
+                return link + escapeHtml(message.substring(fullMatch.length));
+            }
+
+            return escapeHtml(message);
+        }
+
         // Get CSS class and display value for issue percentage
         function getIssuePercentageDisplay(issueCount, totalCount) {
             if (totalCount === 0) {
@@ -1525,7 +1539,7 @@
                     failureMessageCounts.forEach(({message, count}) => {
                         const displayMessage = truncateMessage(message, 100);
                         content += `<div style="font-size: 11px; margin-top: 4px; color: #ccc;">`;
-                        content += `<span style="font-family: monospace; word-break: break-word;">${escapeHtml(displayMessage)}</span>`;
+                        content += `<span style="font-family: monospace; word-break: break-word;">${linkifyFailureMessage(displayMessage, testPath)}</span>`;
                         content += ` <span style="color: #999;">(${count})</span>`;
                         content += `</div>`;
                     });
@@ -2794,7 +2808,7 @@
                     html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${testPath}" data-test-id="${testData.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
                     html += `<span class="issue-count">${count}</span>`;
                     html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
-                    html += `<span class="issue-message">${escapeHtml(message)}</span>`;
+                    html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}</span>`;
                     html += `</div>`;
                     if (isHistoricalMode) {
                         html += `<div class="historical-chart" id="${issueId}-chart" style="display: none; margin-left: 50px;">`;
