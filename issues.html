@@ -3353,6 +3353,7 @@
                     await loadFromUrlHash();
                 } else if (document.getElementById('date-select').value) {
                     // No hash, load default date and update hash
+                    await loadData();
                     updateUrlHash();
                 }
             }
