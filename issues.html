@@ -178,6 +178,30 @@
             vertical-align: baseline;
         }
 
+        .historical-button {
+            margin-left: 15px;
+            padding: 6px 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .historical-button:hover {
+            background-color: #0056b3;
+        }
+
+        .historical-button.active {
+            background-color: #28a745;
+        }
+
+        .historical-button.active:hover {
+            background-color: #1e7e34;
+        }
+
         .explanation {
             background-color: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -472,8 +496,8 @@
         }
 
         .badge-skip {
-            background-color: #ffc107;
-            color: #000;
+            background-color: #6c757d;
+            color: #fff;
         }
 
         .badge-fail {
@@ -497,6 +521,39 @@
             line-height: 1.4;
             word-break: break-word;
         }
+
+        /* Chart styles */
+        .historical-chart {
+            margin: 0;
+            padding: 0;
+        }
+
+        .issue-details-content > .historical-chart {
+            margin-left: 20px;
+        }
+
+        .historical-chart h5 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .historical-chart-canvas {
+            max-height: 100px;
+            height: 100px;
+            width: 100%;
+        }
+
+        .historical-chart-canvas[id$="-skips-canvas"] {
+            max-height: 70px;
+            height: 70px;
+        }
+
+        .historical-chart-canvas.no-x-axis {
+            max-height: 60px;
+            height: 60px;
+        }
     </style>
 </head>
 <body>
@@ -509,6 +566,7 @@
                 <select id="date-select" onchange="loadData()">
                 </select>
                 <span id="status-text" class="status-text">Loading data...</span>
+                <button id="historical-button" class="historical-button" onclick="toggleHistoricalData()">Show Last 21 Days</button>
             </div>
             <div class="search-container">
                 <input type="text" class="search-box" id="search-box" placeholder="Search for test paths or components...">
@@ -545,6 +603,13 @@
         let sortField = 'issueCount';
         let sortDirection = 'desc'; // Start with descending for failure count (most failing first)
         let isNavigating = false; // Flag to prevent hash updates during navigation
+        let isHistoricalMode = false; // Flag to track if we're showing historical data
+        let historicalData = null; // Store the loaded historical data
+        let detailedData = null; // Store detailed data (with taskIds) when loaded
+        let isLoadingDetailedData = false; // Flag to prevent duplicate fetches
+
+        // Placeholder message for failures without recorded details (e.g., Android logging issues)
+        const FAILURE_NO_MESSAGE = 'Failure details not recorded (likely Android or platform logging issue)';
 
         // Format duration in milliseconds to human readable
         function formatDurationMs(ms, hasData = true) {
@@ -709,7 +774,7 @@
         }
 
         function updateUrlHash() {
-            const date = document.getElementById('date-select').value;
+            const date = isHistoricalMode ? '21days' : document.getElementById('date-select').value;
             const search = document.getElementById('search-box').value.trim();
             const view = getCurrentView();
 
@@ -733,7 +798,7 @@
         function createTestEntries() {
             const testEntries = {};
 
-            if (!currentData.testRuns || !currentData.tables || !currentData.taskInfo || !currentData.testInfo) {
+            if (!currentData.testRuns || !currentData.tables || !currentData.testInfo) {
                 return testEntries;
             }
 
@@ -784,9 +849,6 @@
             let failCount = 0;
             let crashCount = 0;
             let passCount = 0;
-            let maxDuration = 0;
-            let minDuration = Infinity;
-            let totalDuration = 0;
             let parallelFailCount = 0;
             let parallelPassCount = 0;
             let parallelTimeoutCount = 0;
@@ -800,7 +862,12 @@
                 if (!statusGroup) continue;
 
                 const status = currentData.tables.statuses[statusId];
-                const runCount = statusGroup.taskIdIds.length;
+
+                // Check if this is aggregated format (passing runs) or detailed format
+                const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+                const runCount = isAggregatedFormat
+                    ? statusGroup.counts.reduce((sum, count) => sum + count, 0)
+                    : statusGroup.taskIdIds.length;
 
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
@@ -812,13 +879,27 @@
                     // Only count as skip if the message doesn't start with "run-if"
                     // (run-if indicates platform-specific tests, not actual skips due to broken tests)
                     if (statusGroup.messageIds) {
-                        for (const messageId of statusGroup.messageIds) {
-                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                            // Count as skip if there's no message or if it doesn't start with run-if
-                            if (!message || !message.startsWith('run-if')) {
-                                skipCount++;
+                        if (isAggregatedFormat) {
+                            // In aggregated format, messageIds is parallel to counts
+                            for (let i = 0; i < statusGroup.messageIds.length; i++) {
+                                const messageId = statusGroup.messageIds[i];
+                                const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                                // Count as skip if there's no message or if it doesn't start with run-if
+                                if (!message || !message.startsWith('run-if')) {
+                                    skipCount += statusGroup.counts[i];
+                                }
+                                // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
                             }
-                            // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
+                        } else {
+                            // In detailed format, iterate through messageIds
+                            for (const messageId of statusGroup.messageIds) {
+                                const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                                // Count as skip if there's no message or if it doesn't start with run-if
+                                if (!message || !message.startsWith('run-if')) {
+                                    skipCount++;
+                                }
+                                // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
+                            }
                         }
                     } else {
                         // If there are no message IDs, count all as skips
@@ -836,22 +917,20 @@
                 } else if (isCrash) {
                     crashCount += runCount;
                 } else if (status === 'UNKNOWN') {
-                    // Split UNKNOWN by duration: skips, timeouts, or passes
-                    for (const duration of statusGroup.durations) {
-                        if (duration < 100) {
-                            skipCount++;
-                        } else if (duration > 300000) {
-                            timeoutCount++;
-                        } else {
-                            passCount++;
-                            totalDuration += duration;
-                            if (duration > maxDuration) {
-                                maxDuration = duration;
-                            }
-                            if (duration < minDuration) {
-                                minDuration = duration;
+                    // For UNKNOWN status, check durations only if available (not aggregated)
+                    // Otherwise just count as passes
+                    if (!isAggregatedFormat && statusGroup.durations) {
+                        for (const duration of statusGroup.durations) {
+                            if (duration < 100) {
+                                skipCount++;
+                            } else if (duration > 300000) {
+                                timeoutCount++;
+                            } else {
+                                passCount++;
                             }
                         }
+                    } else {
+                        passCount += runCount;
                     }
                 } else if (status === 'FAIL-PARALLEL') {
                     failCount += runCount;
@@ -862,41 +941,14 @@
                 } else if (status === 'PASS-PARALLEL') {
                     passCount += runCount;
                     parallelPassCount += runCount;
-                    for (const duration of statusGroup.durations) {
-                        totalDuration += duration;
-                        if (duration > maxDuration) {
-                            maxDuration = duration;
-                        }
-                        if (duration < minDuration) {
-                            minDuration = duration;
-                        }
-                    }
                 } else if (status === 'PASS-SEQUENTIAL') {
                     passCount += runCount;
                     sequentialPassCount += runCount;
-                    for (const duration of statusGroup.durations) {
-                        totalDuration += duration;
-                        if (duration > maxDuration) {
-                            maxDuration = duration;
-                        }
-                        if (duration < minDuration) {
-                            minDuration = duration;
-                        }
-                    }
                 } else if (isFail) {
                     failCount += runCount;
                 } else {
                     // PASS or EXPECTED-FAIL (or old PASS without parallel/sequential designation)
                     passCount += runCount;
-                    for (const duration of statusGroup.durations) {
-                        totalDuration += duration;
-                        if (duration > maxDuration) {
-                            maxDuration = duration;
-                        }
-                        if (duration < minDuration) {
-                            minDuration = duration;
-                        }
-                    }
                 }
             }
 
@@ -909,9 +961,6 @@
             const parallelFailPercentage = parallelTotalRuns > 0
                 ? Math.round((parallelProblematicCount * 100) / parallelTotalRuns)
                 : 0;
-
-            // Handle case where no durations were found
-            const finalMinDuration = minDuration === Infinity ? 0 : minDuration;
 
             return {
                 runCount: runCount,
@@ -928,10 +977,7 @@
                 sequentialFailCount: sequentialFailCount,
                 sequentialTimeoutCount: sequentialTimeoutCount,
                 parallelFailPercentage: parallelFailPercentage,
-                issuePercentage: (runCount + skipCount) > 0 ? Math.round((skipCount + failCount + timeoutCount + crashCount) / (runCount + skipCount) * 100) : 0,
-                max: maxDuration,
-                min: finalMinDuration,
-                totalDuration: totalDuration
+                issuePercentage: (runCount + skipCount) > 0 ? ((skipCount + failCount + timeoutCount + crashCount) / (runCount + skipCount) * 100) : 0
             };
         }
 
@@ -1054,6 +1100,9 @@
                         // Only count parallel statuses
                         if (!status || !status.includes('PARALLEL')) continue;
 
+                        // Skip if no taskIdIds (aggregated format)
+                        if (!statusGroup.taskIdIds) continue;
+
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             const taskIdIndex = statusGroup.taskIdIds[i];
                             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
@@ -1100,7 +1149,7 @@
                         const isPass = status === 'PASS' || status === 'PASS-PARALLEL' || status === 'PASS-SEQUENTIAL';
 
                         // Only track timing for passing tests
-                        if (isPass) {
+                        if (isPass && statusGroup.taskIdIds) {
                             for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                                 const taskIdIndex = statusGroup.taskIdIds[i];
                                 const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
@@ -1156,6 +1205,8 @@
                         const isSkip = status === 'SKIP';
                         const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
                         const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
+
+                        if (!statusGroup.taskIdIds) continue;
 
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             // Skip run-if annotations early (platform-irrelevant tests)
@@ -1280,13 +1331,17 @@
             const statusGroup = testGroup[skipStatusId];
             if (!statusGroup || !statusGroup.messageIds) return [];
 
+            // Check if this is aggregated format
+            const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+
             // Count messages, excluding run-if (platform-specific tests that are irrelevant)
-            statusGroup.messageIds.forEach(messageId => {
+            statusGroup.messageIds.forEach((messageId, i) => {
                 if (messageId !== null) {
                     const message = currentData.tables.messages[messageId];
                     // Only include skip-if and other skip annotations, not run-if
                     if (message && !message.startsWith('run-if')) {
-                        messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                        const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                        messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                     }
                 }
             });
@@ -1330,11 +1385,15 @@
             failStatusIds.forEach(statusId => {
                 const statusGroup = testGroup[statusId];
                 if (statusGroup && statusGroup.messageIds) {
-                    statusGroup.messageIds.forEach(messageId => {
+                    // Check if this is aggregated format
+                    const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+
+                    statusGroup.messageIds.forEach((messageId, i) => {
                         if (messageId !== null) {
                             const message = currentData.tables.messages[messageId];
                             if (message) {
-                                messageCounts.set(message, (messageCounts.get(message) || 0) + 1);
+                                const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                                messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                             }
                         }
                     });
@@ -1362,19 +1421,23 @@
             const statusGroup = testGroup[crashStatusId];
             if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [], minidumps: [] };
 
+            // Check if this is aggregated format
+            const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+
             // Collect unique signatures with counts
             const signatureCounts = new Map();
-            statusGroup.crashSignatureIds.forEach(sigId => {
+            statusGroup.crashSignatureIds.forEach((sigId, i) => {
                 if (sigId !== null) {
                     const signature = currentData.tables.crashSignatures[sigId];
                     if (signature) {
-                        signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + 1);
+                        const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                        signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + count);
                     }
                 }
             });
 
-            // Collect unique minidumps
-            const minidumps = [...new Set(statusGroup.minidumps.filter(m => m !== null))];
+            // Collect unique minidumps (only available in detailed format)
+            const minidumps = statusGroup.minidumps ? [...new Set(statusGroup.minidumps.filter(m => m !== null))] : [];
 
             return {
                 signatures: Array.from(signatureCounts.entries())
@@ -1529,7 +1592,7 @@
                             const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
                             if (crashStatusId !== -1) {
                                 const statusGroup = testGroup[crashStatusId];
-                                if (statusGroup) {
+                                if (statusGroup && statusGroup.taskIdIds) {
                                     for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                                         const taskIdIndex = statusGroup.taskIdIds[i];
                                         const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
@@ -1604,7 +1667,7 @@
                 html += generateStatItem('Tests', formatNumber(totalStats.testCount));
             }
 
-            html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '', '', `Total duration of passing runs: ${formatDurationMs(totalStats.totalDuration, totalStats.runCount > 0)}`);
+            html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '');
 
             const totalIssuePercentageDisplay = getIssuePercentageDisplay(totalStats.issueCount, totalStats.runCount + totalStats.skipCount);
             html += generateStatItem('Issue %', totalIssuePercentageDisplay.displayValue, totalIssuePercentageDisplay.cssClass);
@@ -1797,14 +1860,12 @@
                         valueB = groupB.totalStats.runCount || 0;
                         break;
                     case 'issuePercentage':
-                        const issuePercentageA = (groupA.totalStats.runCount + groupA.totalStats.skipCount) > 0
-                            ? Math.round(groupA.totalStats.issueCount / (groupA.totalStats.runCount + groupA.totalStats.skipCount) * 100)
+                        valueA = (groupA.totalStats.runCount + groupA.totalStats.skipCount) > 0
+                            ? groupA.totalStats.issueCount / (groupA.totalStats.runCount + groupA.totalStats.skipCount)
                             : 0;
-                        const issuePercentageB = (groupB.totalStats.runCount + groupB.totalStats.skipCount) > 0
-                            ? Math.round(groupB.totalStats.issueCount / (groupB.totalStats.runCount + groupB.totalStats.skipCount) * 100)
+                        valueB = (groupB.totalStats.runCount + groupB.totalStats.skipCount) > 0
+                            ? groupB.totalStats.issueCount / (groupB.totalStats.runCount + groupB.totalStats.skipCount)
                             : 0;
-                        valueA = issuePercentageA;
-                        valueB = issuePercentageB;
                         break;
                     case 'skipCount':
                         valueA = groupA.totalStats.skipCount || 0;
@@ -1890,6 +1951,15 @@
 
                 // Only render tests if component is expanded
                 if (isExpanded) {
+                    // Add component-level chart if in historical mode
+                    if (isHistoricalMode) {
+                        const chartId = `component-chart-${componentName.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                        html += `<div class="historical-chart" style="margin-left: 20px;">`;
+                        html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                        html += `<canvas id="${chartId}-skips-canvas" class="historical-chart-canvas"></canvas>`;
+                        html += `</div>`;
+                    }
+
                     // Sort tests within component by current sort order
                     const sortedTests = sortTestList(group.tests.map(t => {
                         const stats = t.data.stats || computeTestStats(t.data.testId);
@@ -1897,7 +1967,6 @@
                         return {
                             testPath: t.testPath,
                             stats: stats,
-                            avgDuration: stats.avgDuration,
                             totalFailures: totalFailures
                         };
                     }));
@@ -1932,6 +2001,20 @@
             html += '</div>';
 
             document.getElementById('tree-table').innerHTML = html;
+
+            // Render component charts if in historical mode
+            if (isHistoricalMode) {
+                sortedComponents.forEach(([componentName, group]) => {
+                    const isExpanded = expandedRows.has(componentName);
+                    if (isExpanded) {
+                        const chartId = `component-chart-${componentName.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                        const dailyData = calculateComponentDailyFailureRates(group.tests);
+                        if (dailyData) {
+                            createFailureRateChart(`${chartId}-canvas`, dailyData, componentName);
+                        }
+                    }
+                });
+            }
 
             // Add click handlers for folder rows (component headers)
             document.querySelectorAll('.folder-row:not(.non-clickable)').forEach(row => {
@@ -2061,6 +2144,12 @@
                 expandedRows.delete(path);
             } else {
                 expandedRows.add(path);
+
+                // Start loading detailed data in the background when user expands a component
+                // This gives time for the large file to load before they click on individual tests
+                if (isHistoricalMode) {
+                    loadDetailedData();
+                }
             }
 
             changeView();
@@ -2076,6 +2165,11 @@
                 // Remove existing details
                 existingDetailsRow.remove();
             } else {
+                // Close all other open test details before opening this one
+                document.querySelectorAll('.issue-details-row').forEach(detailsRow => {
+                    detailsRow.remove();
+                });
+
                 // Get test data
                 const testData = aggregatedData[path];
                 if (!testData) return;
@@ -2083,13 +2177,547 @@
                 // Generate issue details HTML
                 const detailsHtml = generateIssueDetailsHtml(path, testData);
                 row.insertAdjacentHTML('afterend', detailsHtml);
+
+                // Render chart if in historical mode
+                if (isHistoricalMode && testData.testId !== undefined) {
+                    const chartId = `test-chart-${testData.testId}`;
+                    const dailyData = calculateDailyFailureRates(testData.testId);
+                    if (dailyData) {
+                        createFailureRateChart(`${chartId}-canvas`, dailyData, `${path}`);
+                    }
+                }
             }
+        }
+
+        // Calculate daily failure rates from historical data for a specific test
+        function calculateDailyFailureRates(testId) {
+            if (!isHistoricalMode || !historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const dailyData = [];
+
+            // Initialize daily data structure
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day: day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    passes: 0,
+                    failures: 0,
+                    timeouts: 0,
+                    crashes: 0,
+                    skips: 0
+                });
+            }
+
+            const testGroup = historicalData.testRuns[testId];
+            if (!testGroup) return dailyData;
+
+            // Process each status
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = historicalData.tables.statuses[statusId];
+
+                // Check if data is in aggregated format (counts + timeBuckets)
+                if (statusGroup.counts && statusGroup.timeBuckets) {
+                    // Aggregated format - process by hour
+                    let currentHour = 0;
+                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                        currentHour += statusGroup.timeBuckets[i];
+                        const day = Math.floor(currentHour / 24);
+                        if (day < days) {
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes += statusGroup.counts[i];
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes += statusGroup.counts[i];
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts += statusGroup.counts[i];
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips += statusGroup.counts[i];
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures += statusGroup.counts[i];
+                            }
+                        }
+                    }
+                } else if (statusGroup.timestamps) {
+                    // Detailed format (backwards compatibility) - process individual timestamps
+                    let currentTime = 0;
+                    for (const diff of statusGroup.timestamps) {
+                        currentTime += diff;
+                        const day = Math.floor(currentTime / 86400);
+                        if (day < days) {
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes++;
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes++;
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts++;
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips++;
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Calculate daily failure rates for an entire component (aggregate of all tests)
+        function calculateComponentDailyFailureRates(componentTests) {
+            if (!isHistoricalMode || !historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const dailyData = [];
+
+            // Initialize daily data structure
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day: day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    passes: 0,
+                    failures: 0,
+                    timeouts: 0,
+                    crashes: 0,
+                    skips: 0
+                });
+            }
+
+            // Aggregate data from all tests in the component
+            for (const test of componentTests) {
+                const testData = test.data;
+                if (!testData || testData.testId === undefined) continue;
+
+                const testDailyData = calculateDailyFailureRates(testData.testId);
+                if (!testDailyData) continue;
+
+                // Add this test's data to the component aggregate
+                for (let day = 0; day < days; day++) {
+                    dailyData[day].passes += testDailyData[day].passes;
+                    dailyData[day].failures += testDailyData[day].failures;
+                    dailyData[day].timeouts += testDailyData[day].timeouts;
+                    dailyData[day].crashes += testDailyData[day].crashes;
+                    dailyData[day].skips += testDailyData[day].skips;
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Calculate daily failure rates for a specific issue type and message
+        function calculateIssueMessageDailyRates(testId, issueType, issueMessage) {
+            if (!isHistoricalMode || !historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const dailyData = [];
+
+            // Initialize daily data structure
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day: day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    count: 0,
+                    totalRuns: 0
+                });
+            }
+
+            const testGroup = historicalData.testRuns[testId];
+            if (!testGroup) return dailyData;
+
+            // First, count total runs per day for this test
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                if (statusGroup.counts && statusGroup.timeBuckets) {
+                    // Aggregated format
+                    let currentHour = 0;
+                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                        currentHour += statusGroup.timeBuckets[i];
+                        const day = Math.floor(currentHour / 24);
+                        if (day < days) {
+                            dailyData[day].totalRuns += statusGroup.counts[i];
+                        }
+                    }
+                } else if (statusGroup.timestamps) {
+                    // Detailed format (backwards compatibility)
+                    let currentTime = 0;
+                    for (const diff of statusGroup.timestamps) {
+                        currentTime += diff;
+                        const day = Math.floor(currentTime / 86400);
+                        if (day < days) {
+                            dailyData[day].totalRuns++;
+                        }
+                    }
+                }
+            }
+
+            // Find the status ID for this issue type
+            let targetStatusId = -1;
+            for (let statusId = 0; statusId < historicalData.tables.statuses.length; statusId++) {
+                const status = historicalData.tables.statuses[statusId];
+                if (issueType === 'SKIP' && status === 'SKIP') {
+                    targetStatusId = statusId;
+                    break;
+                } else if (issueType === 'FAIL' && status && status.startsWith('FAIL')) {
+                    targetStatusId = statusId;
+                    break;
+                } else if (issueType === 'CRASH' && status === 'CRASH') {
+                    targetStatusId = statusId;
+                    break;
+                } else if (issueType === 'TIMEOUT' && (status === 'TIMEOUT' || status && status.startsWith('TIMEOUT'))) {
+                    targetStatusId = statusId;
+                    break;
+                }
+            }
+
+            if (targetStatusId === -1) return dailyData;
+
+            const statusGroup = testGroup[targetStatusId];
+            if (!statusGroup) return dailyData;
+
+            // Count occurrences of this specific message by day
+            if (statusGroup.counts && statusGroup.timeBuckets) {
+                // Aggregated format - counts are already grouped by message/signature
+                let currentHour = 0;
+                for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                    currentHour += statusGroup.timeBuckets[i];
+                    const day = Math.floor(currentHour / 24);
+
+                    // Check if this occurrence matches the message we're looking for
+                    let matchesMessage = false;
+                    if (issueType === 'TIMEOUT') {
+                        // Timeouts don't have individual messages, match all
+                        matchesMessage = true;
+                    } else if (issueType === 'SKIP' || issueType === 'FAIL') {
+                        const messageId = statusGroup.messageIds?.[i];
+                        const message = messageId !== null && messageId !== undefined ? historicalData.tables.messages[messageId] : null;
+                        const cleanMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
+
+                        // Special case: match empty messages when looking for the placeholder Android message
+                        if (issueMessage === FAILURE_NO_MESSAGE) {
+                            matchesMessage = !cleanMessage;
+                        } else {
+                            matchesMessage = cleanMessage === issueMessage;
+                        }
+                    } else if (issueType === 'CRASH') {
+                        const crashSigId = statusGroup.crashSignatureIds?.[i];
+                        const crashSig = crashSigId !== null && crashSigId !== undefined ? historicalData.tables.crashSignatures[crashSigId] : null;
+                        matchesMessage = crashSig === issueMessage;
+                    }
+
+                    if (matchesMessage && day < days) {
+                        dailyData[day].count += statusGroup.counts[i];
+                    }
+                }
+            } else if (statusGroup.timestamps) {
+                // Detailed format (backwards compatibility) - count individual timestamps
+                let currentTime = 0;
+                for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                    currentTime += statusGroup.timestamps[i];
+                    const day = Math.floor(currentTime / 86400);
+
+                    // Check if this occurrence matches the message we're looking for
+                    let matchesMessage = false;
+                    if (issueType === 'TIMEOUT') {
+                        // Timeouts don't have individual messages, match all
+                        matchesMessage = true;
+                    } else if (issueType === 'SKIP' || issueType === 'FAIL') {
+                        const messageId = statusGroup.messageIds?.[i];
+                        const message = messageId !== null && messageId !== undefined ? historicalData.tables.messages[messageId] : null;
+                        const cleanMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
+
+                        // Special case: match empty messages when looking for the placeholder Android message
+                        if (issueMessage === FAILURE_NO_MESSAGE) {
+                            matchesMessage = !cleanMessage;
+                        } else {
+                            matchesMessage = cleanMessage === issueMessage;
+                        }
+                    } else if (issueType === 'CRASH') {
+                        const crashSigId = statusGroup.crashSignatureIds?.[i];
+                        const crashSig = crashSigId !== null && crashSigId !== undefined ? historicalData.tables.crashSignatures[crashSigId] : null;
+                        matchesMessage = crashSig === issueMessage;
+                    }
+
+                    if (matchesMessage && day < days) {
+                        dailyData[day].count++;
+                    }
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Helper to get common chart options
+        function getCommonChartOptions(yAxisLabel, tooltipCallback, additionalOptions = {}) {
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    title: { display: false },
+                    legend: { display: false },
+                    tooltip: {
+                        animation: false,
+                        callbacks: { label: tooltipCallback }
+                    }
+                },
+                scales: {
+                    x: {},
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: yAxisLabel },
+                        ticks: { callback: (value) => value + '%' }
+                    }
+                }
+            };
+
+            // Merge additional options (for stacked charts, footer callbacks, etc.)
+            if (additionalOptions.stacked) {
+                options.scales.x.stacked = true;
+                options.scales.y.stacked = true;
+            }
+            if (additionalOptions.hideXAxis) {
+                options.scales.x.display = false;
+            }
+            if (additionalOptions.tooltipFooter) {
+                options.plugins.tooltip.callbacks.footer = additionalOptions.tooltipFooter;
+            }
+
+            return options;
+        }
+
+        // Create a simpler Chart.js bar chart for issue message rates over time
+        function createIssueMessageChart(canvasId, dailyData, title, issueType) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+
+            const labels = dailyData.map(d => d.date);
+            const percentages = dailyData.map(d => d.totalRuns > 0 ? (d.count / d.totalRuns * 100) : 0);
+
+            // Color based on issue type
+            let backgroundColor, borderColor;
+            if (issueType === 'SKIP') {
+                backgroundColor = 'rgba(108, 117, 125, 0.7)';
+                borderColor = '#6c757d';
+            } else if (issueType === 'FAIL') {
+                backgroundColor = 'rgba(255, 140, 0, 0.7)';
+                borderColor = '#ff8c00';
+            } else if (issueType === 'TIMEOUT') {
+                backgroundColor = 'rgba(255, 193, 7, 0.7)';
+                borderColor = '#ffc107';
+            } else if (issueType === 'CRASH') {
+                backgroundColor = 'rgba(220, 53, 69, 0.7)';
+                borderColor = '#dc3545';
+            } else {
+                backgroundColor = 'rgba(220, 53, 69, 0.7)';
+                borderColor = '#dc3545';
+            }
+
+            const yAxisLabel = issueType === 'FAIL' ? '% failures' :
+                              issueType === 'TIMEOUT' ? '% timeouts' :
+                              issueType === 'CRASH' ? '% crashes' :
+                              issueType === 'SKIP' ? '% skips' : '% issues';
+
+            return new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Occurrence Rate',
+                        data: percentages,
+                        backgroundColor: backgroundColor,
+                        borderColor: borderColor,
+                        borderWidth: 1
+                    }]
+                },
+                options: getCommonChartOptions(yAxisLabel, function(context) {
+                    const dataIndex = context.dataIndex;
+                    const data = dailyData[dataIndex];
+                    const percentage = context.parsed.y.toFixed(1);
+
+                    // Don't show 0 values in tooltip
+                    if (data.count === 0) return null;
+
+                    let typeName;
+                    if (issueType === 'FAIL') {
+                        typeName = data.count === 1 ? 'failure' : 'failures';
+                    } else if (issueType === 'TIMEOUT') {
+                        typeName = data.count === 1 ? 'timeout' : 'timeouts';
+                    } else if (issueType === 'CRASH') {
+                        typeName = data.count === 1 ? 'crash' : 'crashes';
+                    } else if (issueType === 'SKIP') {
+                        typeName = data.count === 1 ? 'skip' : 'skips';
+                    } else {
+                        typeName = data.count === 1 ? 'occurrence' : 'occurrences';
+                    }
+
+                    return `${formatNumber(data.count)} ${typeName} out of ${formatNumber(data.totalRuns)} runs (${percentage}%)`;
+                })
+            });
+        }
+
+        // Create a Chart.js bar chart showing issue rates over time
+        function createFailureRateChart(canvasId, dailyData, title) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+
+            const labels = dailyData.map(d => d.date);
+
+            // Calculate percentages for each day
+            const percentageData = dailyData.map(d => {
+                const totalNonSkip = d.passes + d.failures + d.timeouts + d.crashes;
+                const totalWithSkips = totalNonSkip + d.skips;
+                return {
+                    failureRate: totalNonSkip > 0 ? (d.failures / totalNonSkip * 100) : 0,
+                    timeoutRate: totalNonSkip > 0 ? (d.timeouts / totalNonSkip * 100) : 0,
+                    crashRate: totalNonSkip > 0 ? (d.crashes / totalNonSkip * 100) : 0,
+                    skipRate: totalWithSkips > 0 ? (d.skips / totalWithSkips * 100) : 0
+                };
+            });
+
+            // Check if we have any failures/timeouts/crashes or skips
+            const hasIssues = dailyData.some(d => d.failures > 0 || d.timeouts > 0 || d.crashes > 0);
+            const hasSkips = dailyData.some(d => d.skips > 0);
+
+            // Hide/show canvases based on what data we have
+            const skipCanvasId = canvasId.replace('-canvas', '-skips-canvas');
+            const skipCanvas = document.getElementById(skipCanvasId);
+
+            if (hasIssues) {
+                canvas.style.display = 'block';
+                // Create the failures/timeouts/crashes chart
+                new Chart(canvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Failure %',
+                                data: percentageData.map(d => d.failureRate),
+                                backgroundColor: 'rgba(255, 140, 0, 0.7)',
+                                borderColor: '#ff8c00',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Timeout %',
+                                data: percentageData.map(d => d.timeoutRate),
+                                backgroundColor: 'rgba(255, 193, 7, 0.7)',
+                                borderColor: '#ffc107',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Crash %',
+                                data: percentageData.map(d => d.crashRate),
+                                backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                                borderColor: '#dc3545',
+                                borderWidth: 1
+                            }
+                        ]
+                    },
+                    options: getCommonChartOptions('% failures', function(context) {
+                        const dataIndex = context.dataIndex;
+                        const data = dailyData[dataIndex];
+                        const label = context.dataset.label;
+                        const percentage = context.parsed.y.toFixed(1);
+
+                        let count = 0;
+                        let typeName = '';
+                        if (label === 'Failure %') {
+                            count = data.failures;
+                            typeName = count === 1 ? 'failure' : 'failures';
+                        } else if (label === 'Timeout %') {
+                            count = data.timeouts;
+                            typeName = count === 1 ? 'timeout' : 'timeouts';
+                        } else if (label === 'Crash %') {
+                            count = data.crashes;
+                            typeName = count === 1 ? 'crash' : 'crashes';
+                        }
+
+                        // Don't show 0 values in tooltip
+                        if (count === 0) return null;
+
+                        const total = data.passes + data.failures + data.timeouts + data.crashes;
+                        return `${formatNumber(count)} ${typeName} out of ${formatNumber(total)} runs (${percentage}%)`;
+                    }, {
+                        stacked: true,
+                        tooltipFooter: function(tooltipItems) {
+                            const dataIndex = tooltipItems[0].dataIndex;
+                            const data = dailyData[dataIndex];
+                            return `Passes: ${formatNumber(data.passes)}`;
+                        }
+                    })
+                });
+            } else {
+                canvas.style.display = 'none';
+            }
+
+            // Create the skips chart if there are any skips
+            if (hasSkips && skipCanvas) {
+                skipCanvas.style.display = 'block';
+                // Add class for shorter height when x-axis is hidden
+                if (hasIssues) {
+                    skipCanvas.classList.add('no-x-axis');
+                } else {
+                    skipCanvas.classList.remove('no-x-axis');
+                }
+                new Chart(skipCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Skip %',
+                            data: percentageData.map(d => d.skipRate),
+                            backgroundColor: 'rgba(108, 117, 125, 0.7)',
+                            borderColor: '#6c757d',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: getCommonChartOptions('% skips', function(context) {
+                        const dataIndex = context.dataIndex;
+                        const data = dailyData[dataIndex];
+                        const percentage = context.parsed.y.toFixed(1);
+
+                        // Don't show 0 values in tooltip
+                        if (data.skips === 0) return null;
+
+                        const total = data.passes + data.failures + data.timeouts + data.crashes + data.skips;
+                        const skipWord = data.skips === 1 ? 'skip' : 'skips';
+                        return `${formatNumber(data.skips)} ${skipWord} out of ${formatNumber(total)} scheduled runs (${percentage}%)`;
+                    }, {
+                        hideXAxis: hasIssues  // Hide x-axis labels when showing both charts
+                    })
+                });
+            } else if (skipCanvas) {
+                skipCanvas.style.display = 'none';
+            }
+
+            return null;
         }
 
         // Generate HTML for issue details
         function generateIssueDetailsHtml(testPath, testData) {
             let html = `<div class="issue-details-row">`;
             html += `<div class="issue-details-content">`;
+
+            // Add chart for historical data
+            if (isHistoricalMode && testData.testId !== undefined) {
+                const chartId = `test-chart-${testData.testId}`;
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `<canvas id="${chartId}-skips-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
+            }
 
             // Collect all issues into a single array
             const allIssues = [];
@@ -2124,7 +2752,7 @@
                 allIssues.push({
                     count: totalFailCount - failureMessagesCount,
                     type: 'FAIL',
-                    message: 'Failure details not recorded (likely Android or platform logging issue)'
+                    message: FAILURE_NO_MESSAGE
                 });
             }
 
@@ -2168,6 +2796,11 @@
                     html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
                     html += `<span class="issue-message">${escapeHtml(message)}</span>`;
                     html += `</div>`;
+                    if (isHistoricalMode) {
+                        html += `<div class="historical-chart" id="${issueId}-chart" style="display: none; margin-left: 50px;">`;
+                        html += `<canvas id="${issueId}-canvas" class="historical-chart-canvas"></canvas>`;
+                        html += `</div>`;
+                    }
                     html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
                 });
                 html += `</div>`;
@@ -2184,6 +2817,7 @@
 
             const issueId = issueItem.dataset.issueId;
             const runsDiv = document.getElementById(`${issueId}-runs`);
+            const chartDiv = document.getElementById(`${issueId}-chart`);
 
             if (runsDiv.style.display === 'none') {
                 // Expand - load and show runs
@@ -2196,9 +2830,21 @@
                 const runsHtml = getIssueRuns(testId, testPath, issueType, issueMessage);
                 runsDiv.innerHTML = runsHtml;
                 runsDiv.style.display = 'block';
+
+                // Show and render chart if in historical mode
+                if (isHistoricalMode && chartDiv) {
+                    chartDiv.style.display = 'block';
+                    const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage);
+                    if (dailyData) {
+                        createIssueMessageChart(`${issueId}-canvas`, dailyData, `${issueType}: ${issueMessage}`, issueType);
+                    }
+                }
             } else {
                 // Collapse
                 runsDiv.style.display = 'none';
+                if (chartDiv) {
+                    chartDiv.style.display = 'none';
+                }
             }
         }
 
@@ -2214,7 +2860,7 @@
                 const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
                 if (skipStatusId !== -1) {
                     const statusGroup = testGroup[skipStatusId];
-                    if (statusGroup) {
+                    if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
@@ -2236,7 +2882,7 @@
 
                 failStatusIds.forEach(statusId => {
                     const statusGroup = testGroup[statusId];
-                    if (statusGroup) {
+                    if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
@@ -2254,7 +2900,7 @@
                 const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
                 if (crashStatusId !== -1) {
                     const statusGroup = testGroup[crashStatusId];
-                    if (statusGroup) {
+                    if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
@@ -2275,7 +2921,7 @@
                     const statusId = currentData.tables.statuses.indexOf(status);
                     if (statusId !== -1) {
                         const statusGroup = testGroup[statusId];
-                        if (statusGroup) {
+                        if (statusGroup && statusGroup.taskIdIds) {
                             for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                                 const taskIdIndex = statusGroup.taskIdIds[i];
                                 const duration = statusGroup.durations?.[i];
@@ -2432,6 +3078,54 @@
             }
         }
 
+        // Load detailed data (with taskIds) in the background
+        async function loadDetailedData() {
+            // Only load detailed data in historical mode
+            if (!isHistoricalMode) return;
+
+            // Don't load if already loading or loaded
+            if (isLoadingDetailedData || detailedData) return;
+
+            isLoadingDetailedData = true;
+            console.log('Loading detailed data in background...');
+
+            try {
+                const response = await fetchData('xpcshell-issues-with-taskids.json');
+                if (!response.ok) {
+                    console.warn('Detailed data not available');
+                    isLoadingDetailedData = false;
+                    return;
+                }
+
+                const data = await response.json();
+                detailedData = data;
+
+                // Merge detailed data into currentData
+                // The detailed data has taskIds, durations, timestamps arrays
+                // We want to replace the aggregated testRuns with detailed ones
+                if (currentData && currentData.testRuns) {
+                    // Copy the detailed testRuns and related tables
+                    currentData.testRuns = detailedData.testRuns;
+                    currentData.taskInfo = detailedData.taskInfo;
+                    if (detailedData.tables.taskIds) {
+                        currentData.tables.taskIds = detailedData.tables.taskIds;
+                    }
+                    if (detailedData.tables.jobNames) {
+                        currentData.tables.jobNames = detailedData.tables.jobNames;
+                    }
+                    if (detailedData.tables.repositories) {
+                        currentData.tables.repositories = detailedData.tables.repositories;
+                    }
+                }
+
+                console.log('Detailed data loaded successfully');
+                isLoadingDetailedData = false;
+            } catch (error) {
+                console.warn('Error loading detailed data:', error);
+                isLoadingDetailedData = false;
+            }
+        }
+
         // Load data from cache
         async function loadData() {
             setStatusText('Loading data...');
@@ -2469,6 +3163,90 @@
                 showError(`Error loading data: ${error.message}`, true);
             } finally {
                 // Status text will show either job count (on success) or remain as loading (on error)
+            }
+        }
+
+        // Toggle between historical (21 days) and single day view
+        async function toggleHistoricalData() {
+            const button = document.getElementById('historical-button');
+            const dateSelect = document.getElementById('date-select');
+
+            if (isHistoricalMode) {
+                // Switch back to single day view
+                isHistoricalMode = false;
+                button.textContent = 'Show Last 21 Days';
+                button.classList.remove('active');
+                dateSelect.disabled = false;
+
+                // Show date selector and label
+                dateSelect.style.display = '';
+                const dateLabel = dateSelect.previousElementSibling;
+                if (dateLabel && dateLabel.tagName === 'LABEL') {
+                    dateLabel.style.display = '';
+                }
+
+                // Clear detailed data
+                detailedData = null;
+                isLoadingDetailedData = false;
+
+                // Update URL hash
+                updateUrlHash();
+
+                // Reload the currently selected date
+                await loadData();
+            } else {
+                // Switch to historical view
+                try {
+                    setStatusText('Loading historical data...');
+                    hideError();
+                    button.disabled = true;
+
+                    // Clear any previously loaded detailed data
+                    detailedData = null;
+                    isLoadingDetailedData = false;
+
+                    const response = await fetchData('xpcshell-issues.json');
+                    if (!response.ok) {
+                        throw new Error('Historical data not available');
+                    }
+
+                    historicalData = await response.json();
+                    currentData = historicalData; // Use historical data as current data
+
+                    // Process the historical data
+                    aggregatedData = createTestEntries();
+                    treeData = buildTreeStructure(aggregatedData);
+
+                    isHistoricalMode = true;
+                    button.textContent = 'Show Single Day';
+                    button.classList.add('active');
+                    dateSelect.disabled = true;
+
+                    // Hide date selector and label
+                    dateSelect.style.display = 'none';
+                    const dateLabel = dateSelect.previousElementSibling;
+                    if (dateLabel && dateLabel.tagName === 'LABEL') {
+                        dateLabel.style.display = 'none';
+                    }
+
+                    // Update status text
+                    if (historicalData.metadata) {
+                        const days = historicalData.metadata.days || 21;
+                        const startDate = historicalData.metadata.startDate;
+                        const endDate = historicalData.metadata.endDate;
+                        setStatusText(`${days} days (${startDate} to ${endDate})`);
+                    }
+
+                    changeView();
+
+                    // Update URL hash
+                    updateUrlHash();
+                } catch (error) {
+                    showError(`Error loading historical data: ${error.message}`);
+                    isHistoricalMode = false;
+                } finally {
+                    button.disabled = false;
+                }
             }
         }
 
@@ -2570,12 +3348,12 @@
                 // Populate date selector first
                 await populateDateSelector();
 
-                // Then load data only if we have dates
-                // Set the hash first, which will trigger loadData via hashchange
-                if (document.getElementById('date-select').value && !window.location.hash) {
-                    updateUrlHash();
+                // Check if we should load from URL hash
+                if (window.location.hash) {
+                    await loadFromUrlHash();
                 } else if (document.getElementById('date-select').value) {
-                    loadData();
+                    // No hash, load default date and update hash
+                    updateUrlHash();
                 }
             }
 
@@ -2610,13 +3388,24 @@
                 searchBox.focus(); // Keep focus on search box
             });
 
-            function loadFromUrlHash() {
+            async function loadFromUrlHash() {
                 const hash = window.location.hash.slice(1); // Remove #
                 const params = new URLSearchParams(hash);
 
                 // Restore date selection (or clear if not in hash)
                 const date = params.get('date');
-                document.getElementById('date-select').value = date || '';
+
+                // Check if user wants 21-day historical view
+                if (date === '21days' && !isHistoricalMode) {
+                    // Enable historical mode
+                    await toggleHistoricalData();
+                } else if (date !== '21days' && isHistoricalMode) {
+                    // Switch back to single day mode
+                    await toggleHistoricalData();
+                    document.getElementById('date-select').value = date || '';
+                } else {
+                    document.getElementById('date-select').value = date || '';
+                }
 
                 // Restore search filter (or clear if not in hash)
                 // Don't update if the search box is currently focused (user is typing)
@@ -2644,18 +3433,22 @@
                 // Cancel any pending debounced updates from search box input
                 clearTimeout(filterTimeout);
 
-                // Store the current date before loading from hash
+                // Store the current state before loading from hash
                 const previousDate = document.getElementById('date-select').value;
+                const previousHistoricalMode = isHistoricalMode;
 
-                loadFromUrlHash();
+                await loadFromUrlHash();
 
                 const newDate = document.getElementById('date-select').value;
 
-                // Only reload data if the date changed, otherwise just apply filtering
-                if (newDate && newDate !== previousDate) {
+                // Only reload data if the date changed and we're not in historical mode
+                // (historical mode loads its own data in toggleHistoricalData)
+                if (!isHistoricalMode && newDate && newDate !== previousDate) {
                     await loadData(); // This will also call filtering after loading data
-                } else if (newDate) {
+                } else if (!isHistoricalMode && newDate && previousHistoricalMode === isHistoricalMode) {
                     applyFiltering(); // Update view with current filter state
+                } else if (isHistoricalMode && previousHistoricalMode === isHistoricalMode) {
+                    applyFiltering(); // Just apply filtering if already in historical mode
                 }
 
                 // Keep isNavigating true briefly to prevent the search box value change from triggering hash update
@@ -2665,5 +3458,6 @@
             });
         });
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </body>
 </html>
