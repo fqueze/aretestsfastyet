@@ -3418,8 +3418,11 @@
                     // Switch back to single day mode
                     await toggleHistoricalData();
                     document.getElementById('date-select').value = date || '';
-                } else {
+                } else if (date !== '21days') {
                     document.getElementById('date-select').value = date || '';
+                    if (date) {
+                        await loadData();
+                    }
                 }
 
                 // Restore search filter (or clear if not in hash)
