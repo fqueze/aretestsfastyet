@@ -54,11 +54,11 @@ function calculateDailyRates(options) {
 
             const status = historicalData.tables.statuses[statusId];
 
-            // Historical data uses bucketed format with timeBuckets (hours)
-            if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+            // Historical data uses bucketed format with hours
+            if (statusGroup.taskIdIds && statusGroup.hours) {
                 let currentHour = 0;
-                for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                    currentHour += statusGroup.timeBuckets[i];
+                for (let i = 0; i < statusGroup.hours.length; i++) {
+                    currentHour += statusGroup.hours[i];
                     const day = Math.floor(currentHour / 24);
                     if (day < days) {
                         const bucket = statusGroup.taskIdIds[i];

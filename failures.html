@@ -233,7 +233,7 @@
 
                 if (testName === undefined) return;
 
-                    const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.timeBuckets !== undefined;
+                    const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.hours !== undefined;
 
                     // Group failures by message with failure instances
                     const failuresByMessage = new Map();
@@ -242,8 +242,8 @@
                         // Bucketed format with array of arrays
                         const decompressedTimestamps = [];
                         let cumulativeHours = 0;
-                        for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                            cumulativeHours += statusGroup.timeBuckets[i];
+                        for (let i = 0; i < statusGroup.hours.length; i++) {
+                            cumulativeHours += statusGroup.hours[i];
                             decompressedTimestamps.push((currentData.metadata.startTime + cumulativeHours * 3600) * 1000);
                         }
 

@@ -243,18 +243,18 @@
 
                 if (testName === undefined) return;
 
-                const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.timeBuckets !== undefined;
+                const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.hours !== undefined;
 
                 // Group crashes by signature with crash instances
                 const crashesBySignature = new Map();
 
                 if (isBucketedFormat) {
                     // Bucketed format with array of arrays - extract individual crash instances
-                    // Decompress timeBuckets to get timestamps (hours from start)
+                    // Decompress hours to get timestamps (hours from start)
                     const decompressedTimestamps = [];
                     let cumulativeHours = 0;
-                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                        cumulativeHours += statusGroup.timeBuckets[i];
+                    for (let i = 0; i < statusGroup.hours.length; i++) {
+                        cumulativeHours += statusGroup.hours[i];
                         decompressedTimestamps.push((currentData.metadata.startTime + cumulativeHours * 3600) * 1000);
                     }
 
@@ -270,14 +270,15 @@
 
                         const bucket = statusGroup.taskIdIds[index];
                         const timestamp = decompressedTimestamps[index];
-                        const minidump = statusGroup.minidumps ? statusGroup.minidumps[index] : null;
+                        const minidumpsArray = statusGroup.minidumps ? statusGroup.minidumps[index] : null;
 
                         // Iterate through each taskIdIndex in the bucket
-                        for (const taskIdIndex of bucket) {
+                        bucket.forEach((taskIdIndex, taskIndex) => {
                             const taskIdString = currentData.tables.taskIds[taskIdIndex];
                             const [taskId, retryId] = taskIdString.split('.');
                             const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
                             const jobName = currentData.tables.jobNames[jobNameId];
+                            const minidump = minidumpsArray ? minidumpsArray[taskIndex] : null;
 
                             crashesBySignature.get(signature).push({
                                 jobName,
@@ -286,7 +287,7 @@
                                 retryId,
                                 minidump
                             });
-                        }
+                        });
                     });
                 } else {
                     // Old detailed format with flat arrays (timestamps)

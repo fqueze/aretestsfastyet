@@ -662,7 +662,7 @@
             if (statusGroup.counts !== undefined) {
                 // Aggregated format
                 return statusGroup.counts[index];
-            } else if (statusGroup.taskIdIds && statusGroup.timeBuckets !== undefined) {
+            } else if (statusGroup.taskIdIds && statusGroup.hours !== undefined) {
                 // Bucketed format (array of arrays)
                 return statusGroup.taskIdIds[index].length;
             } else {
@@ -675,7 +675,7 @@
         function forEachTaskId(statusGroup, callback) {
             if (!statusGroup.taskIdIds) return;
 
-            const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+            const isBucketedFormat = statusGroup.hours !== undefined;
 
             if (isBucketedFormat) {
                 for (const bucket of statusGroup.taskIdIds) {
@@ -694,7 +694,7 @@
         function forEachMatchingTaskId(statusGroup, matchFn, callback) {
             if (!statusGroup.taskIdIds) return;
 
-            const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+            const isBucketedFormat = statusGroup.hours !== undefined;
 
             if (isBucketedFormat) {
                 for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
@@ -938,7 +938,7 @@
                 let runCount = 0;
                 if (statusGroup.counts !== undefined) {
                     runCount = statusGroup.counts.reduce((sum, count) => sum + count, 0);
-                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets !== undefined) {
+                } else if (statusGroup.taskIdIds && statusGroup.hours !== undefined) {
                     runCount = statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
                 } else {
                     runCount = statusGroup.taskIdIds.length;
@@ -1163,7 +1163,7 @@
                         // Skip if no taskIdIds (aggregated format)
                         if (!statusGroup.taskIdIds) continue;
 
-                        const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+                        const isBucketedFormat = statusGroup.hours !== undefined;
 
                         if (isBucketedFormat) {
                             for (const bucket of statusGroup.taskIdIds) {
@@ -1235,8 +1235,9 @@
                         const status = currentData.tables.statuses[statusId];
                         const isPass = status === 'PASS' || status === 'PASS-PARALLEL' || status === 'PASS-SEQUENTIAL';
 
-                        // Only track timing for passing tests
-                        if (isPass && statusGroup.taskIdIds) {
+                        // Only track timing for passing tests in non-aggregated format (durations not available in aggregated)
+                        const isBucketedFormat = statusGroup.hours !== undefined;
+                        if (isPass && statusGroup.taskIdIds && !isBucketedFormat && statusGroup.durations) {
                             for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                                 const taskIdIndex = statusGroup.taskIdIds[i];
                                 const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
@@ -1295,7 +1296,7 @@
 
                         if (!statusGroup.taskIdIds) continue;
 
-                        const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+                        const isBucketedFormat = statusGroup.hours !== undefined;
 
                         if (isBucketedFormat) {
                             for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
@@ -1707,7 +1708,7 @@
                             if (crashStatusId !== -1) {
                                 const statusGroup = testGroup[crashStatusId];
                                 if (statusGroup && statusGroup.taskIdIds) {
-                                    const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+                                    const isBucketedFormat = statusGroup.hours !== undefined;
 
                                     if (isBucketedFormat) {
                                         for (const bucket of statusGroup.taskIdIds) {
@@ -2346,11 +2347,11 @@
 
                 const status = historicalData.tables.statuses[statusId];
 
-                if (statusGroup.counts && statusGroup.timeBuckets) {
+                if (statusGroup.counts && statusGroup.hours) {
                     // Aggregated format - process by hour
                     let currentHour = 0;
-                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                        currentHour += statusGroup.timeBuckets[i];
+                    for (let i = 0; i < statusGroup.hours.length; i++) {
+                        currentHour += statusGroup.hours[i];
                         const day = Math.floor(currentHour / 24);
                         if (day < days) {
                             const count = statusGroup.counts[i];
@@ -2367,11 +2368,11 @@
                             }
                         }
                     }
-                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                } else if (statusGroup.taskIdIds && statusGroup.hours) {
                     // Detailed format with taskIdIds (array of arrays)
                     let currentHour = 0;
-                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                        currentHour += statusGroup.timeBuckets[i];
+                    for (let i = 0; i < statusGroup.hours.length; i++) {
+                        currentHour += statusGroup.hours[i];
                         const day = Math.floor(currentHour / 24);
                         if (day < days) {
                             const bucket = statusGroup.taskIdIds[i];
@@ -2487,21 +2488,21 @@
                 // Skip counting SKIP status for total runs (failures/timeouts/crashes are calculated against non-skip runs)
                 if (status === 'SKIP') continue;
 
-                if (statusGroup.counts && statusGroup.timeBuckets) {
+                if (statusGroup.counts && statusGroup.hours) {
                     // Aggregated format
                     let currentHour = 0;
-                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                        currentHour += statusGroup.timeBuckets[i];
+                    for (let i = 0; i < statusGroup.hours.length; i++) {
+                        currentHour += statusGroup.hours[i];
                         const day = Math.floor(currentHour / 24);
                         if (day < days) {
                             dailyData[day].totalRuns += statusGroup.counts[i];
                         }
                     }
-                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                } else if (statusGroup.taskIdIds && statusGroup.hours) {
                     // Detailed format with taskIdIds (array of arrays)
                     let currentHour = 0;
-                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                        currentHour += statusGroup.timeBuckets[i];
+                    for (let i = 0; i < statusGroup.hours.length; i++) {
+                        currentHour += statusGroup.hours[i];
                         const day = Math.floor(currentHour / 24);
                         if (day < days) {
                             const bucket = statusGroup.taskIdIds[i];
@@ -2546,11 +2547,11 @@
             if (!statusGroup) return dailyData;
 
             // Count occurrences of this specific message by day
-            if (statusGroup.counts && statusGroup.timeBuckets) {
+            if (statusGroup.counts && statusGroup.hours) {
                 // Aggregated format - counts are already grouped by message/signature
                 let currentHour = 0;
-                for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                    currentHour += statusGroup.timeBuckets[i];
+                for (let i = 0; i < statusGroup.hours.length; i++) {
+                    currentHour += statusGroup.hours[i];
                     const day = Math.floor(currentHour / 24);
 
                     // Check if this occurrence matches the message we're looking for
@@ -2577,11 +2578,11 @@
                         dailyData[day].count += statusGroup.counts[i];
                     }
                 }
-            } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
-                // Detailed format with taskIdIds (array of arrays) and timeBuckets
+            } else if (statusGroup.taskIdIds && statusGroup.hours) {
+                // Detailed format with taskIdIds (array of arrays) and hours
                 let currentHour = 0;
-                for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                    currentHour += statusGroup.timeBuckets[i];
+                for (let i = 0; i < statusGroup.hours.length; i++) {
+                    currentHour += statusGroup.hours[i];
                     const day = Math.floor(currentHour / 24);
 
                     let matchesMessage = false;
