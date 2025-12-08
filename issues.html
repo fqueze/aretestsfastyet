@@ -2353,16 +2353,17 @@
                         currentHour += statusGroup.timeBuckets[i];
                         const day = Math.floor(currentHour / 24);
                         if (day < days) {
+                            const count = statusGroup.counts[i];
                             if (status && status.startsWith('PASS')) {
-                                dailyData[day].passes += statusGroup.counts[i];
+                                dailyData[day].passes += count;
                             } else if (status === 'CRASH') {
-                                dailyData[day].crashes += statusGroup.counts[i];
+                                dailyData[day].crashes += count;
                             } else if (status && status.startsWith('TIMEOUT')) {
-                                dailyData[day].timeouts += statusGroup.counts[i];
+                                dailyData[day].timeouts += count;
                             } else if (status === 'SKIP') {
-                                dailyData[day].skips += statusGroup.counts[i];
+                                dailyData[day].skips += count;
                             } else if (status && status.startsWith('FAIL')) {
-                                dailyData[day].failures += statusGroup.counts[i];
+                                dailyData[day].failures += count;
                             }
                         }
                     }
@@ -2477,10 +2478,14 @@
             const testGroup = historicalData.testRuns[testId];
             if (!testGroup) return dailyData;
 
-            // First, count total runs per day for this test
+            // First, count total non-skip runs per day for this test
             for (let statusId = 0; statusId < testGroup.length; statusId++) {
                 const statusGroup = testGroup[statusId];
                 if (!statusGroup) continue;
+
+                const status = historicalData.tables.statuses[statusId];
+                // Skip counting SKIP status for total runs (failures/timeouts/crashes are calculated against non-skip runs)
+                if (status === 'SKIP') continue;
 
                 if (statusGroup.counts && statusGroup.timeBuckets) {
                     // Aggregated format
