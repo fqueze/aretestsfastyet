@@ -657,6 +657,63 @@
             return div.innerHTML;
         }
 
+        // Get count for a specific index in a statusGroup, handling all formats
+        function getCountAtIndex(statusGroup, index) {
+            if (statusGroup.counts !== undefined) {
+                // Aggregated format
+                return statusGroup.counts[index];
+            } else if (statusGroup.taskIdIds && statusGroup.timeBuckets !== undefined) {
+                // Bucketed format (array of arrays)
+                return statusGroup.taskIdIds[index].length;
+            } else {
+                // Flat format
+                return 1;
+            }
+        }
+
+        // Iterate over all taskIdIndexes in a statusGroup, calling callback for each
+        function forEachTaskId(statusGroup, callback) {
+            if (!statusGroup.taskIdIds) return;
+
+            const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+
+            if (isBucketedFormat) {
+                for (const bucket of statusGroup.taskIdIds) {
+                    for (const taskIdIndex of bucket) {
+                        callback(taskIdIndex);
+                    }
+                }
+            } else {
+                for (const taskIdIndex of statusGroup.taskIdIds) {
+                    callback(taskIdIndex);
+                }
+            }
+        }
+
+        // Iterate by index, then for each matching index, iterate taskIds in that bucket
+        function forEachMatchingTaskId(statusGroup, matchFn, callback) {
+            if (!statusGroup.taskIdIds) return;
+
+            const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+
+            if (isBucketedFormat) {
+                for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                    if (matchFn(i)) {
+                        const bucket = statusGroup.taskIdIds[i];
+                        for (const taskIdIndex of bucket) {
+                            callback(taskIdIndex, i);
+                        }
+                    }
+                }
+            } else {
+                for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                    if (matchFn(i)) {
+                        callback(statusGroup.taskIdIds[i], i);
+                    }
+                }
+            }
+        }
+
         function linkifyFailureMessage(message, testPath) {
             const pattern = /^\[([^\] :]+) : (\d+)\]/;
             const match = message.match(pattern);
@@ -877,11 +934,15 @@
 
                 const status = currentData.tables.statuses[statusId];
 
-                // Check if this is aggregated format (passing runs) or detailed format
-                const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
-                const runCount = isAggregatedFormat
-                    ? statusGroup.counts.reduce((sum, count) => sum + count, 0)
-                    : statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
+                // Calculate total run count
+                let runCount = 0;
+                if (statusGroup.counts !== undefined) {
+                    runCount = statusGroup.counts.reduce((sum, count) => sum + count, 0);
+                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets !== undefined) {
+                    runCount = statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
+                } else {
+                    runCount = statusGroup.taskIdIds.length;
+                }
 
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
@@ -893,26 +954,11 @@
                     // Only count as skip if the message doesn't start with "run-if"
                     // (run-if indicates platform-specific tests, not actual skips due to broken tests)
                     if (statusGroup.messageIds) {
-                        if (isAggregatedFormat) {
-                            // In aggregated format, messageIds is parallel to counts
-                            for (let i = 0; i < statusGroup.messageIds.length; i++) {
-                                const messageId = statusGroup.messageIds[i];
-                                const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                                // Count as skip if there's no message or if it doesn't start with run-if
-                                if (!message || !message.startsWith('run-if')) {
-                                    skipCount += statusGroup.counts[i];
-                                }
-                                // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
-                            }
-                        } else {
-                            // In detailed format, iterate through messageIds
-                            for (const messageId of statusGroup.messageIds) {
-                                const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                                // Count as skip if there's no message or if it doesn't start with run-if
-                                if (!message || !message.startsWith('run-if')) {
-                                    skipCount++;
-                                }
-                                // run-if skips are not counted (platform-specific tests that are irrelevant on this platform)
+                        for (let i = 0; i < statusGroup.messageIds.length; i++) {
+                            const messageId = statusGroup.messageIds[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            if (!message || !message.startsWith('run-if')) {
+                                skipCount += getCountAtIndex(statusGroup, i);
                             }
                         }
                     } else {
@@ -1117,8 +1163,34 @@
                         // Skip if no taskIdIds (aggregated format)
                         if (!statusGroup.taskIdIds) continue;
 
-                        for (const bucket of statusGroup.taskIdIds) {
-                            for (const taskIdIndex of bucket) {
+                        const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+
+                        if (isBucketedFormat) {
+                            for (const bucket of statusGroup.taskIdIds) {
+                                for (const taskIdIndex of bucket) {
+                                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                    const platform = extractPlatform(jobName) || 'unknown';
+
+                                    if (!platforms[platform]) {
+                                        platforms[platform] = {
+                                            parallelFails: 0,
+                                            parallelTimeouts: 0,
+                                            parallelPasses: 0
+                                        };
+                                    }
+
+                                    if (status === 'FAIL-PARALLEL') {
+                                        platforms[platform].parallelFails++;
+                                    } else if (status === 'TIMEOUT-PARALLEL') {
+                                        platforms[platform].parallelTimeouts++;
+                                    } else if (status === 'PASS-PARALLEL') {
+                                        platforms[platform].parallelPasses++;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Flat array format (single day)
+                            for (const taskIdIndex of statusGroup.taskIdIds) {
                                 const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
                                 const platform = extractPlatform(jobName) || 'unknown';
 
@@ -1223,15 +1295,53 @@
 
                         if (!statusGroup.taskIdIds) continue;
 
-                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                            const bucket = statusGroup.taskIdIds[i];
+                        const isBucketedFormat = statusGroup.timeBuckets !== undefined;
 
-                            // Skip run-if annotations early (platform-irrelevant tests)
-                            if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
-                                continue;
+                        if (isBucketedFormat) {
+                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                const bucket = statusGroup.taskIdIds[i];
+
+                                // Skip run-if annotations early (platform-irrelevant tests)
+                                if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
+                                    continue;
+                                }
+
+                                for (const taskIdIndex of bucket) {
+                                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                    const platform = extractPlatform(jobName) || 'unknown';
+
+                                    if (!platforms[platform]) {
+                                        platforms[platform] = {
+                                            total: 0,
+                                            skips: 0,
+                                            failures: 0,
+                                            timeouts: 0,
+                                            passes: 0
+                                        };
+                                    }
+
+                                    platforms[platform].total++;
+                                    if (isSkip) {
+                                        platforms[platform].skips++;
+                                    } else if (isTimeout) {
+                                        platforms[platform].timeouts++;
+                                    } else if (isFail) {
+                                        platforms[platform].failures++;
+                                    } else {
+                                        platforms[platform].passes++;
+                                    }
+                                }
                             }
+                        } else {
+                            // Flat array format (single day)
+                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                                const taskIdIndex = statusGroup.taskIdIds[i];
 
-                            for (const taskIdIndex of bucket) {
+                                // Skip run-if annotations early (platform-irrelevant tests)
+                                if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
+                                    continue;
+                                }
+
                                 const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
                                 const platform = extractPlatform(jobName) || 'unknown';
 
@@ -1347,18 +1457,11 @@
             const statusGroup = testGroup[skipStatusId];
             if (!statusGroup || !statusGroup.messageIds) return [];
 
-            const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
-            const isDetailedFormat = statusGroup.taskIdIds !== undefined;
-
-            // Count messages, excluding run-if (platform-specific tests that are irrelevant)
             statusGroup.messageIds.forEach((messageId, i) => {
                 if (messageId !== null) {
                     const message = currentData.tables.messages[messageId];
-                    // Only include skip-if and other skip annotations, not run-if
                     if (message && !message.startsWith('run-if')) {
-                        const count = isAggregatedFormat ? statusGroup.counts[i]
-                                    : isDetailedFormat ? statusGroup.taskIdIds[i].length
-                                    : 1;
+                        const count = getCountAtIndex(statusGroup, i);
                         messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                     }
                 }
@@ -1403,16 +1506,11 @@
             failStatusIds.forEach(statusId => {
                 const statusGroup = testGroup[statusId];
                 if (statusGroup && statusGroup.messageIds) {
-                    const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
-                    const isDetailedFormat = statusGroup.taskIdIds !== undefined;
-
                     statusGroup.messageIds.forEach((messageId, i) => {
                         if (messageId !== null) {
                             const message = currentData.tables.messages[messageId];
                             if (message) {
-                                const count = isAggregatedFormat ? statusGroup.counts[i]
-                                            : isDetailedFormat ? statusGroup.taskIdIds[i].length
-                                            : 1;
+                                const count = getCountAtIndex(statusGroup, i);
                                 messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                             }
                         }
@@ -1441,18 +1539,12 @@
             const statusGroup = testGroup[crashStatusId];
             if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [], minidumps: [] };
 
-            const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
-            const isDetailedFormat = statusGroup.taskIdIds !== undefined;
-
-            // Collect unique signatures with counts
             const signatureCounts = new Map();
             statusGroup.crashSignatureIds.forEach((sigId, i) => {
                 if (sigId !== null) {
                     const signature = currentData.tables.crashSignatures[sigId];
                     if (signature) {
-                        const count = isAggregatedFormat ? statusGroup.counts[i]
-                                    : isDetailedFormat ? statusGroup.taskIdIds[i].length
-                                    : 1;
+                        const count = getCountAtIndex(statusGroup, i);
                         signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + count);
                     }
                 }
@@ -1615,8 +1707,19 @@
                             if (crashStatusId !== -1) {
                                 const statusGroup = testGroup[crashStatusId];
                                 if (statusGroup && statusGroup.taskIdIds) {
-                                    for (const bucket of statusGroup.taskIdIds) {
-                                        for (const taskIdIndex of bucket) {
+                                    const isBucketedFormat = statusGroup.timeBuckets !== undefined;
+
+                                    if (isBucketedFormat) {
+                                        for (const bucket of statusGroup.taskIdIds) {
+                                            for (const taskIdIndex of bucket) {
+                                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                                const platform = extractPlatform(jobName) || 'unknown';
+                                                crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
+                                            }
+                                        }
+                                    } else {
+                                        // Flat array format (single day)
+                                        for (const taskIdIndex of statusGroup.taskIdIds) {
                                             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
                                             const platform = extractPlatform(jobName) || 'unknown';
                                             crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
@@ -2940,23 +3043,18 @@
             const runs = [];
 
             if (issueType === 'SKIP') {
-                // Find SKIP status
                 const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
                 if (skipStatusId !== -1) {
                     const statusGroup = testGroup[skipStatusId];
-                    if (statusGroup && statusGroup.taskIdIds) {
-                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                            const bucket = statusGroup.taskIdIds[i];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
                             const displayMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
-
-                            if (displayMessage === issueMessage) {
-                                for (const taskIdIndex of bucket) {
-                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
-                                }
-                            }
-                        }
+                            return displayMessage === issueMessage;
+                        }, (taskIdIndex) => {
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                        });
                     }
                 }
             } else if (issueType === 'FAIL') {
@@ -2967,38 +3065,29 @@
 
                 failStatusIds.forEach(statusId => {
                     const statusGroup = testGroup[statusId];
-                    if (statusGroup && statusGroup.taskIdIds) {
-                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                            const bucket = statusGroup.taskIdIds[i];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-
-                            if (message === issueMessage || (!message && issueMessage.includes('not recorded'))) {
-                                for (const taskIdIndex of bucket) {
-                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
-                                }
-                            }
-                        }
+                            return message === issueMessage || (!message && issueMessage.includes('not recorded'));
+                        }, (taskIdIndex) => {
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                        });
                     }
                 });
             } else if (issueType === 'CRASH') {
-                // Find CRASH status
                 const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
                 if (crashStatusId !== -1) {
                     const statusGroup = testGroup[crashStatusId];
-                    if (statusGroup && statusGroup.taskIdIds) {
-                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                            const bucket = statusGroup.taskIdIds[i];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
-
-                            if (signature === issueMessage) {
-                                const minidump = statusGroup.minidumps?.[i];
-                                for (const taskIdIndex of bucket) {
-                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
-                                }
-                            }
-                        }
+                            return signature === issueMessage;
+                        }, (taskIdIndex, i) => {
+                            const minidump = statusGroup.minidumps?.[i];
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
+                        });
                     }
                 }
             } else if (issueType === 'TIMEOUT') {
@@ -3008,12 +3097,10 @@
                     const statusId = currentData.tables.statuses.indexOf(status);
                     if (statusId !== -1) {
                         const statusGroup = testGroup[statusId];
-                        if (statusGroup && statusGroup.taskIdIds) {
-                            for (const bucket of statusGroup.taskIdIds) {
-                                for (const taskIdIndex of bucket) {
-                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
-                                }
-                            }
+                        if (statusGroup) {
+                            forEachTaskId(statusGroup, (taskIdIndex) => {
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                            });
                         }
                     }
                 });
