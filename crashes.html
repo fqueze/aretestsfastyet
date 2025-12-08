@@ -228,6 +228,29 @@
             vertical-align: baseline;
         }
 
+        .historical-button {
+            padding: 6px 12px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.2s;
+        }
+
+        .historical-button:hover {
+            background: #45a049;
+        }
+
+        .historical-button.active {
+            background: #2196F3;
+        }
+
+        .historical-button.active:hover {
+            background: #0b7dda;
+        }
+
         .no-data {
             padding: 40px;
             text-align: center;
@@ -303,6 +326,18 @@
             text-align: left;
         }
 
+        /* Chart styles */
+        .historical-chart {
+            margin: 10px 0 10px 20px;
+            padding: 0;
+        }
+
+        .historical-chart-canvas {
+            max-height: 100px;
+            height: 100px;
+            width: 100%;
+        }
+
     </style>
 </head>
 <body>
@@ -316,6 +351,7 @@
             <select id="dateSelect" onchange="loadSelectedDate()">
             </select>
             <span class="status-text" id="statusText">Loading...</span>
+            <button id="historicalButton" class="historical-button" onclick="toggleHistoricalData()">Show Last 21 Days</button>
         </div>
         <div class="search-container">
             <input type="text" id="searchBox" class="search-box" placeholder="Search crash signatures or tests...">
@@ -334,6 +370,8 @@
         let expandedPaths = new Set();
         let expandedTests = new Set();
         let currentSort = { column: 'count', ascending: false };
+        let isHistoricalMode = false;
+        let historicalData = null;
 
         // Populate date selector with available dates from index
         async function populateDateSelector() {
@@ -404,6 +442,79 @@
             }
         }
 
+        // Toggle between historical (21 days) and single day view
+        async function toggleHistoricalData() {
+            const button = document.getElementById('historicalButton');
+            const dateSelect = document.getElementById('dateSelect');
+            const dateLabel = dateSelect.previousElementSibling;
+
+            if (isHistoricalMode) {
+                // Switch back to single day view
+                isHistoricalMode = false;
+                button.textContent = 'Show Last 21 Days';
+                button.classList.remove('active');
+                dateSelect.disabled = false;
+
+                // Show date selector and label
+                dateSelect.style.display = '';
+                if (dateLabel && dateLabel.tagName === 'LABEL') {
+                    dateLabel.style.display = '';
+                }
+
+                // Update URL hash
+                updateUrlHash();
+
+                // Reload the currently selected date
+                await loadSelectedDate();
+            } else {
+                // Switch to historical view
+                try {
+                    document.getElementById('statusText').textContent = 'Loading historical data...';
+                    button.disabled = true;
+
+                    const response = await fetchData('xpcshell-issues-with-taskids.json');
+                    if (!response.ok) {
+                        throw new Error('Historical data not available');
+                    }
+
+                    historicalData = await response.json();
+                    currentData = historicalData;
+
+                    isHistoricalMode = true;
+                    button.textContent = 'Show Single Day';
+                    button.classList.add('active');
+                    dateSelect.disabled = true;
+
+                    // Hide date selector and label
+                    dateSelect.style.display = 'none';
+                    if (dateLabel && dateLabel.tagName === 'LABEL') {
+                        dateLabel.style.display = 'none';
+                    }
+
+                    // Process crash data
+                    processCrashData();
+                    renderCrashList();
+
+                    // Update status text
+                    if (historicalData.metadata) {
+                        const days = historicalData.metadata.days || 21;
+                        const startDate = historicalData.metadata.startDate;
+                        const endDate = historicalData.metadata.endDate;
+                        document.getElementById('statusText').textContent = `${days} days (${startDate} to ${endDate})`;
+                    }
+
+                    // Update URL hash
+                    updateUrlHash();
+                } catch (error) {
+                    console.error('Error loading historical data:', error);
+                    document.getElementById('content').innerHTML = `<div class="no-data">${error.message}</div>`;
+                    document.getElementById('statusText').textContent = 'Error loading data';
+                } finally {
+                    button.disabled = false;
+                }
+            }
+        }
+
         // Process crash data to group by signature
         function processCrashData() {
             if (!currentData || !currentData.testRuns || !currentData.tables || !currentData.testInfo) {
@@ -434,44 +545,87 @@
 
                 if (testName === undefined) return;
 
-                // Decompress timestamps (differential compression)
-                const decompressedTimestamps = [];
-                let cumulativeTimestamp = 0;
-                for (let i = 0; i < statusGroup.timestamps.length; i++) {
-                    cumulativeTimestamp += statusGroup.timestamps[i];
-                    // Convert back to milliseconds: (startTime + relativeSeconds) * 1000
-                    decompressedTimestamps.push((currentData.metadata.startTime + cumulativeTimestamp) * 1000);
-                }
+                const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.timeBuckets !== undefined;
 
-                // Group crashes by signature with individual instances
+                // Group crashes by signature with crash instances
                 const crashesBySignature = new Map();
-                statusGroup.crashSignatureIds.forEach((sigId, index) => {
-                    if (sigId === null) return;
 
-                    const signature = currentData.tables.crashSignatures[sigId];
-                    if (!signature) return;
-
-                    if (!crashesBySignature.has(signature)) {
-                        crashesBySignature.set(signature, []);
+                if (isBucketedFormat) {
+                    // Bucketed format with array of arrays - extract individual crash instances
+                    // Decompress timeBuckets to get timestamps (hours from start)
+                    const decompressedTimestamps = [];
+                    let cumulativeHours = 0;
+                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                        cumulativeHours += statusGroup.timeBuckets[i];
+                        decompressedTimestamps.push((currentData.metadata.startTime + cumulativeHours * 3600) * 1000);
                     }
 
-                    // Get crash instance details
-                    const taskIdIndex = statusGroup.taskIdIds[index];
-                    const taskIdString = currentData.tables.taskIds[taskIdIndex];
-                    const [taskId, retryId] = taskIdString.split('.');
-                    const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
-                    const jobName = currentData.tables.jobNames[jobNameId];
-                    const timestamp = decompressedTimestamps[index];
-                    const minidump = statusGroup.minidumps[index];
+                    statusGroup.crashSignatureIds.forEach((sigId, index) => {
+                        if (sigId === null) return;
 
-                    crashesBySignature.get(signature).push({
-                        jobName,
-                        timestamp,
-                        taskId,
-                        retryId,
-                        minidump
+                        const signature = currentData.tables.crashSignatures[sigId];
+                        if (!signature) return;
+
+                        if (!crashesBySignature.has(signature)) {
+                            crashesBySignature.set(signature, []);
+                        }
+
+                        const bucket = statusGroup.taskIdIds[index];
+                        const timestamp = decompressedTimestamps[index];
+                        const minidump = statusGroup.minidumps ? statusGroup.minidumps[index] : null;
+
+                        // Iterate through each taskIdIndex in the bucket
+                        for (const taskIdIndex of bucket) {
+                            const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                            const [taskId, retryId] = taskIdString.split('.');
+                            const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
+                            const jobName = currentData.tables.jobNames[jobNameId];
+
+                            crashesBySignature.get(signature).push({
+                                jobName,
+                                timestamp,
+                                taskId,
+                                retryId,
+                                minidump
+                            });
+                        }
                     });
-                });
+                } else {
+                    // Old detailed format with flat arrays (timestamps)
+                    const decompressedTimestamps = [];
+                    let cumulativeTimestamp = 0;
+                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                        cumulativeTimestamp += statusGroup.timestamps[i];
+                        decompressedTimestamps.push((currentData.metadata.startTime + cumulativeTimestamp) * 1000);
+                    }
+
+                    statusGroup.crashSignatureIds.forEach((sigId, index) => {
+                        if (sigId === null) return;
+
+                        const signature = currentData.tables.crashSignatures[sigId];
+                        if (!signature) return;
+
+                        if (!crashesBySignature.has(signature)) {
+                            crashesBySignature.set(signature, []);
+                        }
+
+                        const taskIdIndex = statusGroup.taskIdIds[index];
+                        const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                        const [taskId, retryId] = taskIdString.split('.');
+                        const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
+                        const jobName = currentData.tables.jobNames[jobNameId];
+                        const timestamp = decompressedTimestamps[index];
+                        const minidump = statusGroup.minidumps[index];
+
+                        crashesBySignature.get(signature).push({
+                            jobName,
+                            timestamp,
+                            taskId,
+                            retryId,
+                            minidump
+                        });
+                    });
+                }
 
                 // Add to global crash data (store by signature -> dirPath -> testName)
                 for (const [signature, crashes] of crashesBySignature) {
@@ -490,14 +644,171 @@
                     }
                     const testData = pathData.tests.get(testName);
 
-                    testData.crashes.push(...crashes);
-                    testData.totalCount += crashes.length;
-                    pathData.totalCount += crashes.length;
-                    sigData.totalCount += crashes.length;
+                    if (Array.isArray(crashes)) {
+                        // Old format with detailed crash instances
+                        testData.crashes.push(...crashes);
+                        testData.totalCount += crashes.length;
+                        pathData.totalCount += crashes.length;
+                        sigData.totalCount += crashes.length;
+                    } else {
+                        // Aggregated/detailed format with just counts
+                        testData.totalCount += crashes;
+                        pathData.totalCount += crashes;
+                        sigData.totalCount += crashes;
+                    }
                 }
             });
 
             currentData.crashData = crashData;
+        }
+
+        // Generic function to calculate daily crash rates with a test filter
+        function calculateDailyCrashRates(signature, testFilterFn) {
+            if (!isHistoricalMode || !historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const dailyData = [];
+
+            // Initialize daily data structure
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day: day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    crashes: 0,
+                    totalRuns: 0
+                });
+            }
+
+            // Iterate through all tests
+            for (const testId in historicalData.testRuns) {
+                // Apply filter if provided
+                if (testFilterFn && !testFilterFn(testId)) continue;
+
+                const testGroup = historicalData.testRuns[testId];
+
+                // Count total runs per day for this test
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup) continue;
+
+                    const status = historicalData.tables.statuses[statusId];
+
+                    // Historical data uses bucketed format with timeBuckets (hours)
+                    if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                        let currentHour = 0;
+                        for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                            currentHour += statusGroup.timeBuckets[i];
+                            const day = Math.floor(currentHour / 24);
+                            if (day < days) {
+                                const bucket = statusGroup.taskIdIds[i];
+                                const count = bucket.length;
+                                dailyData[day].totalRuns += count;
+
+                                // Check if this is a crash with our signature
+                                if (status === 'CRASH') {
+                                    const crashSigId = statusGroup.crashSignatureIds?.[i];
+                                    const crashSig = crashSigId !== null && crashSigId !== undefined ?
+                                        historicalData.tables.crashSignatures[crashSigId] : null;
+                                    if (crashSig === signature) {
+                                        dailyData[day].crashes += count;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Calculate daily crash rates for a specific signature (all tests)
+        function calculateSignatureDailyCrashRates(signature) {
+            return calculateDailyCrashRates(signature, null);
+        }
+
+        // Calculate daily crash rates for a specific path (all tests in that path)
+        function calculatePathDailyCrashRates(signature, dirPath) {
+            return calculateDailyCrashRates(signature, (testId) => {
+                const testPathId = historicalData.testInfo.testPathIds[testId];
+                const testPath = historicalData.tables.testPaths[testPathId];
+                return testPath === dirPath;
+            });
+        }
+
+        // Calculate daily crash rates for a specific test
+        function calculateTestDailyCrashRates(signature, dirPath, testName) {
+            return calculateDailyCrashRates(signature, (testId) => {
+                const testPathId = historicalData.testInfo.testPathIds[testId];
+                const testNameId = historicalData.testInfo.testNameIds[testId];
+                const testPath = historicalData.tables.testPaths[testPathId];
+                const testNameFromId = historicalData.tables.testNames[testNameId];
+                return testPath === dirPath && testNameFromId === testName;
+            });
+        }
+
+        // Helper to get common chart options
+        function getCommonChartOptions(yAxisLabel, tooltipCallback) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    title: { display: false },
+                    legend: { display: false },
+                    tooltip: {
+                        animation: false,
+                        callbacks: { label: tooltipCallback }
+                    }
+                },
+                scales: {
+                    x: {},
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: yAxisLabel },
+                        ticks: { callback: (value) => value + '%' }
+                    }
+                }
+            };
+        }
+
+        // Create a Chart.js bar chart for crash rates over time
+        function createCrashChart(canvasId, dailyData, signature) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+
+            const labels = dailyData.map(d => d.date);
+            const percentages = dailyData.map(d => d.totalRuns > 0 ? (d.crashes / d.totalRuns * 100) : 0);
+
+            return new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Crash Rate',
+                        data: percentages,
+                        backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                        borderColor: '#dc3545',
+                        borderWidth: 1
+                    }]
+                },
+                options: getCommonChartOptions('% crashes', function(context) {
+                    const dataIndex = context.dataIndex;
+                    const data = dailyData[dataIndex];
+                    const percentage = context.parsed.y.toFixed(1);
+
+                    // Don't show 0 values in tooltip
+                    if (data.crashes === 0) return null;
+
+                    const crashWord = data.crashes === 1 ? 'crash' : 'crashes';
+                    return `${formatNumber(data.crashes)} ${crashWord} out of ${formatNumber(data.totalRuns)} runs (${percentage}%)`;
+                })
+            });
         }
 
         // Render the crash list
@@ -606,6 +917,14 @@
                 html += '</div></div>';
 
                 if (isExpanded) {
+                    // Add chart in historical mode
+                    if (isHistoricalMode) {
+                        const chartId = makeChartId('signature', crash.signature);
+                        html += `<div class="historical-chart">`;
+                        html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                        html += `</div>`;
+                    }
+
                     // Sort paths by crash count
                     const pathList = Array.from(crash.paths.entries())
                         .map(([dirPath, pathData]) => ({ dirPath, pathData }))
@@ -621,8 +940,8 @@
                             const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${testName}`;
                             const isTestExpanded = expandedTests.has(testKey);
 
-                            // If test has only one crash, show it inline
-                            if (testData.totalCount === 1) {
+                            // If test has only one crash and we have crash instance details, show it inline
+                            if (testData.totalCount === 1 && testData.crashes.length > 0) {
                                 const crashInstance = testData.crashes[0];
                                 const crashUrl = getCrashViewerUrl(crashInstance);
 
@@ -640,6 +959,14 @@
                                 html += '</div>';
 
                                 if (isTestExpanded) {
+                                    // Add chart in historical mode for this test
+                                    if (isHistoricalMode) {
+                                        const testChartId = makeChartId('test', crash.signature, pathEntry.dirPath, testName);
+                                        html += `<div class="historical-chart">`;
+                                        html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                        html += `</div>`;
+                                    }
+
                                     // Sort crash instances by timestamp (most recent first)
                                     const crashes = [...testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
 
@@ -663,6 +990,14 @@
                             html += '</div></div>';
 
                             if (isPathExpanded) {
+                                // Add chart in historical mode for this path
+                                if (isHistoricalMode) {
+                                    const pathChartId = makeChartId('path', crash.signature, pathEntry.dirPath);
+                                    html += `<div class="historical-chart">`;
+                                    html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                    html += `</div>`;
+                                }
+
                                 // Sort tests by crash count
                                 const testList = Array.from(pathEntry.pathData.tests.entries())
                                     .map(([testName, testData]) => ({ testName, testData }))
@@ -673,7 +1008,7 @@
                                     const isTestExpanded = expandedTests.has(testKey);
 
                                     // If test has only one crash, show it inline
-                                    if (test.testData.totalCount === 1) {
+                                    if (test.testData.totalCount === 1 && test.testData.crashes.length > 0) {
                                         const crashInstance = test.testData.crashes[0];
                                         const crashUrl = getCrashViewerUrl(crashInstance);
 
@@ -691,6 +1026,14 @@
                                         html += '</div>';
 
                                         if (isTestExpanded) {
+                                            // Add chart in historical mode for this test
+                                            if (isHistoricalMode) {
+                                                const testChartId = makeChartId('test', crash.signature, pathEntry.dirPath, test.testName);
+                                                html += `<div class="historical-chart">`;
+                                                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                                html += `</div>`;
+                                            }
+
                                             // Sort crash instances by timestamp (most recent first)
                                             const crashes = [...test.testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
 
@@ -713,6 +1056,11 @@
 
             html += '</div>';
             document.getElementById('content').innerHTML = html;
+
+            // Re-render all charts after HTML is regenerated (in historical mode only)
+            if (isHistoricalMode) {
+                rerenderAllCharts();
+            }
         }
 
         function setupClickHandlers() {
@@ -777,6 +1125,10 @@
             });
         }
 
+        function formatNumber(num) {
+            return num.toLocaleString();
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -814,7 +1166,8 @@
         }
 
         function toggleCrash(signature) {
-            if (expandedSignatures.has(signature)) {
+            const wasExpanded = expandedSignatures.has(signature);
+            if (wasExpanded) {
                 expandedSignatures.delete(signature);
             } else {
                 expandedSignatures.add(signature);
@@ -842,6 +1195,41 @@
             renderCrashList();
         }
 
+        function makeChartId(prefix, ...parts) {
+            return prefix + '-chart-' + parts.map(p => escapeAttr(p).replace(/[^a-zA-Z0-9]/g, '-')).join('-');
+        }
+
+        function rerenderAllCharts() {
+            // Re-render charts for all expanded signatures
+            for (const signature of expandedSignatures) {
+                const chartId = makeChartId('signature', signature);
+                const dailyData = calculateSignatureDailyCrashRates(signature);
+                if (dailyData) {
+                    createCrashChart(`${chartId}-canvas`, dailyData, signature);
+                }
+            }
+
+            // Re-render charts for all expanded paths
+            for (const pathKey of expandedPaths) {
+                const [signature, dirPath] = pathKey.split('|||');
+                const chartId = makeChartId('path', signature, dirPath);
+                const dailyData = calculatePathDailyCrashRates(signature, dirPath);
+                if (dailyData) {
+                    createCrashChart(`${chartId}-canvas`, dailyData, `${signature} in ${dirPath}`);
+                }
+            }
+
+            // Re-render charts for all expanded tests
+            for (const testKey of expandedTests) {
+                const [signature, dirPath, testName] = testKey.split('|||');
+                const chartId = makeChartId('test', signature, dirPath, testName);
+                const dailyData = calculateTestDailyCrashRates(signature, dirPath, testName);
+                if (dailyData) {
+                    createCrashChart(`${chartId}-canvas`, dailyData, `${signature} in ${testName}`);
+                }
+            }
+        }
+
         function sortBy(column) {
             if (currentSort.column === column) {
                 currentSort.ascending = !currentSort.ascending;
@@ -856,7 +1244,7 @@
         function updateUrlHash() {
             const params = new URLSearchParams();
 
-            const date = document.getElementById('dateSelect').value;
+            const date = isHistoricalMode ? '21days' : document.getElementById('dateSelect').value;
             if (date) {
                 params.set('date', date);
             }
@@ -875,15 +1263,28 @@
         }
 
         // Load state from URL hash
-        function loadFromUrlHash() {
+        async function loadFromUrlHash() {
             const hash = window.location.hash.slice(1); // Remove #
             const params = new URLSearchParams(hash);
 
             // Restore date selection
             const date = params.get('date');
             const dateSelect = document.getElementById('dateSelect');
-            if (date && dateSelect.querySelector(`option[value="${date}"]`)) {
-                dateSelect.value = date;
+
+            // Default to historical mode if no date specified
+            if (!date || date === '21days') {
+                if (!isHistoricalMode) {
+                    await toggleHistoricalData();
+                }
+            } else {
+                // Specific date requested
+                if (isHistoricalMode) {
+                    // Switch back to single day mode
+                    await toggleHistoricalData();
+                }
+                if (dateSelect.querySelector(`option[value="${date}"]`)) {
+                    dateSelect.value = date;
+                }
             }
 
             // Restore search filter (don't update if search box is focused)
@@ -937,10 +1338,12 @@
         });
 
         // Handle browser back/forward buttons
-        window.addEventListener('hashchange', function() {
+        window.addEventListener('hashchange', async function() {
             isNavigating = true;
-            loadFromUrlHash();
-            loadSelectedDate();
+            await loadFromUrlHash();
+            if (!isHistoricalMode) {
+                await loadSelectedDate();
+            }
             isNavigating = false;
         });
 
@@ -952,10 +1355,14 @@
             const hasData = await populateDateSelector();
             if (hasData) {
                 // Load state from URL hash
-                loadFromUrlHash();
-                await loadSelectedDate();
+                await loadFromUrlHash();
+                // Only load selected date if not in historical mode
+                if (!isHistoricalMode) {
+                    await loadSelectedDate();
+                }
             }
         })();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </body>
 </html>
