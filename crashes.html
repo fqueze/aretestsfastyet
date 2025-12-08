@@ -7,6 +7,7 @@
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
+    <link rel="stylesheet" href="common-data-view.css">
     <style>
         .crash-list {
             width: 100%;
@@ -71,271 +72,13 @@
             color: #d00;
         }
 
-        .crash-expansion {
-            padding: 20px;
-            background: #f9f9f9;
-            border-top: 1px solid #ddd;
-        }
-
-        .path-row {
-            border-bottom: 1px solid #eee;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            display: flex;
-            align-items: center;
-            padding: 4px 10px 4px 30px;
-            min-height: 28px;
-            background: #fafafa;
-        }
-
-        .path-row:hover {
-            background-color: #f0f0f0;
-        }
-
-        .path-row.expanded {
-            background-color: #e8f4f8;
-        }
-
-        .test-row {
-            border-bottom: 1px solid #eee;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            display: flex;
-            align-items: center;
-            padding: 4px 10px 4px 50px;
-            min-height: 28px;
-            background: #f5f5f5;
-        }
-
-        .test-row.direct-child {
-            padding-left: 30px;
-        }
-
-        .test-row:hover {
-            background-color: #ebebeb;
-        }
-
-        .test-row.expanded {
-            background-color: #ddeeff;
-        }
-
-        .crash-instance-row {
-            border-bottom: 1px solid #eee;
-            display: flex;
-            align-items: center;
-            padding: 4px 10px 4px 70px;
-            min-height: 28px;
-            background: #fafafa;
-            cursor: pointer;
-        }
-
-        .crash-instance-row:hover {
-            background-color: #e8f4ff;
-        }
-
-        .crash-job-name {
-            flex: 1;
-            font-family: monospace;
-            font-size: 12px;
-        }
-
-        .crash-time {
-            color: #666;
-            font-size: 12px;
-            margin-right: 20px;
-        }
-
-        .crash-link {
-            color: #007bff;
-            text-decoration: none;
-            font-size: 12px;
-        }
-
-        .crash-link:hover {
-            text-decoration: underline;
-        }
-
-        .test-name {
-            flex: 1;
-            font-family: monospace;
-            font-size: 13px;
-        }
-
-        .test-crash-count {
-            color: #666;
-            font-size: 13px;
-            min-width: 60px;
-            text-align: right;
-        }
-
-        .controls {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
-            gap: 20px;
-        }
-
-        .search-container {
-            position: relative;
-            display: inline-block;
-        }
-
-        .search-box {
-            padding: 8px 30px 8px 12px;
-            width: 300px;
-            box-sizing: border-box;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            flex-shrink: 0;
-        }
-
-        .search-clear {
-            position: absolute;
-            right: 8px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: none;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            color: #999;
-            padding: 0;
-            width: 20px;
-            height: 20px;
-            display: none;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .search-clear:hover {
-            color: #666;
-        }
-
-        .date-selector {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-        }
-
-        .status-text {
-            font-size: 14px;
-            color: #666;
-            margin: 0;
-            padding: 0;
-            vertical-align: baseline;
-        }
-
-        .historical-button {
-            padding: 6px 12px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: background-color 0.2s;
-        }
-
-        .historical-button:hover {
-            background: #45a049;
-        }
-
-        .historical-button.active {
-            background: #2196F3;
-        }
-
-        .historical-button.active:hover {
-            background: #0b7dda;
-        }
-
-        .no-data {
-            padding: 40px;
-            text-align: center;
-            color: #666;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .sort-header {
-            background: #f8f9fa;
-            border-bottom: 2px solid #ddd;
-            padding: 0 10px;
-            display: flex;
-            align-items: center;
-            font-weight: bold;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-
+        /* Page-specific overrides */
         .sort-header .crash-signature {
             color: #666;
         }
 
-        .total-row {
-            background-color: #f8f9fa;
-            border-bottom: 2px solid #ddd;
-            font-weight: bold;
-        }
-
-        .total-row:hover {
-            background-color: #f8f9fa;
-        }
-
         .total-row .crash-signature {
             color: #495057;
-        }
-
-        .sort-button {
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 10px;
-            margin: 0 -10px;
-            font-size: 11px;
-            text-transform: uppercase;
-            color: #666;
-            border-radius: 3px;
-            transition: background-color 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            text-align: right;
-            width: 100%;
-            white-space: nowrap;
-        }
-
-        .sort-button:hover {
-            background-color: #e9ecef;
-        }
-
-        .sort-button.active {
-            color: #007bff;
-            background-color: #e7f3ff;
-        }
-
-        .sort-arrow {
-            font-size: 10px;
-            margin-right: 2px;
-            width: 8px;
-            display: inline-block;
-            text-align: left;
-        }
-
-        /* Chart styles */
-        .historical-chart {
-            margin: 10px 0 10px 20px;
-            padding: 0;
-        }
-
-        .historical-chart-canvas {
-            max-height: 100px;
-            height: 100px;
-            width: 100%;
         }
 
     </style>
@@ -364,6 +107,9 @@
     </div>
 
     <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-charts.js"></script>
+    <script src="common-links.js"></script>
     <script>
         let currentData = null;
         let expandedSignatures = new Set();
@@ -373,41 +119,61 @@
         let isHistoricalMode = false;
         let historicalData = null;
 
-        // Populate date selector with available dates from index
-        async function populateDateSelector() {
-            const select = document.getElementById('dateSelect');
+        // UI managers
+        let searchBoxManager;
+        let historicalToggleManager;
+        let hashManager;
 
-            try {
-                const response = await fetchData('index.json');
-                if (response.ok) {
-                    const index = await response.json();
+        // Initialize UI components
+        function initializeUI() {
+            // Initialize search box
+            searchBoxManager = initSearchBox({
+                searchBoxId: 'searchBox',
+                searchClearId: 'searchClear',
+                onSearch: renderCrashList,
+                updateUrlHash: updateUrlHash
+            });
 
-                    // Clear all existing options
-                    select.innerHTML = '';
-
-                    // Add all available dates
-                    if (index.dates && index.dates.length > 0) {
-                        index.dates.forEach((date, dateIndex) => {
-                            const option = document.createElement('option');
-                            option.value = date;
-                            option.text = date;
-                            option.selected = dateIndex === 0; // Select first (most recent) date
-                            select.appendChild(option);
-                        });
-
-                        return true;
-                    } else {
-                        throw new Error('No data available');
+            // Initialize URL hash manager
+            hashManager = initUrlHashManager({
+                getState: () => ({
+                    date: isHistoricalMode ? '21days' : document.getElementById('dateSelect').value,
+                    q: searchBoxManager.getValue().trim()
+                }),
+                onHashChange: async (state) => {
+                    searchBoxManager.setNavigating(true);
+                    await loadFromUrlHash();
+                    if (!isHistoricalMode) {
+                        await loadSelectedDate();
                     }
-                } else {
-                    throw new Error('No data available. Please run: node fetch-xpcshell-data.js');
+                    searchBoxManager.setNavigating(false);
                 }
-            } catch (e) {
-                console.error('Could not load date index:', e);
-                document.getElementById('content').innerHTML = `<div class="no-data">${e.message}</div>`;
-                document.getElementById('statusText').textContent = 'Error loading data';
-                return false;
-            }
+            });
+
+            // Initialize historical toggle
+            historicalToggleManager = initHistoricalToggle({
+                buttonId: 'historicalButton',
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData,
+                onToggle: async (isHistorical, data) => {
+                    isHistoricalMode = isHistorical;
+                    if (isHistorical) {
+                        historicalData = data;
+                        currentData = data;
+                        processCrashData();
+                        renderCrashList();
+                    } else {
+                        await loadSelectedDate();
+                    }
+                },
+                updateUrlHash: updateUrlHash
+            });
+
+            // Update hash when date changes
+            document.getElementById('dateSelect').addEventListener('change', () => {
+                updateUrlHash();
+            });
         }
 
         // Load data for selected date
@@ -444,75 +210,7 @@
 
         // Toggle between historical (21 days) and single day view
         async function toggleHistoricalData() {
-            const button = document.getElementById('historicalButton');
-            const dateSelect = document.getElementById('dateSelect');
-            const dateLabel = dateSelect.previousElementSibling;
-
-            if (isHistoricalMode) {
-                // Switch back to single day view
-                isHistoricalMode = false;
-                button.textContent = 'Show Last 21 Days';
-                button.classList.remove('active');
-                dateSelect.disabled = false;
-
-                // Show date selector and label
-                dateSelect.style.display = '';
-                if (dateLabel && dateLabel.tagName === 'LABEL') {
-                    dateLabel.style.display = '';
-                }
-
-                // Update URL hash
-                updateUrlHash();
-
-                // Reload the currently selected date
-                await loadSelectedDate();
-            } else {
-                // Switch to historical view
-                try {
-                    document.getElementById('statusText').textContent = 'Loading historical data...';
-                    button.disabled = true;
-
-                    const response = await fetchData('xpcshell-issues-with-taskids.json');
-                    if (!response.ok) {
-                        throw new Error('Historical data not available');
-                    }
-
-                    historicalData = await response.json();
-                    currentData = historicalData;
-
-                    isHistoricalMode = true;
-                    button.textContent = 'Show Single Day';
-                    button.classList.add('active');
-                    dateSelect.disabled = true;
-
-                    // Hide date selector and label
-                    dateSelect.style.display = 'none';
-                    if (dateLabel && dateLabel.tagName === 'LABEL') {
-                        dateLabel.style.display = 'none';
-                    }
-
-                    // Process crash data
-                    processCrashData();
-                    renderCrashList();
-
-                    // Update status text
-                    if (historicalData.metadata) {
-                        const days = historicalData.metadata.days || 21;
-                        const startDate = historicalData.metadata.startDate;
-                        const endDate = historicalData.metadata.endDate;
-                        document.getElementById('statusText').textContent = `${days} days (${startDate} to ${endDate})`;
-                    }
-
-                    // Update URL hash
-                    updateUrlHash();
-                } catch (error) {
-                    console.error('Error loading historical data:', error);
-                    document.getElementById('content').innerHTML = `<div class="no-data">${error.message}</div>`;
-                    document.getElementById('statusText').textContent = 'Error loading data';
-                } finally {
-                    button.disabled = false;
-                }
-            }
+            await historicalToggleManager.toggle();
         }
 
         // Process crash data to group by signature
@@ -662,153 +360,26 @@
             currentData.crashData = crashData;
         }
 
-        // Generic function to calculate daily crash rates with a test filter
-        function calculateDailyCrashRates(signature, testFilterFn) {
-            if (!isHistoricalMode || !historicalData) return null;
-
-            const days = historicalData.metadata.days || 21;
-            const startTime = historicalData.metadata.startTime;
-            const dailyData = [];
-
-            // Initialize daily data structure
-            for (let day = 0; day < days; day++) {
-                dailyData.push({
-                    day: day,
-                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
-                    crashes: 0,
-                    totalRuns: 0
-                });
-            }
-
-            // Iterate through all tests
-            for (const testId in historicalData.testRuns) {
-                // Apply filter if provided
-                if (testFilterFn && !testFilterFn(testId)) continue;
-
-                const testGroup = historicalData.testRuns[testId];
-
-                // Count total runs per day for this test
-                for (let statusId = 0; statusId < testGroup.length; statusId++) {
-                    const statusGroup = testGroup[statusId];
-                    if (!statusGroup) continue;
-
-                    const status = historicalData.tables.statuses[statusId];
-
-                    // Historical data uses bucketed format with timeBuckets (hours)
-                    if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
-                        let currentHour = 0;
-                        for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
-                            currentHour += statusGroup.timeBuckets[i];
-                            const day = Math.floor(currentHour / 24);
-                            if (day < days) {
-                                const bucket = statusGroup.taskIdIds[i];
-                                const count = bucket.length;
-                                dailyData[day].totalRuns += count;
-
-                                // Check if this is a crash with our signature
-                                if (status === 'CRASH') {
-                                    const crashSigId = statusGroup.crashSignatureIds?.[i];
-                                    const crashSig = crashSigId !== null && crashSigId !== undefined ?
-                                        historicalData.tables.crashSignatures[crashSigId] : null;
-                                    if (crashSig === signature) {
-                                        dailyData[day].crashes += count;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            return dailyData;
-        }
-
-        // Calculate daily crash rates for a specific signature (all tests)
+        // Chart calculation wrappers using shared functions
         function calculateSignatureDailyCrashRates(signature) {
-            return calculateDailyCrashRates(signature, null);
+            return calculateValueDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH');
         }
 
-        // Calculate daily crash rates for a specific path (all tests in that path)
         function calculatePathDailyCrashRates(signature, dirPath) {
-            return calculateDailyCrashRates(signature, (testId) => {
-                const testPathId = historicalData.testInfo.testPathIds[testId];
-                const testPath = historicalData.tables.testPaths[testPathId];
-                return testPath === dirPath;
-            });
+            return calculatePathDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH', dirPath);
         }
 
-        // Calculate daily crash rates for a specific test
         function calculateTestDailyCrashRates(signature, dirPath, testName) {
-            return calculateDailyCrashRates(signature, (testId) => {
-                const testPathId = historicalData.testInfo.testPathIds[testId];
-                const testNameId = historicalData.testInfo.testNameIds[testId];
-                const testPath = historicalData.tables.testPaths[testPathId];
-                const testNameFromId = historicalData.tables.testNames[testNameId];
-                return testPath === dirPath && testNameFromId === testName;
-            });
+            return calculateTestDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH', dirPath, testName);
         }
 
-        // Helper to get common chart options
-        function getCommonChartOptions(yAxisLabel, tooltipCallback) {
-            return {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false
-                },
-                plugins: {
-                    title: { display: false },
-                    legend: { display: false },
-                    tooltip: {
-                        animation: false,
-                        callbacks: { label: tooltipCallback }
-                    }
-                },
-                scales: {
-                    x: {},
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: yAxisLabel },
-                        ticks: { callback: (value) => value + '%' }
-                    }
-                }
-            };
-        }
-
-        // Create a Chart.js bar chart for crash rates over time
         function createCrashChart(canvasId, dailyData, signature) {
-            const canvas = document.getElementById(canvasId);
-            if (!canvas) return null;
-
-            const labels = dailyData.map(d => d.date);
-            const percentages = dailyData.map(d => d.totalRuns > 0 ? (d.crashes / d.totalRuns * 100) : 0);
-
-            return new Chart(canvas, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Crash Rate',
-                        data: percentages,
-                        backgroundColor: 'rgba(220, 53, 69, 0.7)',
-                        borderColor: '#dc3545',
-                        borderWidth: 1
-                    }]
-                },
-                options: getCommonChartOptions('% crashes', function(context) {
-                    const dataIndex = context.dataIndex;
-                    const data = dailyData[dataIndex];
-                    const percentage = context.parsed.y.toFixed(1);
-
-                    // Don't show 0 values in tooltip
-                    if (data.crashes === 0) return null;
-
-                    const crashWord = data.crashes === 1 ? 'crash' : 'crashes';
-                    return `${formatNumber(data.crashes)} ${crashWord} out of ${formatNumber(data.totalRuns)} runs (${percentage}%)`;
-                })
-            });
+            // Adapt the dailyData format from { events, totalRuns } to { crashes, totalRuns }
+            const adaptedData = dailyData.map(d => ({
+                ...d,
+                crashes: d.events
+            }));
+            return createRateChart(canvasId, adaptedData, signature, 'crash');
         }
 
         // Render the crash list
@@ -818,15 +389,22 @@
                 return;
             }
 
-            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+            const searchTerm = searchBoxManager.getValue().toLowerCase();
 
             // Convert to array and filter
-            let crashes = Array.from(currentData.crashData.entries()).map(([signature, data]) => ({
-                signature,
-                pathCount: data.paths.size,
-                crashCount: data.totalCount,
-                paths: data.paths
-            }));
+            let crashes = Array.from(currentData.crashData.entries()).map(([signature, data]) => {
+                // Count total number of unique tests across all paths
+                let testCount = 0;
+                for (const pathData of data.paths.values()) {
+                    testCount += pathData.tests.size;
+                }
+                return {
+                    signature,
+                    testCount: testCount,
+                    crashCount: data.totalCount,
+                    paths: data.paths
+                };
+            });
 
             // Filter by search term
             if (searchTerm) {
@@ -854,8 +432,8 @@
                 let compareValue;
                 if (currentSort.column === 'signature') {
                     compareValue = a.signature.localeCompare(b.signature);
-                } else if (currentSort.column === 'paths') {
-                    compareValue = a.pathCount - b.pathCount;
+                } else if (currentSort.column === 'tests') {
+                    compareValue = a.testCount - b.testCount;
                 } else { // count
                     compareValue = a.crashCount - b.crashCount;
                 }
@@ -865,15 +443,11 @@
             // Calculate totals
             let totalTests = 0;
             let totalCrashes = 0;
-            const uniqueTests = new Set();
 
             for (const crash of crashes) {
                 totalCrashes += crash.crashCount;
-                for (const testPath of crash.paths.keys()) {
-                    uniqueTests.add(testPath);
-                }
+                totalTests += crash.testCount;
             }
-            totalTests = uniqueTests.size;
 
             // Build HTML
             let html = '<div class="crash-list">';
@@ -883,8 +457,8 @@
             html += '<div class="crash-signature">Crash Signature</div>';
             html += '<div class="crash-stats">';
             html += `<div class="stat-item">
-                <button class="sort-button ${currentSort.column === 'paths' ? 'active' : ''}" onclick="sortBy('paths')">
-                    <span class="sort-arrow">${currentSort.column === 'paths' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
+                <button class="sort-button ${currentSort.column === 'tests' ? 'active' : ''}" onclick="sortBy('tests')">
+                    <span class="sort-arrow">${currentSort.column === 'tests' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
                     Tests
                 </button>
             </div>`;
@@ -912,7 +486,7 @@
                 html += `<div class="crash-row ${isExpanded ? 'expanded' : ''}" data-signature="${attrSig}">`;
                 html += `<div class="crash-signature">${escapedSig}</div>`;
                 html += '<div class="crash-stats">';
-                html += `<div class="stat-item"><span class="stat-value">${crash.pathCount}</span></div>`;
+                html += `<div class="stat-item"><span class="stat-value">${crash.testCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value crash">${crash.crashCount}</span></div>`;
                 html += '</div></div>';
 
@@ -1125,46 +699,6 @@
             });
         }
 
-        function formatNumber(num) {
-            return num.toLocaleString();
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function escapeAttr(text) {
-            return text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
-
-        function getCrashViewerUrl(crashInstance) {
-            if (!crashInstance.minidump) return '';
-            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/${crashInstance.minidump}.json`;
-            return `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
-        }
-
-        function getProfilerUrl(crashInstance) {
-            const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${crashInstance.taskId}/runs/${crashInstance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
-            const encodedProfileUrl = encodeURIComponent(profileUrl);
-            const profileName = `${crashInstance.jobName} (${crashInstance.taskId}.${crashInstance.retryId})`;
-            const encodedProfileName = encodeURIComponent(profileName);
-            return `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
-        }
-
-        function renderCrashLinks(crashInstance) {
-            let html = '';
-            const profilerUrl = getProfilerUrl(crashInstance);
-            html += `<a href="${profilerUrl}" target="_blank" class="crash-link" style="margin-right: 10px;">View Profile</a>`;
-
-            const crashUrl = getCrashViewerUrl(crashInstance);
-            if (crashUrl) {
-                html += `<a href="${crashUrl}" target="_blank" class="crash-link">View Crash</a>`;
-            }
-            return html;
-        }
-
         function toggleCrash(signature) {
             const wasExpanded = expandedSignatures.has(signature);
             if (wasExpanded) {
@@ -1193,10 +727,6 @@
                 expandedTests.add(testKey);
             }
             renderCrashList();
-        }
-
-        function makeChartId(prefix, ...parts) {
-            return prefix + '-chart-' + parts.map(p => escapeAttr(p).replace(/[^a-zA-Z0-9]/g, '-')).join('-');
         }
 
         function rerenderAllCharts() {
@@ -1242,117 +772,53 @@
 
         // Update URL hash with current state
         function updateUrlHash() {
-            const params = new URLSearchParams();
-
-            const date = isHistoricalMode ? '21days' : document.getElementById('dateSelect').value;
-            if (date) {
-                params.set('date', date);
-            }
-
-            const search = document.getElementById('searchBox').value.trim();
-            if (search) {
-                params.set('q', search);
-            }
-
-            const hash = params.toString();
-            if (hash) {
-                window.history.replaceState(null, '', '#' + hash);
-            } else {
-                window.history.replaceState(null, '', window.location.pathname);
+            if (hashManager) {
+                hashManager.updateHash();
             }
         }
 
         // Load state from URL hash
         async function loadFromUrlHash() {
-            const hash = window.location.hash.slice(1); // Remove #
-            const params = new URLSearchParams(hash);
+            if (!hashManager) return;
 
-            // Restore date selection
-            const date = params.get('date');
+            const state = hashManager.loadFromHash();
             const dateSelect = document.getElementById('dateSelect');
 
             // Default to historical mode if no date specified
-            if (!date || date === '21days') {
+            if (!state.date || state.date === '21days') {
                 if (!isHistoricalMode) {
                     await toggleHistoricalData();
                 }
             } else {
                 // Specific date requested
                 if (isHistoricalMode) {
-                    // Switch back to single day mode
                     await toggleHistoricalData();
                 }
-                if (dateSelect.querySelector(`option[value="${date}"]`)) {
-                    dateSelect.value = date;
+                if (dateSelect.querySelector(`option[value="${state.date}"]`)) {
+                    dateSelect.value = state.date;
                 }
             }
 
             // Restore search filter (don't update if search box is focused)
             const searchBox = document.getElementById('searchBox');
             if (document.activeElement !== searchBox) {
-                const search = params.get('q');
-                searchBox.value = search || '';
-                updateClearButton();
+                searchBoxManager.setValue(state.q || '');
             }
         }
-
-        function updateClearButton() {
-            const searchBox = document.getElementById('searchBox');
-            const searchClear = document.getElementById('searchClear');
-            searchClear.style.display = searchBox.value ? 'flex' : 'none';
-        }
-
-        // Search functionality
-        const searchBox = document.getElementById('searchBox');
-        const searchClear = document.getElementById('searchClear');
-        let filterTimeout;
-        let isNavigating = false;
-
-        searchBox.addEventListener('input', function() {
-            updateClearButton();
-
-            // Clear previous timeout
-            clearTimeout(filterTimeout);
-
-            // Debounce filtering and hash update
-            filterTimeout = setTimeout(() => {
-                if (!isNavigating) {
-                    updateUrlHash();
-                }
-                renderCrashList();
-            }, 300);
-        });
-
-        searchClear.addEventListener('click', function() {
-            searchBox.value = '';
-            updateClearButton();
-            clearTimeout(filterTimeout);
-            updateUrlHash();
-            renderCrashList();
-            searchBox.focus();
-        });
-
-        // Update hash when date changes
-        document.getElementById('dateSelect').addEventListener('change', function() {
-            updateUrlHash();
-        });
-
-        // Handle browser back/forward buttons
-        window.addEventListener('hashchange', async function() {
-            isNavigating = true;
-            await loadFromUrlHash();
-            if (!isHistoricalMode) {
-                await loadSelectedDate();
-            }
-            isNavigating = false;
-        });
 
         // Set up click handlers once
         setupClickHandlers();
 
         // Initial load
         (async function() {
-            const hasData = await populateDateSelector();
+            initializeUI();
+
+            const hasData = await populateDateSelector({
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData
+            });
+
             if (hasData) {
                 // Load state from URL hash
                 await loadFromUrlHash();

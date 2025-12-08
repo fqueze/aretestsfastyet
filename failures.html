@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPCShell Failures</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <link rel="stylesheet" href="common-data-view.css">
+    <style>
+        .failure-list {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .failure-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            min-height: 28px;
+        }
+
+        .failure-row:hover {
+            background-color: #f5f5f5;
+        }
+
+        .failure-row.expanded {
+            background-color: #f0f8ff;
+        }
+
+        .failure-message {
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .failure-stats {
+            display: flex;
+            gap: 30px;
+            font-size: 13px;
+        }
+
+        /* Page-specific styling for failure message truncation */
+        .failure-message {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .sort-header .failure-message {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>XPCShell Failures by Message</h1>
+    </div>
+
+    <div class="controls">
+        <div class="date-selector">
+            <label for="dateSelect">Select Date: </label>
+            <select id="dateSelect" onchange="loadSelectedDate()">
+            </select>
+            <span class="status-text" id="statusText">Loading...</span>
+            <button id="historicalButton" class="historical-button" onclick="toggleHistoricalData()">Show Last 21 Days</button>
+        </div>
+        <div class="search-container">
+            <input type="text" id="searchBox" class="search-box" placeholder="Search failure messages or tests...">
+            <button class="search-clear" id="searchClear">×</button>
+        </div>
+    </div>
+
+    <div id="content">
+        <div class="no-data">Loading failure data...</div>
+    </div>
+
+    <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-charts.js"></script>
+    <script src="common-links.js"></script>
+    <script>
+        let currentData = null;
+        let expandedMessages = new Set();
+        let expandedPaths = new Set();
+        let expandedTests = new Set();
+        let currentSort = { column: 'count', ascending: false };
+        let isHistoricalMode = false;
+        let historicalData = null;
+
+        // UI managers
+        let searchBoxManager;
+        let historicalToggleManager;
+        let hashManager;
+
+        // Initialize UI components
+        function initializeUI() {
+            // Initialize search box
+            searchBoxManager = initSearchBox({
+                searchBoxId: 'searchBox',
+                searchClearId: 'searchClear',
+                onSearch: renderFailureList,
+                updateUrlHash: updateUrlHash
+            });
+
+            // Initialize URL hash manager
+            hashManager = initUrlHashManager({
+                getState: () => ({
+                    date: isHistoricalMode ? '21days' : document.getElementById('dateSelect').value,
+                    q: searchBoxManager.getValue().trim()
+                }),
+                onHashChange: async (state) => {
+                    searchBoxManager.setNavigating(true);
+                    await loadFromUrlHash();
+                    if (!isHistoricalMode) {
+                        await loadSelectedDate();
+                    }
+                    searchBoxManager.setNavigating(false);
+                }
+            });
+
+            // Initialize historical toggle
+            historicalToggleManager = initHistoricalToggle({
+                buttonId: 'historicalButton',
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData,
+                onToggle: async (isHistorical, data) => {
+                    isHistoricalMode = isHistorical;
+                    if (isHistorical) {
+                        historicalData = data;
+                        currentData = data;
+                        processFailureData();
+                        renderFailureList();
+                    } else {
+                        await loadSelectedDate();
+                    }
+                },
+                updateUrlHash: updateUrlHash
+            });
+
+            // Update hash when date changes
+            document.getElementById('dateSelect').addEventListener('change', () => {
+                updateUrlHash();
+            });
+        }
+
+        // Load data for selected date
+        async function loadSelectedDate() {
+            const dateToLoad = document.getElementById('dateSelect').value;
+
+            if (!dateToLoad) {
+                return;
+            }
+
+            try {
+                document.getElementById('statusText').textContent = 'Loading...';
+
+                const file = `xpcshell-${dateToLoad}.json`;
+                const response = await fetchData(file);
+
+                if (!response.ok) {
+                    throw new Error('Failed to load data');
+                }
+                currentData = await response.json();
+
+                // Process failure data
+                processFailureData();
+                renderFailureList();
+
+                const jobCount = currentData.metadata?.jobCount || 0;
+                document.getElementById('statusText').textContent = `${jobCount.toLocaleString()} test jobs`;
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('content').innerHTML = `<div class="no-data">${error.message}</div>`;
+                document.getElementById('statusText').textContent = 'Error loading data';
+            }
+        }
+
+        // Toggle between historical (21 days) and single day view
+        async function toggleHistoricalData() {
+            await historicalToggleManager.toggle();
+        }
+
+        // Process failure data to group by failure message
+        function processFailureData() {
+            if (!currentData || !currentData.testRuns || !currentData.tables || !currentData.testInfo) {
+                return;
+            }
+
+            // Find all FAIL statuses (FAIL-PARALLEL, FAIL-SEQUENTIAL, etc.)
+            const failStatusIds = [];
+            currentData.tables.statuses.forEach((status, id) => {
+                if (status.startsWith('FAIL')) {
+                    failStatusIds.push(id);
+                }
+            });
+
+            if (failStatusIds.length === 0) {
+                return;
+            }
+
+            const failureData = new Map(); // message -> { paths: Map(dirPath -> { tests: Map(testName -> { failures: [], totalCount }), totalCount }), totalCount }
+
+            // testRuns is an array where index = testId
+            currentData.testRuns.forEach((testGroup, testId) => {
+                if (!testGroup) return;
+
+                // Process all FAIL statuses for this test
+                for (const failStatusId of failStatusIds) {
+                    const statusGroup = testGroup[failStatusId];
+                    if (!statusGroup || !statusGroup.messageIds) {
+                        continue;
+                    }
+
+                // Get directory path and test name from testInfo
+                const testPathId = currentData.testInfo.testPathIds[testId];
+                const testNameId = currentData.testInfo.testNameIds[testId];
+                const dirPath = currentData.tables.testPaths[testPathId];
+                const testName = currentData.tables.testNames[testNameId];
+
+                if (testName === undefined) return;
+
+                    const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.timeBuckets !== undefined;
+
+                    // Group failures by message with failure instances
+                    const failuresByMessage = new Map();
+
+                    if (isBucketedFormat) {
+                        // Bucketed format with array of arrays
+                        const decompressedTimestamps = [];
+                        let cumulativeHours = 0;
+                        for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                            cumulativeHours += statusGroup.timeBuckets[i];
+                            decompressedTimestamps.push((currentData.metadata.startTime + cumulativeHours * 3600) * 1000);
+                        }
+
+                        statusGroup.messageIds.forEach((msgId, index) => {
+                            const message = msgId !== null && msgId !== undefined ?
+                                currentData.tables.messages[msgId] : '(no failure message)';
+
+                            if (!failuresByMessage.has(message)) {
+                                failuresByMessage.set(message, []);
+                            }
+
+                            const bucket = statusGroup.taskIdIds[index];
+                            const timestamp = decompressedTimestamps[index];
+
+                            for (const taskIdIndex of bucket) {
+                                const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                                const [taskId, retryId] = taskIdString.split('.');
+                                const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
+                                const jobName = currentData.tables.jobNames[jobNameId];
+
+                                failuresByMessage.get(message).push({
+                                    jobName,
+                                    timestamp,
+                                    taskId,
+                                    retryId
+                                });
+                            }
+                        });
+                    } else {
+                        // Old detailed format with flat arrays
+                        const decompressedTimestamps = [];
+                        let cumulativeTimestamp = 0;
+                        for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                            cumulativeTimestamp += statusGroup.timestamps[i];
+                            decompressedTimestamps.push((currentData.metadata.startTime + cumulativeTimestamp) * 1000);
+                        }
+
+                        statusGroup.messageIds.forEach((msgId, index) => {
+                            const message = msgId !== null && msgId !== undefined ?
+                                currentData.tables.messages[msgId] : '(no failure message)';
+
+                            if (!failuresByMessage.has(message)) {
+                                failuresByMessage.set(message, []);
+                            }
+
+                            const taskIdIndex = statusGroup.taskIdIds[index];
+                            const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                            const [taskId, retryId] = taskIdString.split('.');
+                            const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
+                            const jobName = currentData.tables.jobNames[jobNameId];
+                            const timestamp = decompressedTimestamps[index];
+
+                            failuresByMessage.get(message).push({
+                                jobName,
+                                timestamp,
+                                taskId,
+                                retryId
+                            });
+                        });
+                    }
+
+                    // Add to global failure data (store by message -> dirPath -> testName)
+                    for (const [message, failures] of failuresByMessage) {
+                        if (!failureData.has(message)) {
+                            failureData.set(message, { paths: new Map(), totalCount: 0 });
+                        }
+                        const msgData = failureData.get(message);
+
+                        if (!msgData.paths.has(dirPath)) {
+                            msgData.paths.set(dirPath, { tests: new Map(), totalCount: 0 });
+                        }
+                        const pathData = msgData.paths.get(dirPath);
+
+                        if (!pathData.tests.has(testName)) {
+                            pathData.tests.set(testName, { failures: [], totalCount: 0 });
+                        }
+                        const testData = pathData.tests.get(testName);
+
+                        if (Array.isArray(failures)) {
+                            testData.failures.push(...failures);
+                            testData.totalCount += failures.length;
+                            pathData.totalCount += failures.length;
+                            msgData.totalCount += failures.length;
+                        } else {
+                            testData.totalCount += failures;
+                            pathData.totalCount += failures;
+                            msgData.totalCount += failures;
+                        }
+                    }
+                }
+            });
+
+            currentData.failureData = failureData;
+        }
+
+        // Chart calculation wrappers using shared functions
+        function calculateMessageDailyFailureRates(message) {
+            return calculateValueDailyRates(historicalData, message, 'messageIds', 'messages', 'FAIL');
+        }
+
+        function calculatePathDailyFailureRates(message, dirPath) {
+            return calculatePathDailyRates(historicalData, message, 'messageIds', 'messages', 'FAIL', dirPath);
+        }
+
+        function calculateTestDailyFailureRates(message, dirPath, testName) {
+            return calculateTestDailyRates(historicalData, message, 'messageIds', 'messages', 'FAIL', dirPath, testName);
+        }
+
+        function createFailureChart(canvasId, dailyData, message) {
+            // Adapt the dailyData format from { events, totalRuns } to { failures, totalRuns }
+            const adaptedData = dailyData.map(d => ({
+                ...d,
+                failures: d.events
+            }));
+            return createRateChart(canvasId, adaptedData, message, 'failure');
+        }
+
+        // Render the failure list
+        function renderFailureList() {
+            if (!currentData || !currentData.failureData || currentData.failureData.size === 0) {
+                document.getElementById('content').innerHTML = '<div class="no-data">No failure data available</div>';
+                return;
+            }
+
+            const searchTerm = searchBoxManager.getValue().toLowerCase();
+
+            // Convert to array and filter
+            let failures = Array.from(currentData.failureData.entries()).map(([message, data]) => {
+                // Count total number of unique tests across all paths
+                let testCount = 0;
+                for (const pathData of data.paths.values()) {
+                    testCount += pathData.tests.size;
+                }
+                return {
+                    message,
+                    testCount: testCount,
+                    failureCount: data.totalCount,
+                    paths: data.paths
+                };
+            });
+
+            // Filter by search term
+            if (searchTerm) {
+                failures = failures.filter(failure => {
+                    if (failure.message.toLowerCase().includes(searchTerm)) {
+                        return true;
+                    }
+                    // Check if any path or test name matches
+                    for (const [dirPath, pathData] of failure.paths) {
+                        if (dirPath.toLowerCase().includes(searchTerm)) {
+                            return true;
+                        }
+                        for (const testName of pathData.tests.keys()) {
+                            if (testName.toLowerCase().includes(searchTerm)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                });
+            }
+
+            // Sort failures
+            failures.sort((a, b) => {
+                let compareValue;
+                if (currentSort.column === 'message') {
+                    compareValue = a.message.localeCompare(b.message);
+                } else if (currentSort.column === 'tests') {
+                    compareValue = a.testCount - b.testCount;
+                } else { // count
+                    compareValue = a.failureCount - b.failureCount;
+                }
+                return currentSort.ascending ? compareValue : -compareValue;
+            });
+
+            // Calculate totals
+            let totalTests = 0;
+            let totalFailures = 0;
+
+            for (const failure of failures) {
+                totalFailures += failure.failureCount;
+                totalTests += failure.testCount;
+            }
+
+            // Build HTML
+            let html = '<div class="failure-list">';
+
+            // Header
+            html += '<div class="sort-header">';
+            html += '<div class="failure-message">Failure Message</div>';
+            html += '<div class="failure-stats">';
+            html += `<div class="stat-item">
+                <button class="sort-button ${currentSort.column === 'tests' ? 'active' : ''}" onclick="sortBy('tests')">
+                    <span class="sort-arrow">${currentSort.column === 'tests' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
+                    Tests
+                </button>
+            </div>`;
+            html += `<div class="stat-item">
+                <button class="sort-button ${currentSort.column === 'count' ? 'active' : ''}" onclick="sortBy('count')">
+                    <span class="sort-arrow">${currentSort.column === 'count' ? (currentSort.ascending ? '▲' : '▼') : ''}</span>
+                    Failures
+                </button>
+            </div>`;
+            html += '</div></div>';
+
+            // Total row
+            html += '<div class="failure-row total-row">';
+            html += '<div class="failure-message">📊 Total</div>';
+            html += '<div class="failure-stats">';
+            html += `<div class="stat-item"><span class="stat-value">${totalTests}</span></div>`;
+            html += `<div class="stat-item"><span class="stat-value fail">${totalFailures}</span></div>`;
+            html += '</div></div>';
+
+            // Failure rows
+            for (const failure of failures) {
+                const isExpanded = expandedMessages.has(failure.message);
+                const escapedMsg = escapeHtml(failure.message);
+                const attrMsg = escapeAttr(failure.message);
+                html += `<div class="failure-row ${isExpanded ? 'expanded' : ''}" data-message="${attrMsg}">`;
+                html += `<div class="failure-message" title="${escapedMsg}">${escapedMsg}</div>`;
+                html += '<div class="failure-stats">';
+                html += `<div class="stat-item"><span class="stat-value">${failure.testCount}</span></div>`;
+                html += `<div class="stat-item"><span class="stat-value fail">${failure.failureCount}</span></div>`;
+                html += '</div></div>';
+
+                if (isExpanded) {
+                    // Add chart in historical mode
+                    if (isHistoricalMode) {
+                        const chartId = makeChartId('message', failure.message);
+                        html += `<div class="historical-chart">`;
+                        html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                        html += `</div>`;
+                    }
+
+                    // Sort paths by failure count
+                    const pathList = Array.from(failure.paths.entries())
+                        .map(([dirPath, pathData]) => ({ dirPath, pathData }))
+                        .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
+
+                    for (const pathEntry of pathList) {
+                        const pathKey = `${failure.message}|||${pathEntry.dirPath}`;
+                        const isPathExpanded = expandedPaths.has(pathKey);
+
+                        // If path has only one test, skip the path level and show test directly
+                        if (pathEntry.pathData.tests.size === 1) {
+                            const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
+                            const testKey = `${failure.message}|||${pathEntry.dirPath}|||${testName}`;
+                            const isTestExpanded = expandedTests.has(testKey);
+
+                            // If test has only one failure and we have failure instance details, show it inline
+                            if (testData.totalCount === 1 && testData.failures.length > 0) {
+                                const failureInstance = testData.failures[0];
+                                const profilerUrl = getProfilerUrl(failureInstance);
+
+                                html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
+                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                                html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
+                                html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                                html += '</div>';
+                            } else {
+                                // Multiple failures in single test - show test with expand capability
+                                html += `<div class="test-row direct-child ${isTestExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
+                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                                html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${testData.totalCount}</div></div>`;
+                                html += '</div>';
+
+                                if (isTestExpanded) {
+                                    // Add chart in historical mode for this test
+                                    if (isHistoricalMode) {
+                                        const testChartId = makeChartId('test', failure.message, pathEntry.dirPath, testName);
+                                        html += `<div class="historical-chart">`;
+                                        html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                        html += `</div>`;
+                                    }
+
+                                    // Sort failure instances by timestamp (most recent first)
+                                    const failures = [...testData.failures].sort((a, b) => b.timestamp - a.timestamp);
+
+                                    for (const failureInstance of failures) {
+                                        const profilerUrl = getProfilerUrl(failureInstance);
+                                        html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
+                                        html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
+                                        html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                                        html += '</div>';
+                                    }
+                                }
+                            }
+                        } else {
+                            // Multiple tests in path - show path level
+                            html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
+                            html += `<div class="failure-message">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
+                            html += '<div class="failure-stats">';
+                            html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
+                            html += `<div class="stat-item"><span class="stat-value fail">${pathEntry.pathData.totalCount}</span></div>`;
+                            html += '</div></div>';
+
+                            if (isPathExpanded) {
+                                // Add chart in historical mode for this path
+                                if (isHistoricalMode) {
+                                    const pathChartId = makeChartId('path', failure.message, pathEntry.dirPath);
+                                    html += `<div class="historical-chart">`;
+                                    html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                    html += `</div>`;
+                                }
+
+                                // Sort tests by failure count
+                                const testList = Array.from(pathEntry.pathData.tests.entries())
+                                    .map(([testName, testData]) => ({ testName, testData }))
+                                    .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+
+                                for (const test of testList) {
+                                    const testKey = `${failure.message}|||${pathEntry.dirPath}|||${test.testName}`;
+                                    const isTestExpanded = expandedTests.has(testKey);
+
+                                    // If test has only one failure, show it inline
+                                    if (test.testData.totalCount === 1 && test.testData.failures.length > 0) {
+                                        const failureInstance = test.testData.failures[0];
+                                        const profilerUrl = getProfilerUrl(failureInstance);
+
+                                        html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
+                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                                        html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
+                                        html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                                        html += '</div>';
+                                    } else {
+                                        // Multiple failures - show test with expand capability
+                                        html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(test.testName)}">`;
+                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                                        html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${test.testData.totalCount}</div></div>`;
+                                        html += '</div>';
+
+                                        if (isTestExpanded) {
+                                            // Add chart in historical mode for this test
+                                            if (isHistoricalMode) {
+                                                const testChartId = makeChartId('test', failure.message, pathEntry.dirPath, test.testName);
+                                                html += `<div class="historical-chart">`;
+                                                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                                                html += `</div>`;
+                                            }
+
+                                            // Sort failure instances by timestamp (most recent first)
+                                            const failures = [...test.testData.failures].sort((a, b) => b.timestamp - a.timestamp);
+
+                                            for (const failureInstance of failures) {
+                                                const profilerUrl = getProfilerUrl(failureInstance);
+                                                html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
+                                                html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
+                                                html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                                                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                                                html += '</div>';
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            html += '</div>';
+            document.getElementById('content').innerHTML = html;
+
+            // Re-render all charts after HTML is regenerated (in historical mode only)
+            if (isHistoricalMode) {
+                rerenderAllCharts();
+            }
+        }
+
+        function rerenderAllCharts() {
+            // Re-render charts for all expanded messages
+            for (const message of expandedMessages) {
+                const chartId = makeChartId('message', message);
+                const dailyData = calculateMessageDailyFailureRates(message);
+                if (dailyData) {
+                    createFailureChart(`${chartId}-canvas`, dailyData, message);
+                }
+            }
+
+            // Re-render charts for all expanded paths
+            for (const pathKey of expandedPaths) {
+                const [message, dirPath] = pathKey.split('|||');
+                const chartId = makeChartId('path', message, dirPath);
+                const dailyData = calculatePathDailyFailureRates(message, dirPath);
+                if (dailyData) {
+                    createFailureChart(`${chartId}-canvas`, dailyData, `${message} in ${dirPath}`);
+                }
+            }
+
+            // Re-render charts for all expanded tests
+            for (const testKey of expandedTests) {
+                const [message, dirPath, testName] = testKey.split('|||');
+                const chartId = makeChartId('test', message, dirPath, testName);
+                const dailyData = calculateTestDailyFailureRates(message, dirPath, testName);
+                if (dailyData) {
+                    createFailureChart(`${chartId}-canvas`, dailyData, `${message} in ${testName}`);
+                }
+            }
+        }
+
+        function setupClickHandlers() {
+            const content = document.getElementById('content');
+
+            content.addEventListener('click', function(event) {
+                // Don't handle clicks on links
+                if (event.target.tagName === 'A') {
+                    return;
+                }
+
+                // Find the closest row element
+                let target = event.target;
+                while (target && target !== content) {
+                    if (target.classList.contains('failure-row') && !target.classList.contains('total-row')) {
+                        const message = target.dataset.message;
+                        if (message) {
+                            toggleFailure(message);
+                        }
+                        return;
+                    }
+
+                    if (target.classList.contains('path-row')) {
+                        const message = target.dataset.message;
+                        const path = target.dataset.path;
+                        if (message && path !== undefined) {
+                            togglePath(message, path);
+                        }
+                        return;
+                    }
+
+                    if (target.classList.contains('test-row') && !target.classList.contains('single-failure')) {
+                        const message = target.dataset.message;
+                        const path = target.dataset.path;
+                        const test = target.dataset.test;
+                        if (message && path !== undefined && test) {
+                            toggleTest(message, path, test);
+                        }
+                        return;
+                    }
+
+                    target = target.parentElement;
+                }
+            });
+        }
+
+        function toggleFailure(message) {
+            const wasExpanded = expandedMessages.has(message);
+            if (wasExpanded) {
+                expandedMessages.delete(message);
+            } else {
+                expandedMessages.add(message);
+            }
+            renderFailureList();
+        }
+
+        function togglePath(message, dirPath) {
+            const pathKey = `${message}|||${dirPath}`;
+            if (expandedPaths.has(pathKey)) {
+                expandedPaths.delete(pathKey);
+            } else {
+                expandedPaths.add(pathKey);
+            }
+            renderFailureList();
+        }
+
+        function toggleTest(message, dirPath, testName) {
+            const testKey = `${message}|||${dirPath}|||${testName}`;
+            if (expandedTests.has(testKey)) {
+                expandedTests.delete(testKey);
+            } else {
+                expandedTests.add(testKey);
+            }
+            renderFailureList();
+        }
+
+        function sortBy(column) {
+            if (currentSort.column === column) {
+                currentSort.ascending = !currentSort.ascending;
+            } else {
+                currentSort.column = column;
+                currentSort.ascending = false;
+            }
+            renderFailureList();
+        }
+
+        // Update URL hash with current state
+        function updateUrlHash() {
+            if (hashManager) {
+                hashManager.updateHash();
+            }
+        }
+
+        // Load state from URL hash
+        async function loadFromUrlHash() {
+            if (!hashManager) return;
+
+            const state = hashManager.loadFromHash();
+            const dateSelect = document.getElementById('dateSelect');
+
+            // Default to historical mode if no date specified
+            if (!state.date || state.date === '21days') {
+                if (!isHistoricalMode) {
+                    await toggleHistoricalData();
+                }
+            } else {
+                // Specific date requested
+                if (isHistoricalMode) {
+                    await toggleHistoricalData();
+                }
+                if (dateSelect.querySelector(`option[value="${state.date}"]`)) {
+                    dateSelect.value = state.date;
+                }
+            }
+
+            // Restore search filter (don't update if search box is focused)
+            const searchBox = document.getElementById('searchBox');
+            if (document.activeElement !== searchBox) {
+                searchBoxManager.setValue(state.q || '');
+            }
+        }
+
+        // Set up click handlers once
+        setupClickHandlers();
+
+        // Initial load
+        (async function() {
+            initializeUI();
+
+            const hasData = await populateDateSelector({
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData
+            });
+
+            if (hasData) {
+                // Load state from URL hash
+                await loadFromUrlHash();
+                // Only load selected date if not in historical mode
+                if (!isHistoricalMode) {
+                    await loadSelectedDate();
+                }
+            }
+        })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</body>
+</html>
