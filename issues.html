@@ -881,7 +881,7 @@
                 const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
                 const runCount = isAggregatedFormat
                     ? statusGroup.counts.reduce((sum, count) => sum + count, 0)
-                    : statusGroup.taskIdIds.length;
+                    : statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
 
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
@@ -1117,25 +1117,26 @@
                         // Skip if no taskIdIds (aggregated format)
                         if (!statusGroup.taskIdIds) continue;
 
-                        for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                            const taskIdIndex = statusGroup.taskIdIds[i];
-                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                            const platform = extractPlatform(jobName) || 'unknown';
+                        for (const bucket of statusGroup.taskIdIds) {
+                            for (const taskIdIndex of bucket) {
+                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                const platform = extractPlatform(jobName) || 'unknown';
 
-                            if (!platforms[platform]) {
-                                platforms[platform] = {
-                                    parallelFails: 0,
-                                    parallelTimeouts: 0,
-                                    parallelPasses: 0
-                                };
-                            }
+                                if (!platforms[platform]) {
+                                    platforms[platform] = {
+                                        parallelFails: 0,
+                                        parallelTimeouts: 0,
+                                        parallelPasses: 0
+                                    };
+                                }
 
-                            if (status === 'FAIL-PARALLEL') {
-                                platforms[platform].parallelFails++;
-                            } else if (status === 'TIMEOUT-PARALLEL') {
-                                platforms[platform].parallelTimeouts++;
-                            } else if (status === 'PASS-PARALLEL') {
-                                platforms[platform].parallelPasses++;
+                                if (status === 'FAIL-PARALLEL') {
+                                    platforms[platform].parallelFails++;
+                                } else if (status === 'TIMEOUT-PARALLEL') {
+                                    platforms[platform].parallelTimeouts++;
+                                } else if (status === 'PASS-PARALLEL') {
+                                    platforms[platform].parallelPasses++;
+                                }
                             }
                         }
                     }
@@ -1223,36 +1224,37 @@
                         if (!statusGroup.taskIdIds) continue;
 
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const bucket = statusGroup.taskIdIds[i];
+
                             // Skip run-if annotations early (platform-irrelevant tests)
                             if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) {
-                                continue; // Don't count run-if skips at all
+                                continue;
                             }
 
-                            const taskIdIndex = statusGroup.taskIdIds[i];
-                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                            const platform = extractPlatform(jobName) || 'unknown';
-                            const duration = statusGroup.durations[i];
-                            const isTimeoutByDuration = status === 'UNKNOWN' && duration > 300000;
+                            for (const taskIdIndex of bucket) {
+                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                const platform = extractPlatform(jobName) || 'unknown';
 
-                            if (!platforms[platform]) {
-                                platforms[platform] = {
-                                    total: 0,
-                                    skips: 0,
-                                    failures: 0,
-                                    timeouts: 0,
-                                    passes: 0
-                                };
-                            }
+                                if (!platforms[platform]) {
+                                    platforms[platform] = {
+                                        total: 0,
+                                        skips: 0,
+                                        failures: 0,
+                                        timeouts: 0,
+                                        passes: 0
+                                    };
+                                }
 
-                            platforms[platform].total++;
-                            if (isSkip) {
-                                platforms[platform].skips++;
-                            } else if (isTimeout || isTimeoutByDuration) {
-                                platforms[platform].timeouts++;
-                            } else if (isFail) {
-                                platforms[platform].failures++;
-                            } else {
-                                platforms[platform].passes++;
+                                platforms[platform].total++;
+                                if (isSkip) {
+                                    platforms[platform].skips++;
+                                } else if (isTimeout) {
+                                    platforms[platform].timeouts++;
+                                } else if (isFail) {
+                                    platforms[platform].failures++;
+                                } else {
+                                    platforms[platform].passes++;
+                                }
                             }
                         }
                     }
@@ -1345,8 +1347,8 @@
             const statusGroup = testGroup[skipStatusId];
             if (!statusGroup || !statusGroup.messageIds) return [];
 
-            // Check if this is aggregated format
             const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+            const isDetailedFormat = statusGroup.taskIdIds !== undefined;
 
             // Count messages, excluding run-if (platform-specific tests that are irrelevant)
             statusGroup.messageIds.forEach((messageId, i) => {
@@ -1354,7 +1356,9 @@
                     const message = currentData.tables.messages[messageId];
                     // Only include skip-if and other skip annotations, not run-if
                     if (message && !message.startsWith('run-if')) {
-                        const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                        const count = isAggregatedFormat ? statusGroup.counts[i]
+                                    : isDetailedFormat ? statusGroup.taskIdIds[i].length
+                                    : 1;
                         messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                     }
                 }
@@ -1399,14 +1403,16 @@
             failStatusIds.forEach(statusId => {
                 const statusGroup = testGroup[statusId];
                 if (statusGroup && statusGroup.messageIds) {
-                    // Check if this is aggregated format
                     const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+                    const isDetailedFormat = statusGroup.taskIdIds !== undefined;
 
                     statusGroup.messageIds.forEach((messageId, i) => {
                         if (messageId !== null) {
                             const message = currentData.tables.messages[messageId];
                             if (message) {
-                                const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                                const count = isAggregatedFormat ? statusGroup.counts[i]
+                                            : isDetailedFormat ? statusGroup.taskIdIds[i].length
+                                            : 1;
                                 messageCounts.set(message, (messageCounts.get(message) || 0) + count);
                             }
                         }
@@ -1435,8 +1441,8 @@
             const statusGroup = testGroup[crashStatusId];
             if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [], minidumps: [] };
 
-            // Check if this is aggregated format
             const isAggregatedFormat = statusGroup.counts !== undefined && statusGroup.timeBuckets !== undefined;
+            const isDetailedFormat = statusGroup.taskIdIds !== undefined;
 
             // Collect unique signatures with counts
             const signatureCounts = new Map();
@@ -1444,7 +1450,9 @@
                 if (sigId !== null) {
                     const signature = currentData.tables.crashSignatures[sigId];
                     if (signature) {
-                        const count = isAggregatedFormat ? statusGroup.counts[i] : 1;
+                        const count = isAggregatedFormat ? statusGroup.counts[i]
+                                    : isDetailedFormat ? statusGroup.taskIdIds[i].length
+                                    : 1;
                         signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + count);
                     }
                 }
@@ -1607,11 +1615,12 @@
                             if (crashStatusId !== -1) {
                                 const statusGroup = testGroup[crashStatusId];
                                 if (statusGroup && statusGroup.taskIdIds) {
-                                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                                        const taskIdIndex = statusGroup.taskIdIds[i];
-                                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                                        const platform = extractPlatform(jobName) || 'unknown';
-                                        crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
+                                    for (const bucket of statusGroup.taskIdIds) {
+                                        for (const taskIdIndex of bucket) {
+                                            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                            const platform = extractPlatform(jobName) || 'unknown';
+                                            crashesByPlatform[platform] = (crashesByPlatform[platform] || 0) + 1;
+                                        }
                                     }
                                 }
                             }
@@ -2234,7 +2243,6 @@
 
                 const status = historicalData.tables.statuses[statusId];
 
-                // Check if data is in aggregated format (counts + timeBuckets)
                 if (statusGroup.counts && statusGroup.timeBuckets) {
                     // Aggregated format - process by hour
                     let currentHour = 0;
@@ -2252,6 +2260,28 @@
                                 dailyData[day].skips += statusGroup.counts[i];
                             } else if (status && status.startsWith('FAIL')) {
                                 dailyData[day].failures += statusGroup.counts[i];
+                            }
+                        }
+                    }
+                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                    // Detailed format with taskIdIds (array of arrays)
+                    let currentHour = 0;
+                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                        currentHour += statusGroup.timeBuckets[i];
+                        const day = Math.floor(currentHour / 24);
+                        if (day < days) {
+                            const bucket = statusGroup.taskIdIds[i];
+                            const count = bucket.length;
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes += count;
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes += count;
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts += count;
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips += count;
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures += count;
                             }
                         }
                     }
@@ -2359,8 +2389,19 @@
                             dailyData[day].totalRuns += statusGroup.counts[i];
                         }
                     }
+                } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                    // Detailed format with taskIdIds (array of arrays)
+                    let currentHour = 0;
+                    for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                        currentHour += statusGroup.timeBuckets[i];
+                        const day = Math.floor(currentHour / 24);
+                        if (day < days) {
+                            const bucket = statusGroup.taskIdIds[i];
+                            dailyData[day].totalRuns += bucket.length;
+                        }
+                    }
                 } else if (statusGroup.timestamps) {
-                    // Detailed format (backwards compatibility)
+                    // Old detailed format (backwards compatibility)
                     let currentTime = 0;
                     for (const diff of statusGroup.timestamps) {
                         currentTime += diff;
@@ -2407,14 +2448,12 @@
                     // Check if this occurrence matches the message we're looking for
                     let matchesMessage = false;
                     if (issueType === 'TIMEOUT') {
-                        // Timeouts don't have individual messages, match all
                         matchesMessage = true;
                     } else if (issueType === 'SKIP' || issueType === 'FAIL') {
                         const messageId = statusGroup.messageIds?.[i];
                         const message = messageId !== null && messageId !== undefined ? historicalData.tables.messages[messageId] : null;
                         const cleanMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
 
-                        // Special case: match empty messages when looking for the placeholder Android message
                         if (issueMessage === FAILURE_NO_MESSAGE) {
                             matchesMessage = !cleanMessage;
                         } else {
@@ -2428,6 +2467,37 @@
 
                     if (matchesMessage && day < days) {
                         dailyData[day].count += statusGroup.counts[i];
+                    }
+                }
+            } else if (statusGroup.taskIdIds && statusGroup.timeBuckets) {
+                // Detailed format with taskIdIds (array of arrays) and timeBuckets
+                let currentHour = 0;
+                for (let i = 0; i < statusGroup.timeBuckets.length; i++) {
+                    currentHour += statusGroup.timeBuckets[i];
+                    const day = Math.floor(currentHour / 24);
+
+                    let matchesMessage = false;
+                    if (issueType === 'TIMEOUT') {
+                        matchesMessage = true;
+                    } else if (issueType === 'SKIP' || issueType === 'FAIL') {
+                        const messageId = statusGroup.messageIds?.[i];
+                        const message = messageId !== null && messageId !== undefined ? historicalData.tables.messages[messageId] : null;
+                        const cleanMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
+
+                        if (issueMessage === FAILURE_NO_MESSAGE) {
+                            matchesMessage = !cleanMessage;
+                        } else {
+                            matchesMessage = cleanMessage === issueMessage;
+                        }
+                    } else if (issueType === 'CRASH') {
+                        const crashSigId = statusGroup.crashSignatureIds?.[i];
+                        const crashSig = crashSigId !== null && crashSigId !== undefined ? historicalData.tables.crashSignatures[crashSigId] : null;
+                        matchesMessage = crashSig === issueMessage;
+                    }
+
+                    if (matchesMessage && day < days) {
+                        const bucket = statusGroup.taskIdIds[i];
+                        dailyData[day].count += bucket.length;
                     }
                 }
             } else if (statusGroup.timestamps) {
@@ -2876,14 +2946,15 @@
                     const statusGroup = testGroup[skipStatusId];
                     if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const bucket = statusGroup.taskIdIds[i];
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
                             const displayMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
 
                             if (displayMessage === issueMessage) {
-                                const taskIdIndex = statusGroup.taskIdIds[i];
-                                const duration = statusGroup.durations?.[i];
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                                for (const taskIdIndex of bucket) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                                }
                             }
                         }
                     }
@@ -2898,13 +2969,14 @@
                     const statusGroup = testGroup[statusId];
                     if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const bucket = statusGroup.taskIdIds[i];
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
 
                             if (message === issueMessage || (!message && issueMessage.includes('not recorded'))) {
-                                const taskIdIndex = statusGroup.taskIdIds[i];
-                                const duration = statusGroup.durations?.[i];
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                                for (const taskIdIndex of bucket) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                                }
                             }
                         }
                     }
@@ -2916,14 +2988,15 @@
                     const statusGroup = testGroup[crashStatusId];
                     if (statusGroup && statusGroup.taskIdIds) {
                         for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                            const bucket = statusGroup.taskIdIds[i];
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
 
                             if (signature === issueMessage) {
-                                const taskIdIndex = statusGroup.taskIdIds[i];
-                                const duration = statusGroup.durations?.[i];
                                 const minidump = statusGroup.minidumps?.[i];
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration, minidump));
+                                for (const taskIdIndex of bucket) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
+                                }
                             }
                         }
                     }
@@ -2936,10 +3009,10 @@
                     if (statusId !== -1) {
                         const statusGroup = testGroup[statusId];
                         if (statusGroup && statusGroup.taskIdIds) {
-                            for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
-                                const taskIdIndex = statusGroup.taskIdIds[i];
-                                const duration = statusGroup.durations?.[i];
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, duration));
+                            for (const bucket of statusGroup.taskIdIds) {
+                                for (const taskIdIndex of bucket) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath));
+                                }
                             }
                         }
                     }
