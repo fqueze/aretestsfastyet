@@ -40,6 +40,13 @@ function calculateDailyRates(options) {
         });
     }
 
+    // Find the target valueId once (much faster than looking it up every time)
+    const targetValueId = historicalData.tables[valueTable].indexOf(targetValue);
+    if (targetValueId === -1) {
+        // Target value doesn't exist in the table, return empty results
+        return dailyData;
+    }
+
     // Iterate through all tests
     for (const testId in historicalData.testRuns) {
         // Apply filter if provided
@@ -54,6 +61,9 @@ function calculateDailyRates(options) {
 
             const status = historicalData.tables.statuses[statusId];
 
+            // Skip if this status doesn't match what we're looking for
+            if (!status.startsWith(statusName)) continue;
+
             // Historical data uses bucketed format with hours
             if (statusGroup.taskIdIds && statusGroup.hours) {
                 let currentHour = 0;
@@ -65,14 +75,10 @@ function calculateDailyRates(options) {
                         const count = bucket.length;
                         dailyData[day].totalRuns += count;
 
-                        // Check if this is the status we're looking for with matching value
-                        if (status.startsWith(statusName)) {
-                            const valueId = statusGroup[valueField]?.[i];
-                            const value = valueId !== null && valueId !== undefined ?
-                                historicalData.tables[valueTable][valueId] : null;
-                            if (value === targetValue) {
-                                dailyData[day].events += count;
-                            }
+                        // Check if this bucket's valueId matches our target (compare integers, not strings)
+                        const valueId = statusGroup[valueField]?.[i];
+                        if (valueId === targetValueId) {
+                            dailyData[day].events += count;
                         }
                     }
                 }
