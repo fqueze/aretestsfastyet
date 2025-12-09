@@ -112,7 +112,7 @@
     <script src="common-links.js"></script>
     <script>
         let currentData = null;
-        let expandedSignatures = new Set();
+        let expandedSignature = null;
         let expandedPaths = new Set();
         let expandedTests = new Set();
         let currentSort = { column: 'count', ascending: false };
@@ -482,7 +482,7 @@
 
             // Crash rows
             for (const crash of crashes) {
-                const isExpanded = expandedSignatures.has(crash.signature);
+                const isExpanded = expandedSignature === crash.signature;
                 const escapedSig = escapeHtml(crash.signature);
                 const attrSig = escapeAttr(crash.signature);
                 html += `<div class="crash-row ${isExpanded ? 'expanded' : ''}" data-signature="${attrSig}">`;
@@ -702,11 +702,10 @@
         }
 
         function toggleCrash(signature) {
-            const wasExpanded = expandedSignatures.has(signature);
-            if (wasExpanded) {
-                expandedSignatures.delete(signature);
+            if (expandedSignature === signature) {
+                expandedSignature = null;
             } else {
-                expandedSignatures.add(signature);
+                expandedSignature = signature;
             }
             renderCrashList();
         }
@@ -732,12 +731,12 @@
         }
 
         function rerenderAllCharts() {
-            // Re-render charts for all expanded signatures
-            for (const signature of expandedSignatures) {
-                const chartId = makeChartId('signature', signature);
-                const dailyData = calculateSignatureDailyCrashRates(signature);
+            // Re-render chart for expanded signature
+            if (expandedSignature) {
+                const chartId = makeChartId('signature', expandedSignature);
+                const dailyData = calculateSignatureDailyCrashRates(expandedSignature);
                 if (dailyData) {
-                    createCrashChart(`${chartId}-canvas`, dailyData, signature);
+                    createCrashChart(`${chartId}-canvas`, dailyData, expandedSignature);
                 }
             }
 

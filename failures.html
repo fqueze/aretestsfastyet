@@ -93,7 +93,7 @@
     <script src="common-links.js"></script>
     <script>
         let currentData = null;
-        let expandedMessages = new Set();
+        let expandedMessage = null;
         let expandedPaths = new Set();
         let expandedTests = new Set();
         let currentSort = { column: 'count', ascending: false };
@@ -460,7 +460,7 @@
 
             // Failure rows
             for (const failure of failures) {
-                const isExpanded = expandedMessages.has(failure.message);
+                const isExpanded = expandedMessage === failure.message;
                 const escapedMsg = escapeHtml(failure.message);
                 const attrMsg = escapeAttr(failure.message);
 
@@ -631,12 +631,12 @@
         }
 
         function rerenderAllCharts() {
-            // Re-render charts for all expanded messages
-            for (const message of expandedMessages) {
-                const chartId = makeChartId('message', message);
-                const dailyData = calculateMessageDailyFailureRates(message);
+            // Re-render chart for expanded message
+            if (expandedMessage) {
+                const chartId = makeChartId('message', expandedMessage);
+                const dailyData = calculateMessageDailyFailureRates(expandedMessage);
                 if (dailyData) {
-                    createFailureChart(`${chartId}-canvas`, dailyData, message);
+                    createFailureChart(`${chartId}-canvas`, dailyData, expandedMessage);
                 }
             }
 
@@ -706,11 +706,10 @@
         }
 
         function toggleFailure(message) {
-            const wasExpanded = expandedMessages.has(message);
-            if (wasExpanded) {
-                expandedMessages.delete(message);
+            if (expandedMessage === message) {
+                expandedMessage = null;
             } else {
-                expandedMessages.add(message);
+                expandedMessage = message;
             }
             renderFailureList();
         }
