@@ -657,7 +657,7 @@
                 }
 
                 html += `<div class="failure-row ${isExpanded ? 'expanded' : ''}" data-message="${attrMsg}">`;
-                html += `<div class="failure-message" title="${escapedMsg}">${linkifyFailureMessage(failure.message, mostFrequentTestPath)}</div>`;
+                html += `<div class="failure-message" title="${attrMsg}">${linkifyFailureMessage(failure.message, mostFrequentTestPath)}</div>`;
                 html += '<div class="failure-stats">';
                 html += `<div class="stat-item"><span class="stat-value">${failure.testCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value fail">${failure.failureCount}</span></div>`;
