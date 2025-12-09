@@ -94,7 +94,7 @@
             <select id="dateSelect" onchange="loadSelectedDate()">
             </select>
             <span class="status-text" id="statusText">Loading...</span>
-            <button id="historicalButton" class="historical-button" onclick="toggleHistoricalData()">Show Last 21 Days</button>
+            <button id="historicalButton" class="historical-button">Show Last 21 Days</button>
         </div>
         <div class="search-container">
             <input type="text" id="searchBox" class="search-box" placeholder="Search crash signatures or tests...">
@@ -166,6 +166,7 @@
                     } else {
                         await loadSelectedDate();
                     }
+                    updateUrlHash();
                 },
                 updateUrlHash: updateUrlHash
             });
@@ -785,6 +786,12 @@
             const state = hashManager.loadFromHash();
             const dateSelect = document.getElementById('dateSelect');
 
+            // Restore search filter first (before mode changes that trigger rendering)
+            const searchBox = document.getElementById('searchBox');
+            if (document.activeElement !== searchBox && state.q) {
+                searchBoxManager.setValue(state.q);
+            }
+
             // Default to historical mode if no date specified
             if (!state.date || state.date === '21days') {
                 if (!isHistoricalMode) {
@@ -795,15 +802,9 @@
                 if (isHistoricalMode) {
                     await toggleHistoricalData();
                 }
-                if (dateSelect.querySelector(`option[value="${state.date}"]`)) {
+                if (dateSelect.value !== state.date) {
                     dateSelect.value = state.date;
                 }
-            }
-
-            // Restore search filter (don't update if search box is focused)
-            const searchBox = document.getElementById('searchBox');
-            if (document.activeElement !== searchBox) {
-                searchBoxManager.setValue(state.q || '');
             }
         }
 
@@ -821,6 +822,12 @@
             });
 
             if (hasData) {
+                // Ensure date selector has a value (first option is selected by populateDateSelector)
+                const dateSelect = document.getElementById('dateSelect');
+                if (!dateSelect.value && dateSelect.options.length > 0) {
+                    dateSelect.selectedIndex = 0;
+                }
+
                 // Load state from URL hash
                 await loadFromUrlHash();
                 // Only load selected date if not in historical mode

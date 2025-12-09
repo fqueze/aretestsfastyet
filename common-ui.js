@@ -216,7 +216,6 @@ function initHistoricalToggle(options) {
                 dateLabel.style.display = '';
             }
 
-            updateUrlHash();
             await onToggle(false, null);
         } else {
             // Switch to historical view
@@ -249,7 +248,6 @@ function initHistoricalToggle(options) {
                     statusText.textContent = `${days} days (${startDate} to ${endDate})`;
                 }
 
-                updateUrlHash();
                 await onToggle(true, historicalData);
             } catch (error) {
                 console.error('Error loading historical data:', error);
