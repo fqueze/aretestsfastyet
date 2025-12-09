@@ -96,6 +96,7 @@
         let expandedMessage = null;
         let expandedPaths = new Set();
         let expandedTests = new Set();
+        let filteredFailureData = null; // Store filtered data for expansion
         let currentSort = { column: 'count', ascending: false };
         let isHistoricalMode = false;
         let historicalData = null;
@@ -352,8 +353,64 @@
             return calculateValueDailyRates(historicalData, message, 'messageIds', 'messages', 'FAIL');
         }
 
+        function calculateFilteredMessageDailyFailureRates(message, filteredData) {
+            // Build a set of allowed test IDs from the filtered data
+            const allowedTests = new Set();
+            for (const [dirPath, pathData] of filteredData.paths) {
+                for (const testName of pathData.tests.keys()) {
+                    // Find test IDs that match this path and name
+                    for (const testId in historicalData.testRuns) {
+                        const testPathId = historicalData.testInfo.testPathIds[testId];
+                        const testNameId = historicalData.testInfo.testNameIds[testId];
+                        const testPath = historicalData.tables.testPaths[testPathId];
+                        const testNameFromId = historicalData.tables.testNames[testNameId];
+                        if (testPath === dirPath && testNameFromId === testName) {
+                            allowedTests.add(testId);
+                        }
+                    }
+                }
+            }
+
+            // Use calculateDailyRates with a test filter
+            return calculateDailyRates({
+                historicalData,
+                targetValue: message,
+                valueField: 'messageIds',
+                valueTable: 'messages',
+                statusName: 'FAIL',
+                testFilterFn: (testId) => allowedTests.has(testId)
+            });
+        }
+
         function calculatePathDailyFailureRates(message, dirPath) {
             return calculatePathDailyRates(historicalData, message, 'messageIds', 'messages', 'FAIL', dirPath);
+        }
+
+        function calculateFilteredPathDailyFailureRates(message, dirPath, pathData) {
+            // Build a set of allowed test IDs from the filtered path data
+            const allowedTests = new Set();
+            for (const testName of pathData.tests.keys()) {
+                // Find test IDs that match this path and name
+                for (const testId in historicalData.testRuns) {
+                    const testPathId = historicalData.testInfo.testPathIds[testId];
+                    const testNameId = historicalData.testInfo.testNameIds[testId];
+                    const testPath = historicalData.tables.testPaths[testPathId];
+                    const testNameFromId = historicalData.tables.testNames[testNameId];
+                    if (testPath === dirPath && testNameFromId === testName) {
+                        allowedTests.add(testId);
+                    }
+                }
+            }
+
+            // Use calculateDailyRates with a test filter
+            return calculateDailyRates({
+                historicalData,
+                targetValue: message,
+                valueField: 'messageIds',
+                valueTable: 'messages',
+                statusName: 'FAIL',
+                testFilterFn: (testId) => allowedTests.has(testId)
+            });
         }
 
         function calculateTestDailyFailureRates(message, dirPath, testName) {
@@ -395,24 +452,55 @@
 
             // Filter by search term
             if (searchTerm) {
-                failures = failures.filter(failure => {
+                failures = failures.map(failure => {
+                    // If the failure message matches, include all paths and tests
                     if (failure.message.toLowerCase().includes(searchTerm)) {
-                        return true;
+                        return failure;
                     }
-                    // Check if any path or test name matches
+
+                    // Otherwise, filter paths and tests
+                    const filteredPaths = new Map();
+                    let totalCount = 0;
+                    let testCount = 0;
+
                     for (const [dirPath, pathData] of failure.paths) {
-                        if (dirPath.toLowerCase().includes(searchTerm)) {
-                            return true;
-                        }
-                        for (const testName of pathData.tests.keys()) {
-                            if (testName.toLowerCase().includes(searchTerm)) {
-                                return true;
+                        const pathMatches = dirPath.toLowerCase().includes(searchTerm);
+                        const filteredTests = new Map();
+                        let pathTotalCount = 0;
+
+                        for (const [testName, testData] of pathData.tests) {
+                            const testMatches = testName.toLowerCase().includes(searchTerm);
+                            if (pathMatches || testMatches) {
+                                filteredTests.set(testName, testData);
+                                pathTotalCount += testData.totalCount;
+                                testCount++;
                             }
                         }
+
+                        if (filteredTests.size > 0) {
+                            filteredPaths.set(dirPath, {
+                                tests: filteredTests,
+                                totalCount: pathTotalCount
+                            });
+                            totalCount += pathTotalCount;
+                        }
                     }
-                    return false;
-                });
+
+                    // Return filtered failure if any paths/tests matched
+                    if (filteredPaths.size > 0) {
+                        return {
+                            message: failure.message,
+                            testCount: testCount,
+                            failureCount: totalCount,
+                            paths: filteredPaths
+                        };
+                    }
+                    return null;
+                }).filter(f => f !== null);
             }
+
+            // Store filtered data as a Map for expansion (message -> data)
+            filteredFailureData = new Map(failures.map(f => [f.message, { paths: f.paths, totalCount: f.failureCount }]));
 
             // Sort failures
             failures.sort((a, b) => {
@@ -741,19 +829,26 @@
                 expandedMessage = message;
                 clickedRow.classList.add('expanded');
 
-                // Get the failure data
-                const failure = Array.from(currentData.failureData.entries())
-                    .find(([msg]) => msg === message);
+                // Get the failure data from filtered data (respects search filter)
+                const data = filteredFailureData.get(message);
 
-                if (failure) {
-                    const [, data] = failure;
+                if (data) {
                     const html = generateFailureExpandedContent(message, data);
                     clickedRow.insertAdjacentHTML('afterend', html);
 
                     // Render chart if in historical mode
                     if (isHistoricalMode) {
                         const chartId = makeChartId('message', message);
-                        const dailyData = calculateMessageDailyFailureRates(message);
+                        const searchTerm = searchBoxManager.getValue().toLowerCase();
+
+                        // Use filtered chart if search is active and message doesn't match search
+                        let dailyData;
+                        if (searchTerm && !message.toLowerCase().includes(searchTerm)) {
+                            dailyData = calculateFilteredMessageDailyFailureRates(message, data);
+                        } else {
+                            dailyData = calculateMessageDailyFailureRates(message);
+                        }
+
                         if (dailyData) {
                             createFailureChart(`${chartId}-canvas`, dailyData, message);
                         }
@@ -780,11 +875,9 @@
             } else {
                 expandedPaths.add(pathKey);
 
-                // Get the path data
-                const failure = Array.from(currentData.failureData.entries())
-                    .find(([msg]) => msg === message);
-                if (failure) {
-                    const [, data] = failure;
+                // Get the path data from filtered data (respects search filter)
+                const data = filteredFailureData.get(message);
+                if (data) {
                     const pathData = data.paths.get(dirPath);
                     if (pathData) {
                         const html = generatePathExpandedContent(message, dirPath, pathData);
@@ -793,7 +886,16 @@
                         // Render chart if in historical mode
                         if (isHistoricalMode) {
                             const pathChartId = makeChartId('path', message, dirPath);
-                            const dailyData = calculatePathDailyFailureRates(message, dirPath);
+                            const searchTerm = searchBoxManager.getValue().toLowerCase();
+
+                            // Use filtered chart if search is active and message/path don't match search
+                            let dailyData;
+                            if (searchTerm && !message.toLowerCase().includes(searchTerm) && !dirPath.toLowerCase().includes(searchTerm)) {
+                                dailyData = calculateFilteredPathDailyFailureRates(message, dirPath, pathData);
+                            } else {
+                                dailyData = calculatePathDailyFailureRates(message, dirPath);
+                            }
+
                             if (dailyData) {
                                 createFailureChart(`${pathChartId}-canvas`, dailyData, `${message} in ${dirPath}`);
                             }
@@ -821,11 +923,9 @@
             } else {
                 expandedTests.add(testKey);
 
-                // Get the test data
-                const failure = Array.from(currentData.failureData.entries())
-                    .find(([msg]) => msg === message);
-                if (failure) {
-                    const [, data] = failure;
+                // Get the test data from filtered data (respects search filter)
+                const data = filteredFailureData.get(message);
+                if (data) {
                     const pathData = data.paths.get(dirPath);
                     if (pathData) {
                         const testData = pathData.tests.get(testName);
