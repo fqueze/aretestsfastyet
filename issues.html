@@ -6,6 +6,7 @@
     <title>Test Issues</title>
     <script src="fetch-utils.js"></script>
     <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
     <script defer src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
@@ -450,6 +451,10 @@
 
         .issue-item:hover {
             background-color: #e9ecef;
+        }
+
+        .issue-item:hover .action-button {
+            opacity: 1;
         }
 
         .issue-item:last-child {
@@ -2962,7 +2967,20 @@
                     html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${testPath}" data-test-id="${testData.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
                     html += `<span class="issue-count">${count}</span>`;
                     html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
-                    html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}</span>`;
+                    html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}`;
+                    // Add bug filing button for FAIL items with valid component
+                    if (type === 'FAIL' && testData.component?.includes(' :: ')) {
+                        const bugUrl = getBugzillaUrl({
+                            testPath,
+                            summary: message,
+                            component: testData.component,
+                            stats: {
+                                failureCount: count
+                            }
+                        });
+                        html += `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this failure">🐛</a>`;
+                    }
+                    html += `</span>`;
                     html += `</div>`;
                     if (isHistoricalMode) {
                         html += `<div class="historical-chart" id="${issueId}-chart" style="display: none; margin-left: 50px;">`;
