@@ -289,7 +289,8 @@
     display: inline-block;
 }
 
-.data-row:hover .action-button {
+.data-row:hover .action-button,
+.test-row:hover .action-button {
     opacity: 1;
 }
 

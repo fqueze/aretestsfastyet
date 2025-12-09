@@ -215,6 +215,7 @@
 
             const failureData = new Map(); // message -> { paths: Map(dirPath -> { tests: Map(testName -> { failures: [], totalCount }), totalCount }), totalCount }
 
+            // Process failures
             // testRuns is an array where index = testId
             currentData.testRuns.forEach((testGroup, testId) => {
                 if (!testGroup) return;
@@ -226,11 +227,13 @@
                         continue;
                     }
 
-                // Get directory path and test name from testInfo
+                // Get directory path, test name, and component from testInfo
                 const testPathId = currentData.testInfo.testPathIds[testId];
                 const testNameId = currentData.testInfo.testNameIds[testId];
                 const dirPath = currentData.tables.testPaths[testPathId];
                 const testName = currentData.tables.testNames[testNameId];
+                const componentId = currentData.testInfo.componentIds ? currentData.testInfo.componentIds[testId] : null;
+                const component = (componentId !== null && currentData.tables.components) ? currentData.tables.components[componentId] : null;
 
                 if (testName === undefined) return;
 
@@ -319,7 +322,11 @@
                         const pathData = msgData.paths.get(dirPath);
 
                         if (!pathData.tests.has(testName)) {
-                            pathData.tests.set(testName, { failures: [], totalCount: 0 });
+                            pathData.tests.set(testName, {
+                                failures: [],
+                                totalCount: 0,
+                                component
+                            });
                         }
                         const testData = pathData.tests.get(testName);
 
@@ -555,6 +562,33 @@
             });
         }
 
+        function generateBugButton(testPath, message, component, testData) {
+            // Only show bug button if we have a valid component (Product :: Component format)
+            if (component?.includes(' :: ')) {
+                // Calculate date range from failure instances
+                let firstSeen = null;
+                let lastSeen = null;
+                if (testData.failures && testData.failures.length > 0) {
+                    const timestamps = testData.failures.map(f => f.timestamp);
+                    firstSeen = Math.min(...timestamps);
+                    lastSeen = Math.max(...timestamps);
+                }
+
+                const bugUrl = getBugzillaUrl({
+                    testPath,
+                    summary: message,
+                    component,
+                    stats: {
+                        failureCount: testData.totalCount,
+                        firstSeen,
+                        lastSeen
+                    }
+                });
+                return `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this test">🐛</a>`;
+            }
+            return '';
+        }
+
         function generateFailureExpandedContent(message, data) {
             let html = '';
             const attrMsg = escapeAttr(message);
@@ -581,16 +615,18 @@
                     if (testData.totalCount === 1 && testData.failures.length > 0) {
                         const failureInstance = testData.failures[0];
                         const profilerUrl = getProfilerUrl(failureInstance, testName);
+                        const fullTestPath = `${pathEntry.dirPath}/${testName}`;
                         html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
-                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData)}</div>`;
                         html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                         html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
                         html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
                         html += '</div>';
                     } else {
                         // Multiple failures in single test - show test with expand capability
+                        const fullTestPath = `${pathEntry.dirPath}/${testName}`;
                         html += `<div class="test-row direct-child" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
-                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData)}</div>`;
                         html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${testData.totalCount}</div></div>`;
                         html += '</div>';
                     }
@@ -630,16 +666,18 @@
                 if (test.testData.totalCount === 1 && test.testData.failures.length > 0) {
                     const failureInstance = test.testData.failures[0];
                     const profilerUrl = getProfilerUrl(failureInstance, test.testName);
+                    const fullTestPath = `${dirPath}/${test.testName}`;
                     html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
-                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData)}</div>`;
                     html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                     html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
                     html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
                     html += '</div>';
                 } else {
                     // Multiple failures - show test with expand capability
+                    const fullTestPath = `${dirPath}/${test.testName}`;
                     html += `<div class="test-row" data-message="${attrMsg}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
-                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData)}</div>`;
                     html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${test.testData.totalCount}</div></div>`;
                     html += '</div>';
                 }
