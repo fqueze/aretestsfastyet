@@ -2964,8 +2964,18 @@
                     const issueId = `issue-${testPath.replace(/[^a-zA-Z0-9]/g, '-')}-${index}`;
                     // Store message in a way that preserves it for matching
                     const escapedMessage = message.replace(/"/g, '&quot;');
+
+                    // Calculate tooltip for FAIL items
+                    let tooltip = '';
+                    if (type === 'FAIL' && testData.stats?.runCount > 0) {
+                        const totalRuns = testData.stats.runCount;
+                        const percentage = ((count / totalRuns) * 100).toFixed(2);
+                        const occurrenceText = count === 1 ? 'occurrence' : 'occurrences';
+                        tooltip = `${count} ${occurrenceText} of this message out of ${totalRuns.toLocaleString()} runs (${percentage}%)`;
+                    }
+
                     html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${testPath}" data-test-id="${testData.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
-                    html += `<span class="issue-count">${count}</span>`;
+                    html += `<span class="issue-count"${tooltip ? ` title="${tooltip}"` : ''}>${count}</span>`;
                     html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
                     html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}`;
                     // Add bug filing button for FAIL items with valid component
@@ -2975,7 +2985,8 @@
                             summary: message,
                             component: testData.component,
                             stats: {
-                                failureCount: count
+                                failureCount: count,
+                                totalRuns: testData.stats?.runCount
                             }
                         });
                         html += `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this failure">🐛</a>`;

@@ -735,7 +735,7 @@
             });
         }
 
-        function generateBugButton(testPath, message, component, testData) {
+        function generateBugButton(testPath, message, component, testData, totalRuns) {
             // Only show bug button if we have a valid component (Product :: Component format)
             if (component?.includes(' :: ')) {
                 // Calculate date range from failure instances
@@ -754,7 +754,8 @@
                     stats: {
                         failureCount: testData.totalCount,
                         firstSeen,
-                        lastSeen
+                        lastSeen,
+                        totalRuns
                     }
                 });
                 return `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this test">🐛</a>`;
@@ -789,8 +790,9 @@
                         const failureInstance = testData.failures[0];
                         const profilerUrl = getProfilerUrl(failureInstance, testName);
                         const fullTestPath = `${pathEntry.dirPath}/${testName}`;
+                        const totalRuns = getTestTotalRuns(historicalData, pathEntry.dirPath, testName);
                         html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
-                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData)}</div>`;
+                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData, totalRuns)}</div>`;
                         html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                         html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
                         html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
@@ -804,7 +806,7 @@
                         const tooltip = totalRuns > 0 ? `${testData.totalCount} ${occurrenceText} of this message out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
 
                         html += `<div class="test-row direct-child" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
-                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData)}</div>`;
+                        html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData, totalRuns)}</div>`;
                         html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count" title="${escapeAttr(tooltip)}">${testData.totalCount}</div></div>`;
                         html += '</div>';
                     }
@@ -845,8 +847,9 @@
                     const failureInstance = test.testData.failures[0];
                     const profilerUrl = getProfilerUrl(failureInstance, test.testName);
                     const fullTestPath = `${dirPath}/${test.testName}`;
+                    const totalRuns = getTestTotalRuns(historicalData, dirPath, test.testName);
                     html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
-                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData)}</div>`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData, totalRuns)}</div>`;
                     html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                     html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
                     html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
@@ -860,7 +863,7 @@
                     const tooltip = totalRuns > 0 ? `${test.testData.totalCount} ${occurrenceText} of this message out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
 
                     html += `<div class="test-row" data-message="${attrMsg}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
-                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData)}</div>`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData, totalRuns)}</div>`;
                     html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count" title="${escapeAttr(tooltip)}">${test.testData.totalCount}</div></div>`;
                     html += '</div>';
                 }

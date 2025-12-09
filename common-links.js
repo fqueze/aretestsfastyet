@@ -95,7 +95,13 @@ function getBugzillaUrl(options) {
             dateRange = firstDate === lastDate ? ` on ${firstDate}` : ` between ${firstDate} and ${lastDate}`;
         }
 
-        description += `This failure [${occurrenceText}](${url.toString()})${dateRange}.\n`;
+        let runInfo = '';
+        if (stats.totalRuns && stats.totalRuns > 0) {
+            const percentage = ((stats.failureCount / stats.totalRuns) * 100).toFixed(2);
+            runInfo = ` out of ${stats.totalRuns.toLocaleString()} runs (${percentage}%)`;
+        }
+
+        description += `This failure [${occurrenceText}](${url.toString()})${runInfo}${dateRange}.\n`;
     }
 
     params.set('comment', description);
