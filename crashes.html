@@ -701,9 +701,14 @@
                         html += '</div>';
                     } else {
                         // Multiple crashes in single test - show test with expand capability
+                        const totalRuns = getTestTotalRuns(historicalData, pathEntry.dirPath, testName);
+                        const percentage = totalRuns > 0 ? ((testData.totalCount / totalRuns) * 100).toFixed(2) : 0;
+                        const occurrenceText = testData.totalCount === 1 ? 'occurrence' : 'occurrences';
+                        const tooltip = totalRuns > 0 ? `${testData.totalCount} ${occurrenceText} of this signature out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
+
                         html += `<div class="test-row direct-child" data-signature="${attrSig}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
                         html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                        html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${testData.totalCount}</div></div>`;
+                        html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count" title="${escapeAttr(tooltip)}">${testData.totalCount}</div></div>`;
                         html += '</div>';
                     }
                 } else {
@@ -750,9 +755,14 @@
                     html += '</div>';
                 } else {
                     // Multiple crashes - show test with expand capability
+                    const totalRuns = getTestTotalRuns(historicalData, dirPath, test.testName);
+                    const percentage = totalRuns > 0 ? ((test.testData.totalCount / totalRuns) * 100).toFixed(2) : 0;
+                    const occurrenceText = test.testData.totalCount === 1 ? 'occurrence' : 'occurrences';
+                    const tooltip = totalRuns > 0 ? `${test.testData.totalCount} ${occurrenceText} of this signature out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
+
                     html += `<div class="test-row" data-signature="${attrSig}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
                     html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                    html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
+                    html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count" title="${escapeAttr(tooltip)}">${test.testData.totalCount}</div></div>`;
                     html += '</div>';
                 }
             }

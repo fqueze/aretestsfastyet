@@ -798,9 +798,14 @@
                     } else {
                         // Multiple failures in single test - show test with expand capability
                         const fullTestPath = `${pathEntry.dirPath}/${testName}`;
+                        const totalRuns = getTestTotalRuns(historicalData, pathEntry.dirPath, testName);
+                        const percentage = totalRuns > 0 ? ((testData.totalCount / totalRuns) * 100).toFixed(2) : 0;
+                        const occurrenceText = testData.totalCount === 1 ? 'occurrence' : 'occurrences';
+                        const tooltip = totalRuns > 0 ? `${testData.totalCount} ${occurrenceText} of this message out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
+
                         html += `<div class="test-row direct-child" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
                         html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData)}</div>`;
-                        html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${testData.totalCount}</div></div>`;
+                        html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count" title="${escapeAttr(tooltip)}">${testData.totalCount}</div></div>`;
                         html += '</div>';
                     }
                 } else {
@@ -849,9 +854,14 @@
                 } else {
                     // Multiple failures - show test with expand capability
                     const fullTestPath = `${dirPath}/${test.testName}`;
+                    const totalRuns = getTestTotalRuns(historicalData, dirPath, test.testName);
+                    const percentage = totalRuns > 0 ? ((test.testData.totalCount / totalRuns) * 100).toFixed(2) : 0;
+                    const occurrenceText = test.testData.totalCount === 1 ? 'occurrence' : 'occurrences';
+                    const tooltip = totalRuns > 0 ? `${test.testData.totalCount} ${occurrenceText} of this message out of ${totalRuns.toLocaleString()} runs (${percentage}%)` : '';
+
                     html += `<div class="test-row" data-message="${attrMsg}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
                     html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData)}</div>`;
-                    html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${test.testData.totalCount}</div></div>`;
+                    html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count" title="${escapeAttr(tooltip)}">${test.testData.totalCount}</div></div>`;
                     html += '</div>';
                 }
             }

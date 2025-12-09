@@ -90,6 +90,53 @@ function calculateDailyRates(options) {
 }
 
 /**
+ * Get total runs for a specific test (for tooltips)
+ * @param {Object} historicalData - The historical data object
+ * @param {string} dirPath - Test path/directory
+ * @param {string} testName - Test name
+ * @returns {number} Total runs excluding SKIP
+ */
+function getTestTotalRuns(historicalData, dirPath, testName) {
+    if (!historicalData) return 0;
+
+    // Find the test ID
+    for (const testId in historicalData.testRuns) {
+        const testPathId = historicalData.testInfo.testPathIds[testId];
+        const testNameId = historicalData.testInfo.testNameIds[testId];
+        const testPath = historicalData.tables.testPaths[testPathId];
+        const testNameFromId = historicalData.tables.testNames[testNameId];
+
+        if (testPath === dirPath && testNameFromId === testName) {
+            const testGroup = historicalData.testRuns[testId];
+            let totalRuns = 0;
+
+            // Count all runs excluding SKIP
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = historicalData.tables.statuses[statusId];
+                if (status === 'SKIP' || status.startsWith('SKIP')) continue;
+
+                if (statusGroup.taskIdIds && statusGroup.hours) {
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        totalRuns += statusGroup.taskIdIds[i].length;
+                    }
+                } else if (statusGroup.counts && statusGroup.hours) {
+                    for (let i = 0; i < statusGroup.counts.length; i++) {
+                        totalRuns += statusGroup.counts[i];
+                    }
+                }
+            }
+
+            return totalRuns;
+        }
+    }
+
+    return 0;
+}
+
+/**
  * Helper to count daily runs and events for a set of test IDs
  * @param {Object} historicalData - The historical data object
  * @param {Set} testIds - Set of test IDs to count
@@ -347,6 +394,8 @@ if (typeof module !== 'undefined' && module.exports) {
         getCommonChartOptions,
         getEventColors,
         createRateChart,
-        makeChartId
+        makeChartId,
+        getTestTotalRuns,
+        countDailyRunsForTests
     };
 }
