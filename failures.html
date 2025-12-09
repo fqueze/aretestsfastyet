@@ -482,181 +482,31 @@
                 html += `<div class="stat-item"><span class="stat-value">${failure.testCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value fail">${failure.failureCount}</span></div>`;
                 html += '</div></div>';
-
-                if (isExpanded) {
-                    // Add chart in historical mode
-                    if (isHistoricalMode) {
-                        const chartId = makeChartId('message', failure.message);
-                        html += `<div class="historical-chart">`;
-                        html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                        html += `</div>`;
-                    }
-
-                    // Sort paths by failure count
-                    const pathList = Array.from(failure.paths.entries())
-                        .map(([dirPath, pathData]) => ({ dirPath, pathData }))
-                        .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
-
-                    for (const pathEntry of pathList) {
-                        const pathKey = `${failure.message}|||${pathEntry.dirPath}`;
-                        const isPathExpanded = expandedPaths.has(pathKey);
-
-                        // If path has only one test, skip the path level and show test directly
-                        if (pathEntry.pathData.tests.size === 1) {
-                            const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
-                            const testKey = `${failure.message}|||${pathEntry.dirPath}|||${testName}`;
-                            const isTestExpanded = expandedTests.has(testKey);
-
-                            // If test has only one failure and we have failure instance details, show it inline
-                            if (testData.totalCount === 1 && testData.failures.length > 0) {
-                                const failureInstance = testData.failures[0];
-                                const profilerUrl = getProfilerUrl(failureInstance);
-
-                                html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
-                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                                html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
-                                html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
-                                html += '</div>';
-                            } else {
-                                // Multiple failures in single test - show test with expand capability
-                                html += `<div class="test-row direct-child ${isTestExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
-                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                                html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${testData.totalCount}</div></div>`;
-                                html += '</div>';
-
-                                if (isTestExpanded) {
-                                    // Add chart in historical mode for this test
-                                    if (isHistoricalMode) {
-                                        const testChartId = makeChartId('test', failure.message, pathEntry.dirPath, testName);
-                                        html += `<div class="historical-chart">`;
-                                        html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                        html += `</div>`;
-                                    }
-
-                                    // Sort failure instances by timestamp (most recent first)
-                                    const failures = [...testData.failures].sort((a, b) => b.timestamp - a.timestamp);
-
-                                    for (const failureInstance of failures) {
-                                        const profilerUrl = getProfilerUrl(failureInstance);
-                                        html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
-                                        html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
-                                        html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
-                                        html += '</div>';
-                                    }
-                                }
-                            }
-                        } else {
-                            // Multiple tests in path - show path level
-                            html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
-                            html += `<div class="failure-message">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
-                            html += '<div class="failure-stats">';
-                            html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
-                            html += `<div class="stat-item"><span class="stat-value fail">${pathEntry.pathData.totalCount}</span></div>`;
-                            html += '</div></div>';
-
-                            if (isPathExpanded) {
-                                // Add chart in historical mode for this path
-                                if (isHistoricalMode) {
-                                    const pathChartId = makeChartId('path', failure.message, pathEntry.dirPath);
-                                    html += `<div class="historical-chart">`;
-                                    html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                    html += `</div>`;
-                                }
-
-                                // Sort tests by failure count
-                                const testList = Array.from(pathEntry.pathData.tests.entries())
-                                    .map(([testName, testData]) => ({ testName, testData }))
-                                    .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
-
-                                for (const test of testList) {
-                                    const testKey = `${failure.message}|||${pathEntry.dirPath}|||${test.testName}`;
-                                    const isTestExpanded = expandedTests.has(testKey);
-
-                                    // If test has only one failure, show it inline
-                                    if (test.testData.totalCount === 1 && test.testData.failures.length > 0) {
-                                        const failureInstance = test.testData.failures[0];
-                                        const profilerUrl = getProfilerUrl(failureInstance);
-
-                                        html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
-                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                                        html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
-                                        html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
-                                        html += '</div>';
-                                    } else {
-                                        // Multiple failures - show test with expand capability
-                                        html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(test.testName)}">`;
-                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                                        html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${test.testData.totalCount}</div></div>`;
-                                        html += '</div>';
-
-                                        if (isTestExpanded) {
-                                            // Add chart in historical mode for this test
-                                            if (isHistoricalMode) {
-                                                const testChartId = makeChartId('test', failure.message, pathEntry.dirPath, test.testName);
-                                                html += `<div class="historical-chart">`;
-                                                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                                html += `</div>`;
-                                            }
-
-                                            // Sort failure instances by timestamp (most recent first)
-                                            const failures = [...test.testData.failures].sort((a, b) => b.timestamp - a.timestamp);
-
-                                            for (const failureInstance of failures) {
-                                                const profilerUrl = getProfilerUrl(failureInstance);
-                                                html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
-                                                html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
-                                                html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                                                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
-                                                html += '</div>';
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             html += '</div>';
             document.getElementById('content').innerHTML = html;
 
-            // Re-render all charts after HTML is regenerated (in historical mode only)
-            if (isHistoricalMode) {
-                rerenderAllCharts();
-            }
-        }
-
-        function rerenderAllCharts() {
-            // Re-render chart for expanded message
+            // Re-expand the currently expanded message after full re-render
             if (expandedMessage) {
-                const chartId = makeChartId('message', expandedMessage);
-                const dailyData = calculateMessageDailyFailureRates(expandedMessage);
-                if (dailyData) {
-                    createFailureChart(`${chartId}-canvas`, dailyData, expandedMessage);
-                }
-            }
+                const messageRow = document.querySelector(`[data-message="${escapeAttr(expandedMessage)}"].failure-row`);
+                if (messageRow) {
+                    const failure = Array.from(currentData.failureData.entries())
+                        .find(([msg]) => msg === expandedMessage);
+                    if (failure) {
+                        const [, data] = failure;
+                        const html = generateFailureExpandedContent(expandedMessage, data);
+                        messageRow.insertAdjacentHTML('afterend', html);
 
-            // Re-render charts for all expanded paths
-            for (const pathKey of expandedPaths) {
-                const [message, dirPath] = pathKey.split('|||');
-                const chartId = makeChartId('path', message, dirPath);
-                const dailyData = calculatePathDailyFailureRates(message, dirPath);
-                if (dailyData) {
-                    createFailureChart(`${chartId}-canvas`, dailyData, `${message} in ${dirPath}`);
-                }
-            }
-
-            // Re-render charts for all expanded tests
-            for (const testKey of expandedTests) {
-                const [message, dirPath, testName] = testKey.split('|||');
-                const chartId = makeChartId('test', message, dirPath, testName);
-                const dailyData = calculateTestDailyFailureRates(message, dirPath, testName);
-                if (dailyData) {
-                    createFailureChart(`${chartId}-canvas`, dailyData, `${message} in ${testName}`);
+                        // Render chart if in historical mode
+                        if (isHistoricalMode) {
+                            const chartId = makeChartId('message', expandedMessage);
+                            const dailyData = calculateMessageDailyFailureRates(expandedMessage);
+                            if (dailyData) {
+                                createFailureChart(`${chartId}-canvas`, dailyData, expandedMessage);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -676,7 +526,7 @@
                     if (target.classList.contains('failure-row') && !target.classList.contains('total-row')) {
                         const message = target.dataset.message;
                         if (message) {
-                            toggleFailure(message);
+                            toggleFailure(message, target);
                         }
                         return;
                     }
@@ -685,7 +535,7 @@
                         const message = target.dataset.message;
                         const path = target.dataset.path;
                         if (message && path !== undefined) {
-                            togglePath(message, path);
+                            togglePath(message, path, target);
                         }
                         return;
                     }
@@ -695,7 +545,7 @@
                         const path = target.dataset.path;
                         const test = target.dataset.test;
                         if (message && path !== undefined && test) {
-                            toggleTest(message, path, test);
+                            toggleTest(message, path, test, target);
                         }
                         return;
                     }
@@ -705,33 +555,258 @@
             });
         }
 
-        function toggleFailure(message) {
-            if (expandedMessage === message) {
-                expandedMessage = null;
-            } else {
-                expandedMessage = message;
+        function generateFailureExpandedContent(message, data) {
+            let html = '';
+            const attrMsg = escapeAttr(message);
+
+            // Add chart in historical mode
+            if (isHistoricalMode) {
+                const chartId = makeChartId('message', message);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
             }
-            renderFailureList();
+
+            // Sort paths by failure count
+            const pathList = Array.from(data.paths.entries())
+                .map(([dirPath, pathData]) => ({ dirPath, pathData }))
+                .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
+
+            for (const pathEntry of pathList) {
+                // If path has only one test, skip the path level and show test directly
+                if (pathEntry.pathData.tests.size === 1) {
+                    const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
+
+                    // If test has only one failure, show it inline
+                    if (testData.totalCount === 1 && testData.failures.length > 0) {
+                        const failureInstance = testData.failures[0];
+                        const profilerUrl = getProfilerUrl(failureInstance);
+                        html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
+                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
+                        html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                        html += '</div>';
+                    } else {
+                        // Multiple failures in single test - show test with expand capability
+                        html += `<div class="test-row direct-child" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
+                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${testData.totalCount}</div></div>`;
+                        html += '</div>';
+                    }
+                } else {
+                    // Multiple tests in path - show path level
+                    html += `<div class="path-row" data-message="${attrMsg}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
+                    html += `<div class="failure-message">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
+                    html += '<div class="failure-stats">';
+                    html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
+                    html += `<div class="stat-item"><span class="stat-value fail">${pathEntry.pathData.totalCount}</span></div>`;
+                    html += '</div></div>';
+                }
+            }
+
+            return html;
         }
 
-        function togglePath(message, dirPath) {
+        function generatePathExpandedContent(message, dirPath, pathData) {
+            let html = '';
+            const attrMsg = escapeAttr(message);
+
+            // Add chart in historical mode for this path
+            if (isHistoricalMode) {
+                const pathChartId = makeChartId('path', message, dirPath);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
+            }
+
+            // Sort tests by failure count
+            const testList = Array.from(pathData.tests.entries())
+                .map(([testName, testData]) => ({ testName, testData }))
+                .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+
+            for (const test of testList) {
+                // If test has only one failure, show it inline
+                if (test.testData.totalCount === 1 && test.testData.failures.length > 0) {
+                    const failureInstance = test.testData.failures[0];
+                    const profilerUrl = getProfilerUrl(failureInstance);
+                    html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
+                    html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                    html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                    html += '</div>';
+                } else {
+                    // Multiple failures - show test with expand capability
+                    html += `<div class="test-row" data-message="${attrMsg}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="failure-stats"><div class="stat-item"></div><div class="test-failure-count">${test.testData.totalCount}</div></div>`;
+                    html += '</div>';
+                }
+            }
+
+            return html;
+        }
+
+        function generateTestExpandedContent(message, dirPath, testName, testData) {
+            let html = '';
+
+            // Add chart in historical mode for this test
+            if (isHistoricalMode) {
+                const testChartId = makeChartId('test', message, dirPath, testName);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
+            }
+
+            // Sort failure instances by timestamp (most recent first)
+            const failures = [...testData.failures].sort((a, b) => b.timestamp - a.timestamp);
+
+            for (const failureInstance of failures) {
+                const profilerUrl = getProfilerUrl(failureInstance);
+                html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
+                html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
+                html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
+                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        function toggleFailure(message, clickedRow) {
+            const isCurrentlyExpanded = expandedMessage === message;
+
+            // Close any open message first
+            if (expandedMessage) {
+                // Find the expanded row - we can use the clickedRow if it's the same message
+                const expandedRow = isCurrentlyExpanded ? clickedRow :
+                    document.querySelector('.failure-row.expanded');
+
+                if (expandedRow) {
+                    expandedRow.classList.remove('expanded');
+                    // Remove all following siblings until we hit another failure-row
+                    let next = expandedRow.nextElementSibling;
+                    while (next && !next.classList.contains('failure-row') && !next.classList.contains('sort-header') && !next.classList.contains('total-row')) {
+                        const toRemove = next;
+                        next = next.nextElementSibling;
+                        toRemove.remove();
+                    }
+                }
+                expandedMessage = null;
+                expandedPaths.clear();
+                expandedTests.clear();
+            }
+
+            // If we're opening a different message, render its content
+            if (!isCurrentlyExpanded) {
+                expandedMessage = message;
+                clickedRow.classList.add('expanded');
+
+                // Get the failure data
+                const failure = Array.from(currentData.failureData.entries())
+                    .find(([msg]) => msg === message);
+
+                if (failure) {
+                    const [, data] = failure;
+                    const html = generateFailureExpandedContent(message, data);
+                    clickedRow.insertAdjacentHTML('afterend', html);
+
+                    // Render chart if in historical mode
+                    if (isHistoricalMode) {
+                        const chartId = makeChartId('message', message);
+                        const dailyData = calculateMessageDailyFailureRates(message);
+                        if (dailyData) {
+                            createFailureChart(`${chartId}-canvas`, dailyData, message);
+                        }
+                    }
+                }
+            }
+        }
+
+        function togglePath(message, dirPath, clickedRow) {
             const pathKey = `${message}|||${dirPath}`;
-            if (expandedPaths.has(pathKey)) {
+            const isExpanded = expandedPaths.has(pathKey);
+
+            clickedRow.classList.toggle('expanded', !isExpanded);
+
+            if (isExpanded) {
                 expandedPaths.delete(pathKey);
+                // Remove all following siblings until we hit another path/test-row or higher level
+                let next = clickedRow.nextElementSibling;
+                while (next && (next.classList.contains('test-row') || next.classList.contains('historical-chart') || next.classList.contains('failure-instance-row'))) {
+                    const toRemove = next;
+                    next = next.nextElementSibling;
+                    toRemove.remove();
+                }
             } else {
                 expandedPaths.add(pathKey);
+
+                // Get the path data
+                const failure = Array.from(currentData.failureData.entries())
+                    .find(([msg]) => msg === message);
+                if (failure) {
+                    const [, data] = failure;
+                    const pathData = data.paths.get(dirPath);
+                    if (pathData) {
+                        const html = generatePathExpandedContent(message, dirPath, pathData);
+                        clickedRow.insertAdjacentHTML('afterend', html);
+
+                        // Render chart if in historical mode
+                        if (isHistoricalMode) {
+                            const pathChartId = makeChartId('path', message, dirPath);
+                            const dailyData = calculatePathDailyFailureRates(message, dirPath);
+                            if (dailyData) {
+                                createFailureChart(`${pathChartId}-canvas`, dailyData, `${message} in ${dirPath}`);
+                            }
+                        }
+                    }
+                }
             }
-            renderFailureList();
         }
 
-        function toggleTest(message, dirPath, testName) {
+        function toggleTest(message, dirPath, testName, clickedRow) {
             const testKey = `${message}|||${dirPath}|||${testName}`;
-            if (expandedTests.has(testKey)) {
+            const isExpanded = expandedTests.has(testKey);
+
+            clickedRow.classList.toggle('expanded', !isExpanded);
+
+            if (isExpanded) {
                 expandedTests.delete(testKey);
+                // Remove all following siblings until we hit another test-row or higher level
+                let next = clickedRow.nextElementSibling;
+                while (next && (next.classList.contains('historical-chart') || next.classList.contains('failure-instance-row'))) {
+                    const toRemove = next;
+                    next = next.nextElementSibling;
+                    toRemove.remove();
+                }
             } else {
                 expandedTests.add(testKey);
+
+                // Get the test data
+                const failure = Array.from(currentData.failureData.entries())
+                    .find(([msg]) => msg === message);
+                if (failure) {
+                    const [, data] = failure;
+                    const pathData = data.paths.get(dirPath);
+                    if (pathData) {
+                        const testData = pathData.tests.get(testName);
+                        if (testData) {
+                            const html = generateTestExpandedContent(message, dirPath, testName, testData);
+                            clickedRow.insertAdjacentHTML('afterend', html);
+
+                            // Render chart if in historical mode
+                            if (isHistoricalMode) {
+                                const testChartId = makeChartId('test', message, dirPath, testName);
+                                const dailyData = calculateTestDailyFailureRates(message, dirPath, testName);
+                                if (dailyData) {
+                                    createFailureChart(`${testChartId}-canvas`, dailyData, `${message} in ${testName}`);
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            renderFailureList();
         }
 
         function sortBy(column) {

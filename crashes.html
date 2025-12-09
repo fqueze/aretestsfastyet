@@ -491,151 +491,32 @@
                 html += `<div class="stat-item"><span class="stat-value">${crash.testCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value crash">${crash.crashCount}</span></div>`;
                 html += '</div></div>';
-
-                if (isExpanded) {
-                    // Add chart in historical mode
-                    if (isHistoricalMode) {
-                        const chartId = makeChartId('signature', crash.signature);
-                        html += `<div class="historical-chart">`;
-                        html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                        html += `</div>`;
-                    }
-
-                    // Sort paths by crash count
-                    const pathList = Array.from(crash.paths.entries())
-                        .map(([dirPath, pathData]) => ({ dirPath, pathData }))
-                        .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
-
-                    for (const pathEntry of pathList) {
-                        const pathKey = `${crash.signature}|||${pathEntry.dirPath}`;
-                        const isPathExpanded = expandedPaths.has(pathKey);
-
-                        // If path has only one test, skip the path level and show test directly
-                        if (pathEntry.pathData.tests.size === 1) {
-                            const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
-                            const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${testName}`;
-                            const isTestExpanded = expandedTests.has(testKey);
-
-                            // If test has only one crash and we have crash instance details, show it inline
-                            if (testData.totalCount === 1 && testData.crashes.length > 0) {
-                                const crashInstance = testData.crashes[0];
-                                const crashUrl = getCrashViewerUrl(crashInstance);
-
-                                html += `<div class="test-row single-crash direct-child" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
-                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                                html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
-                                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                                html += renderCrashLinks(crashInstance);
-                                html += '</div>';
-                            } else {
-                                // Multiple crashes in single test - show test with expand capability
-                                html += `<div class="test-row direct-child ${isTestExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
-                                html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                                html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${testData.totalCount}</div></div>`;
-                                html += '</div>';
-
-                                if (isTestExpanded) {
-                                    // Add chart in historical mode for this test
-                                    if (isHistoricalMode) {
-                                        const testChartId = makeChartId('test', crash.signature, pathEntry.dirPath, testName);
-                                        html += `<div class="historical-chart">`;
-                                        html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                        html += `</div>`;
-                                    }
-
-                                    // Sort crash instances by timestamp (most recent first)
-                                    const crashes = [...testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
-
-                                    for (const crashInstance of crashes) {
-                                        const crashUrl = getCrashViewerUrl(crashInstance);
-                                        html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
-                                        html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
-                                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                                        html += renderCrashLinks(crashInstance);
-                                        html += '</div>';
-                                    }
-                                }
-                            }
-                        } else {
-                            // Multiple tests in path - show path level
-                            html += `<div class="path-row ${isPathExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
-                            html += `<div class="crash-signature">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
-                            html += '<div class="crash-stats">';
-                            html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
-                            html += `<div class="stat-item"><span class="stat-value crash">${pathEntry.pathData.totalCount}</span></div>`;
-                            html += '</div></div>';
-
-                            if (isPathExpanded) {
-                                // Add chart in historical mode for this path
-                                if (isHistoricalMode) {
-                                    const pathChartId = makeChartId('path', crash.signature, pathEntry.dirPath);
-                                    html += `<div class="historical-chart">`;
-                                    html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                    html += `</div>`;
-                                }
-
-                                // Sort tests by crash count
-                                const testList = Array.from(pathEntry.pathData.tests.entries())
-                                    .map(([testName, testData]) => ({ testName, testData }))
-                                    .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
-
-                                for (const test of testList) {
-                                    const testKey = `${crash.signature}|||${pathEntry.dirPath}|||${test.testName}`;
-                                    const isTestExpanded = expandedTests.has(testKey);
-
-                                    // If test has only one crash, show it inline
-                                    if (test.testData.totalCount === 1 && test.testData.crashes.length > 0) {
-                                        const crashInstance = test.testData.crashes[0];
-                                        const crashUrl = getCrashViewerUrl(crashInstance);
-
-                                        html += `<div class="test-row single-crash" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
-                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                                        html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
-                                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                                        html += renderCrashLinks(crashInstance);
-                                        html += '</div>';
-                                    } else {
-                                        // Multiple crashes - show test with expand capability
-                                        html += `<div class="test-row ${isTestExpanded ? 'expanded' : ''}" data-signature="${escapeAttr(crash.signature)}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(test.testName)}">`;
-                                        html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                                        html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
-                                        html += '</div>';
-
-                                        if (isTestExpanded) {
-                                            // Add chart in historical mode for this test
-                                            if (isHistoricalMode) {
-                                                const testChartId = makeChartId('test', crash.signature, pathEntry.dirPath, test.testName);
-                                                html += `<div class="historical-chart">`;
-                                                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
-                                                html += `</div>`;
-                                            }
-
-                                            // Sort crash instances by timestamp (most recent first)
-                                            const crashes = [...test.testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
-
-                                            for (const crashInstance of crashes) {
-                                                const crashUrl = getCrashViewerUrl(crashInstance);
-                                                html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
-                                                html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
-                                                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                                                html += renderCrashLinks(crashInstance);
-                                                html += '</div>';
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             html += '</div>';
             document.getElementById('content').innerHTML = html;
 
-            // Re-render all charts after HTML is regenerated (in historical mode only)
-            if (isHistoricalMode) {
-                rerenderAllCharts();
+            // Re-expand the currently expanded signature after full re-render
+            if (expandedSignature) {
+                const signatureRow = document.querySelector(`[data-signature="${escapeAttr(expandedSignature)}"].crash-row`);
+                if (signatureRow) {
+                    const crash = Array.from(currentData.crashData.entries())
+                        .find(([sig]) => sig === expandedSignature);
+                    if (crash) {
+                        const [, data] = crash;
+                        const html = generateCrashExpandedContent(expandedSignature, data);
+                        signatureRow.insertAdjacentHTML('afterend', html);
+
+                        // Render chart if in historical mode
+                        if (isHistoricalMode) {
+                            const chartId = makeChartId('signature', expandedSignature);
+                            const dailyData = calculateSignatureDailyCrashRates(expandedSignature);
+                            if (dailyData) {
+                                createCrashChart(`${chartId}-canvas`, dailyData, expandedSignature);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -651,10 +532,10 @@
                 // Find the closest row element
                 let target = event.target;
                 while (target && target !== content) {
-                    if (target.classList.contains('crash-row')) {
+                    if (target.classList.contains('crash-row') && !target.classList.contains('total-row')) {
                         const signature = target.dataset.signature;
                         if (signature) {
-                            toggleCrash(signature);
+                            toggleCrash(signature, target);
                         }
                         return;
                     }
@@ -663,7 +544,7 @@
                         const signature = target.dataset.signature;
                         const path = target.dataset.path;
                         if (signature && path !== undefined) {
-                            togglePath(signature, path);
+                            togglePath(signature, path, target);
                         }
                         return;
                     }
@@ -683,7 +564,7 @@
                         const path = target.dataset.path;
                         const test = target.dataset.test;
                         if (signature && path !== undefined && test) {
-                            toggleTest(signature, path, test);
+                            toggleTest(signature, path, test, target);
                         }
                         return;
                     }
@@ -701,62 +582,256 @@
             });
         }
 
-        function toggleCrash(signature) {
-            if (expandedSignature === signature) {
-                expandedSignature = null;
-            } else {
-                expandedSignature = signature;
+        function generateCrashExpandedContent(signature, data) {
+            let html = '';
+            const attrSig = escapeAttr(signature);
+
+            // Add chart in historical mode
+            if (isHistoricalMode) {
+                const chartId = makeChartId('signature', signature);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${chartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
             }
-            renderCrashList();
+
+            // Sort paths by crash count
+            const pathList = Array.from(data.paths.entries())
+                .map(([dirPath, pathData]) => ({ dirPath, pathData }))
+                .sort((a, b) => b.pathData.totalCount - a.pathData.totalCount);
+
+            for (const pathEntry of pathList) {
+                // If path has only one test, skip the path level and show test directly
+                if (pathEntry.pathData.tests.size === 1) {
+                    const [testName, testData] = Array.from(pathEntry.pathData.tests.entries())[0];
+
+                    // If test has only one crash, show it inline
+                    if (testData.totalCount === 1 && testData.crashes.length > 0) {
+                        const crashInstance = testData.crashes[0];
+                        const crashUrl = getCrashViewerUrl(crashInstance);
+                        html += `<div class="test-row single-crash direct-child" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
+                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                        html += renderCrashLinks(crashInstance);
+                        html += '</div>';
+                    } else {
+                        // Multiple crashes in single test - show test with expand capability
+                        html += `<div class="test-row direct-child" data-signature="${attrSig}" data-path="${escapeAttr(pathEntry.dirPath)}" data-test="${escapeAttr(testName)}">`;
+                        html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
+                        html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${testData.totalCount}</div></div>`;
+                        html += '</div>';
+                    }
+                } else {
+                    // Multiple tests in path - show path level
+                    html += `<div class="path-row" data-signature="${attrSig}" data-path="${escapeAttr(pathEntry.dirPath)}">`;
+                    html += `<div class="crash-signature">${escapeHtml(pathEntry.dirPath || '(root)')}</div>`;
+                    html += '<div class="crash-stats">';
+                    html += `<div class="stat-item"><span class="stat-value">${pathEntry.pathData.tests.size}</span></div>`;
+                    html += `<div class="stat-item"><span class="stat-value crash">${pathEntry.pathData.totalCount}</span></div>`;
+                    html += '</div></div>';
+                }
+            }
+
+            return html;
         }
 
-        function togglePath(signature, dirPath) {
+        function generatePathExpandedContent(signature, dirPath, pathData) {
+            let html = '';
+            const attrSig = escapeAttr(signature);
+
+            // Add chart in historical mode for this path
+            if (isHistoricalMode) {
+                const pathChartId = makeChartId('path', signature, dirPath);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${pathChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
+            }
+
+            // Sort tests by crash count
+            const testList = Array.from(pathData.tests.entries())
+                .map(([testName, testData]) => ({ testName, testData }))
+                .sort((a, b) => b.testData.totalCount - a.testData.totalCount);
+
+            for (const test of testList) {
+                // If test has only one crash, show it inline
+                if (test.testData.totalCount === 1 && test.testData.crashes.length > 0) {
+                    const crashInstance = test.testData.crashes[0];
+                    const crashUrl = getCrashViewerUrl(crashInstance);
+                    html += `<div class="test-row single-crash" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
+                    html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                    html += renderCrashLinks(crashInstance);
+                    html += '</div>';
+                } else {
+                    // Multiple crashes - show test with expand capability
+                    html += `<div class="test-row" data-signature="${attrSig}" data-path="${escapeAttr(dirPath)}" data-test="${escapeAttr(test.testName)}">`;
+                    html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
+                    html += `<div class="crash-stats"><div class="stat-item"></div><div class="test-crash-count">${test.testData.totalCount}</div></div>`;
+                    html += '</div>';
+                }
+            }
+
+            return html;
+        }
+
+        function generateTestExpandedContent(signature, dirPath, testName, testData) {
+            let html = '';
+
+            // Add chart in historical mode for this test
+            if (isHistoricalMode) {
+                const testChartId = makeChartId('test', signature, dirPath, testName);
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="${testChartId}-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `</div>`;
+            }
+
+            // Sort crash instances by timestamp (most recent first)
+            const crashes = [...testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
+
+            for (const crashInstance of crashes) {
+                const crashUrl = getCrashViewerUrl(crashInstance);
+                html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
+                html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
+                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
+                html += renderCrashLinks(crashInstance);
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        function toggleCrash(signature, clickedRow) {
+            const isCurrentlyExpanded = expandedSignature === signature;
+
+            // Close any open signature first
+            if (expandedSignature) {
+                // Find the expanded row - we can use the clickedRow if it's the same signature
+                const expandedRow = isCurrentlyExpanded ? clickedRow :
+                    document.querySelector('.crash-row.expanded');
+
+                if (expandedRow) {
+                    expandedRow.classList.remove('expanded');
+                    // Remove all following siblings until we hit another crash-row
+                    let next = expandedRow.nextElementSibling;
+                    while (next && !next.classList.contains('crash-row') && !next.classList.contains('sort-header') && !next.classList.contains('total-row')) {
+                        const toRemove = next;
+                        next = next.nextElementSibling;
+                        toRemove.remove();
+                    }
+                }
+                expandedSignature = null;
+                expandedPaths.clear();
+                expandedTests.clear();
+            }
+
+            // If we're opening a different signature, render its content
+            if (!isCurrentlyExpanded) {
+                expandedSignature = signature;
+                clickedRow.classList.add('expanded');
+
+                // Get the crash data
+                const crash = Array.from(currentData.crashData.entries())
+                    .find(([sig]) => sig === signature);
+
+                if (crash) {
+                    const [, data] = crash;
+                    const html = generateCrashExpandedContent(signature, data);
+                    clickedRow.insertAdjacentHTML('afterend', html);
+
+                    // Render chart if in historical mode
+                    if (isHistoricalMode) {
+                        const chartId = makeChartId('signature', signature);
+                        const dailyData = calculateSignatureDailyCrashRates(signature);
+                        if (dailyData) {
+                            createCrashChart(`${chartId}-canvas`, dailyData, signature);
+                        }
+                    }
+                }
+            }
+        }
+
+        function togglePath(signature, dirPath, clickedRow) {
             const pathKey = `${signature}|||${dirPath}`;
-            if (expandedPaths.has(pathKey)) {
+            const isExpanded = expandedPaths.has(pathKey);
+
+            clickedRow.classList.toggle('expanded', !isExpanded);
+
+            if (isExpanded) {
                 expandedPaths.delete(pathKey);
+                // Remove all following siblings until we hit another path/test-row or higher level
+                let next = clickedRow.nextElementSibling;
+                while (next && (next.classList.contains('test-row') || next.classList.contains('historical-chart') || next.classList.contains('crash-instance-row'))) {
+                    const toRemove = next;
+                    next = next.nextElementSibling;
+                    toRemove.remove();
+                }
             } else {
                 expandedPaths.add(pathKey);
+
+                // Get the path data
+                const crash = Array.from(currentData.crashData.entries())
+                    .find(([sig]) => sig === signature);
+                if (crash) {
+                    const [, data] = crash;
+                    const pathData = data.paths.get(dirPath);
+                    if (pathData) {
+                        const html = generatePathExpandedContent(signature, dirPath, pathData);
+                        clickedRow.insertAdjacentHTML('afterend', html);
+
+                        // Render chart if in historical mode
+                        if (isHistoricalMode) {
+                            const pathChartId = makeChartId('path', signature, dirPath);
+                            const dailyData = calculatePathDailyCrashRates(signature, dirPath);
+                            if (dailyData) {
+                                createCrashChart(`${pathChartId}-canvas`, dailyData, `${signature} in ${dirPath}`);
+                            }
+                        }
+                    }
+                }
             }
-            renderCrashList();
         }
 
-        function toggleTest(signature, dirPath, testName) {
+        function toggleTest(signature, dirPath, testName, clickedRow) {
             const testKey = `${signature}|||${dirPath}|||${testName}`;
-            if (expandedTests.has(testKey)) {
+            const isExpanded = expandedTests.has(testKey);
+
+            clickedRow.classList.toggle('expanded', !isExpanded);
+
+            if (isExpanded) {
                 expandedTests.delete(testKey);
+                // Remove all following siblings until we hit another test-row or higher level
+                let next = clickedRow.nextElementSibling;
+                while (next && (next.classList.contains('historical-chart') || next.classList.contains('crash-instance-row'))) {
+                    const toRemove = next;
+                    next = next.nextElementSibling;
+                    toRemove.remove();
+                }
             } else {
                 expandedTests.add(testKey);
-            }
-            renderCrashList();
-        }
 
-        function rerenderAllCharts() {
-            // Re-render chart for expanded signature
-            if (expandedSignature) {
-                const chartId = makeChartId('signature', expandedSignature);
-                const dailyData = calculateSignatureDailyCrashRates(expandedSignature);
-                if (dailyData) {
-                    createCrashChart(`${chartId}-canvas`, dailyData, expandedSignature);
-                }
-            }
+                // Get the test data
+                const crash = Array.from(currentData.crashData.entries())
+                    .find(([sig]) => sig === signature);
+                if (crash) {
+                    const [, data] = crash;
+                    const pathData = data.paths.get(dirPath);
+                    if (pathData) {
+                        const testData = pathData.tests.get(testName);
+                        if (testData) {
+                            const html = generateTestExpandedContent(signature, dirPath, testName, testData);
+                            clickedRow.insertAdjacentHTML('afterend', html);
 
-            // Re-render charts for all expanded paths
-            for (const pathKey of expandedPaths) {
-                const [signature, dirPath] = pathKey.split('|||');
-                const chartId = makeChartId('path', signature, dirPath);
-                const dailyData = calculatePathDailyCrashRates(signature, dirPath);
-                if (dailyData) {
-                    createCrashChart(`${chartId}-canvas`, dailyData, `${signature} in ${dirPath}`);
-                }
-            }
-
-            // Re-render charts for all expanded tests
-            for (const testKey of expandedTests) {
-                const [signature, dirPath, testName] = testKey.split('|||');
-                const chartId = makeChartId('test', signature, dirPath, testName);
-                const dailyData = calculateTestDailyCrashRates(signature, dirPath, testName);
-                if (dailyData) {
-                    createCrashChart(`${chartId}-canvas`, dailyData, `${signature} in ${testName}`);
+                            // Render chart if in historical mode
+                            if (isHistoricalMode) {
+                                const testChartId = makeChartId('test', signature, dirPath, testName);
+                                const dailyData = calculateTestDailyCrashRates(signature, dirPath, testName);
+                                if (dailyData) {
+                                    createCrashChart(`${testChartId}-canvas`, dailyData, `${signature} in ${testName}`);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
