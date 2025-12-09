@@ -463,8 +463,21 @@
                 const isExpanded = expandedMessages.has(failure.message);
                 const escapedMsg = escapeHtml(failure.message);
                 const attrMsg = escapeAttr(failure.message);
+
+                // Find the test with the most failures for this message (for linkification)
+                let mostFrequentTestPath = null;
+                let maxCount = 0;
+                for (const [dirPath, pathData] of failure.paths.entries()) {
+                    for (const [testName, testData] of pathData.tests.entries()) {
+                        if (testData.totalCount > maxCount) {
+                            maxCount = testData.totalCount;
+                            mostFrequentTestPath = `${dirPath}/${testName}`;
+                        }
+                    }
+                }
+
                 html += `<div class="failure-row ${isExpanded ? 'expanded' : ''}" data-message="${attrMsg}">`;
-                html += `<div class="failure-message" title="${escapedMsg}">${escapedMsg}</div>`;
+                html += `<div class="failure-message" title="${escapedMsg}">${linkifyFailureMessage(failure.message, mostFrequentTestPath)}</div>`;
                 html += '<div class="failure-stats">';
                 html += `<div class="stat-item"><span class="stat-value">${failure.testCount}</span></div>`;
                 html += `<div class="stat-item"><span class="stat-value fail">${failure.failureCount}</span></div>`;

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Issues</title>
     <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
     <script defer src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
@@ -644,19 +645,6 @@
             }
         }
 
-
-        // Format numbers with thousand separators
-        function formatNumber(num) {
-            return num.toLocaleString();
-        }
-
-        // Escape HTML to prevent XSS
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
         // Get count for a specific index in a statusGroup, handling all formats
         function getCountAtIndex(statusGroup, index) {
             if (statusGroup.counts !== undefined) {
@@ -714,19 +702,6 @@
             }
         }
 
-        function linkifyFailureMessage(message, testPath) {
-            const pattern = /^\[([^\] :]+) : (\d+)\]/;
-            const match = message.match(pattern);
-
-            if (match) {
-                const [fullMatch, , lineNumber] = match;
-                const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}#${lineNumber}`;
-                const link = `<a href="${searchfoxUrl}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(fullMatch)}</a>`;
-                return link + escapeHtml(message.substring(fullMatch.length));
-            }
-
-            return escapeHtml(message);
-        }
 
         // Get CSS class and display value for issue percentage
         function getIssuePercentageDisplay(issueCount, totalCount) {

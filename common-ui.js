@@ -19,6 +19,20 @@ function formatNumber(num) {
     return num.toLocaleString();
 }
 
+function linkifyFailureMessage(message, testPath) {
+    const pattern = /^\[([^\] :]+) : (\d+)\]/;
+    const match = message.match(pattern);
+
+    if (match) {
+        const [fullMatch, , lineNumber] = match;
+        const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}#${lineNumber}`;
+        const link = `<a href="${searchfoxUrl}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(fullMatch)}</a>`;
+        return link + escapeHtml(message.substring(fullMatch.length));
+    }
+
+    return escapeHtml(message);
+}
+
 // ===== Search Box Management =====
 
 /**
@@ -473,6 +487,7 @@ if (typeof module !== 'undefined' && module.exports) {
         escapeHtml,
         escapeAttr,
         formatNumber,
+        linkifyFailureMessage,
         initSearchBox,
         populateDateSelector,
         initDateSelector,
