@@ -362,17 +362,102 @@
             currentData.crashData = crashData;
         }
 
-        // Chart calculation wrappers using shared functions
+        // Chart calculation wrappers using shared countDailyRunsForTests helper
         function calculateSignatureDailyCrashRates(signature) {
-            return calculateValueDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH');
+            if (!historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const targetSignatureId = historicalData.tables.crashSignatures.indexOf(signature);
+            if (targetSignatureId === -1) {
+                return countDailyRunsForTests(historicalData, new Set(), targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
+            }
+
+            // Find all tests that have this crash signature at least once
+            const testsWithThisCrash = new Set();
+            for (const testId in historicalData.testRuns) {
+                const testGroup = historicalData.testRuns[testId];
+                if (!testGroup) continue;
+
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup) continue;
+
+                    const status = historicalData.tables.statuses[statusId];
+                    if (status === 'CRASH' && statusGroup.crashSignatureIds) {
+                        if (statusGroup.crashSignatureIds.some(sigId => sigId === targetSignatureId)) {
+                            testsWithThisCrash.add(testId);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return countDailyRunsForTests(historicalData, testsWithThisCrash, targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
         }
 
         function calculatePathDailyCrashRates(signature, dirPath) {
-            return calculatePathDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH', dirPath);
+            if (!historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const targetSignatureId = historicalData.tables.crashSignatures.indexOf(signature);
+            if (targetSignatureId === -1) {
+                return countDailyRunsForTests(historicalData, new Set(), targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
+            }
+
+            // Find all tests in this path that have this crash signature
+            const testsWithThisCrash = new Set();
+            for (const testId in historicalData.testRuns) {
+                const testPathId = historicalData.testInfo.testPathIds[testId];
+                const testPath = historicalData.tables.testPaths[testPathId];
+                if (testPath !== dirPath) continue;
+
+                const testGroup = historicalData.testRuns[testId];
+                if (!testGroup) continue;
+
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup) continue;
+
+                    const status = historicalData.tables.statuses[statusId];
+                    if (status === 'CRASH' && statusGroup.crashSignatureIds) {
+                        if (statusGroup.crashSignatureIds.some(sigId => sigId === targetSignatureId)) {
+                            testsWithThisCrash.add(testId);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return countDailyRunsForTests(historicalData, testsWithThisCrash, targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
         }
 
         function calculateTestDailyCrashRates(signature, dirPath, testName) {
-            return calculateTestDailyRates(historicalData, signature, 'crashSignatureIds', 'crashSignatures', 'CRASH', dirPath, testName);
+            if (!historicalData) return null;
+
+            const days = historicalData.metadata.days || 21;
+            const startTime = historicalData.metadata.startTime;
+            const targetSignatureId = historicalData.tables.crashSignatures.indexOf(signature);
+            if (targetSignatureId === -1) {
+                return countDailyRunsForTests(historicalData, new Set(), targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
+            }
+
+            // Find the test ID
+            const testIds = new Set();
+            for (const testId in historicalData.testRuns) {
+                const testPathId = historicalData.testInfo.testPathIds[testId];
+                const testNameId = historicalData.testInfo.testNameIds[testId];
+                const testPath = historicalData.tables.testPaths[testPathId];
+                const testNameFromId = historicalData.tables.testNames[testNameId];
+
+                if (testPath === dirPath && testNameFromId === testName) {
+                    testIds.add(testId);
+                    break;
+                }
+            }
+
+            return countDailyRunsForTests(historicalData, testIds, targetSignatureId, 'crashSignatureIds', 'CRASH', days, startTime);
         }
 
         function createCrashChart(canvasId, dailyData, signature) {

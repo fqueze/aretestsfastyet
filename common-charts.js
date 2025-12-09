@@ -90,6 +90,85 @@ function calculateDailyRates(options) {
 }
 
 /**
+ * Helper to count daily runs and events for a set of test IDs
+ * @param {Object} historicalData - The historical data object
+ * @param {Set} testIds - Set of test IDs to count
+ * @param {number} targetValueId - The target value ID to match
+ * @param {string} valueField - Field name (e.g., 'messageIds' or 'crashSignatureIds')
+ * @param {string} statusName - Status to count (e.g., 'FAIL' or 'CRASH')
+ * @param {number} days - Number of days
+ * @param {number} startTime - Start timestamp
+ * @returns {Array} Daily data with events and totalRuns
+ */
+function countDailyRunsForTests(historicalData, testIds, targetValueId, valueField, statusName, days, startTime) {
+    const dailyData = [];
+    for (let day = 0; day < days; day++) {
+        dailyData.push({
+            day: day,
+            date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+            events: 0,
+            totalRuns: 0
+        });
+    }
+
+    for (const testId of testIds) {
+        const testGroup = historicalData.testRuns[testId];
+        if (!testGroup) continue;
+
+        for (let statusId = 0; statusId < testGroup.length; statusId++) {
+            const statusGroup = testGroup[statusId];
+            if (!statusGroup) continue;
+
+            const status = historicalData.tables.statuses[statusId];
+
+            if (statusGroup.taskIdIds && statusGroup.hours) {
+                let currentHour = 0;
+                for (let i = 0; i < statusGroup.hours.length; i++) {
+                    currentHour += statusGroup.hours[i];
+                    const day = Math.floor(currentHour / 24);
+                    if (day < days) {
+                        const count = statusGroup.taskIdIds[i].length;
+
+                        if (status !== 'SKIP' && !status.startsWith('SKIP')) {
+                            dailyData[day].totalRuns += count;
+                        }
+
+                        if (status && status.startsWith(statusName)) {
+                            const valueId = statusGroup[valueField]?.[i];
+                            if (valueId === targetValueId) {
+                                dailyData[day].events += count;
+                            }
+                        }
+                    }
+                }
+            } else if (statusGroup.counts && statusGroup.hours) {
+                let currentHour = 0;
+                for (let i = 0; i < statusGroup.hours.length; i++) {
+                    currentHour += statusGroup.hours[i];
+                    const day = Math.floor(currentHour / 24);
+                    if (day < days) {
+                        const count = statusGroup.counts[i];
+
+                        if (status !== 'SKIP' && !status.startsWith('SKIP')) {
+                            dailyData[day].totalRuns += count;
+                        }
+
+                        if (status && status.startsWith(statusName)) {
+                            const valueId = statusGroup[valueField]?.[i];
+                            if (valueId === targetValueId) {
+                                dailyData[day].events += count;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return dailyData;
+}
+
+/**
  * Calculate daily rates for a specific value (all tests)
  */
 function calculateValueDailyRates(historicalData, targetValue, valueField, valueTable, statusName) {
