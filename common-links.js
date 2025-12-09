@@ -6,14 +6,19 @@
 /**
  * Generate Firefox Profiler URL for a test run
  * @param {Object} instance - Test run instance with taskId, retryId, jobName
+ * @param {string} [testName] - Optional test name to filter markers
  * @returns {string} - Firefox Profiler URL
  */
-function getProfilerUrl(instance) {
+function getProfilerUrl(instance, testName) {
     const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${instance.taskId}/runs/${instance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
     const encodedProfileUrl = encodeURIComponent(profileUrl);
     const profileName = `${instance.jobName} (${instance.taskId}.${instance.retryId})`;
     const encodedProfileName = encodeURIComponent(profileName);
-    return `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
+    let url = `https://profiler.firefox.com/from-url/${encodedProfileUrl}?profileName=${encodedProfileName}`;
+    if (testName) {
+        url += `&markerSearch=${encodeURIComponent(testName)}`;
+    }
+    return url;
 }
 
 /**
@@ -30,11 +35,12 @@ function getCrashViewerUrl(crashInstance) {
 /**
  * Render links for a crash instance (Profile + Crash Viewer)
  * @param {Object} crashInstance - Crash instance
+ * @param {string} [testName] - Optional test name to filter markers
  * @returns {string} - HTML string with links
  */
-function renderCrashLinks(crashInstance) {
+function renderCrashLinks(crashInstance, testName) {
     let html = '';
-    const profilerUrl = getProfilerUrl(crashInstance);
+    const profilerUrl = getProfilerUrl(crashInstance, testName);
     html += `<a href="${profilerUrl}" target="_blank" class="crash-link" style="margin-right: 10px;">View Profile</a>`;
 
     const crashUrl = getCrashViewerUrl(crashInstance);

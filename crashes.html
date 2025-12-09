@@ -612,7 +612,7 @@
                         html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
                         html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
                         html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                        html += renderCrashLinks(crashInstance);
+                        html += renderCrashLinks(crashInstance, testName);
                         html += '</div>';
                     } else {
                         // Multiple crashes in single test - show test with expand capability
@@ -661,7 +661,7 @@
                     html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
                     html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
                     html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                    html += renderCrashLinks(crashInstance);
+                    html += renderCrashLinks(crashInstance, test.testName);
                     html += '</div>';
                 } else {
                     // Multiple crashes - show test with expand capability
@@ -694,7 +694,7 @@
                 html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
                 html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
                 html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                html += renderCrashLinks(crashInstance);
+                html += renderCrashLinks(crashInstance, testName);
                 html += '</div>';
             }
 

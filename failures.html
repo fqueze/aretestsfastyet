@@ -580,7 +580,7 @@
                     // If test has only one failure, show it inline
                     if (testData.totalCount === 1 && testData.failures.length > 0) {
                         const failureInstance = testData.failures[0];
-                        const profilerUrl = getProfilerUrl(failureInstance);
+                        const profilerUrl = getProfilerUrl(failureInstance, testName);
                         html += `<div class="test-row single-failure direct-child" onclick="window.open('${profilerUrl}', '_blank')">`;
                         html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
                         html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
@@ -629,7 +629,7 @@
                 // If test has only one failure, show it inline
                 if (test.testData.totalCount === 1 && test.testData.failures.length > 0) {
                     const failureInstance = test.testData.failures[0];
-                    const profilerUrl = getProfilerUrl(failureInstance);
+                    const profilerUrl = getProfilerUrl(failureInstance, test.testName);
                     html += `<div class="test-row single-failure" onclick="window.open('${profilerUrl}', '_blank')">`;
                     html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
                     html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
@@ -663,7 +663,7 @@
             const failures = [...testData.failures].sort((a, b) => b.timestamp - a.timestamp);
 
             for (const failureInstance of failures) {
-                const profilerUrl = getProfilerUrl(failureInstance);
+                const profilerUrl = getProfilerUrl(failureInstance, testName);
                 html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
                 html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
                 html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
