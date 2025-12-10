@@ -2459,14 +2459,16 @@
             const testGroup = historicalData.testRuns[testId];
             if (!testGroup) return dailyData;
 
-            // First, count total non-skip runs per day for this test
+            // First, count total runs per day for this test
+            // For SKIP issues, count all scheduled runs (including skips)
+            // For other issues (FAIL/TIMEOUT/CRASH), count only actual runs (excluding skips)
             for (let statusId = 0; statusId < testGroup.length; statusId++) {
                 const statusGroup = testGroup[statusId];
                 if (!statusGroup) continue;
 
                 const status = historicalData.tables.statuses[statusId];
-                // Skip counting SKIP status for total runs (failures/timeouts/crashes are calculated against non-skip runs)
-                if (status === 'SKIP') continue;
+                // For non-SKIP issues, exclude SKIP from totalRuns count
+                if (issueType !== 'SKIP' && status === 'SKIP') continue;
 
                 if (statusGroup.counts && statusGroup.hours) {
                     // Aggregated format
