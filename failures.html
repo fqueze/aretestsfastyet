@@ -795,7 +795,12 @@
                         html += `<div class="test-name">${escapeHtml(fullTestPath)}${generateBugButton(fullTestPath, message, testData.component, testData, totalRuns)}</div>`;
                         html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                         html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                        html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                        const links = [`<a href="${profilerUrl}" target="_blank" onclick="event.stopPropagation();">Profile</a>`];
+                        const treeherderUrl = getTreeherderJobUrl(failureInstance, currentData);
+                        if (treeherderUrl) {
+                            links.push(`<a href="${treeherderUrl}" target="_blank" onclick="event.stopPropagation();">Job</a>`);
+                        }
+                        html += `<span class="view-links">View: ${links.join(' ')}</span>`;
                         html += '</div>';
                     } else {
                         // Multiple failures in single test - show test with expand capability
@@ -852,7 +857,12 @@
                     html += `<div class="test-name">${escapeHtml(test.testName)}${generateBugButton(fullTestPath, message, test.testData.component, test.testData, totalRuns)}</div>`;
                     html += `<div class="failure-job-name" style="margin-right: 10px;">${escapeHtml(failureInstance.jobName)}</div>`;
                     html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                    html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                    const links = [`<a href="${profilerUrl}" target="_blank" onclick="event.stopPropagation();">Profile</a>`];
+                    const treeherderUrl = getTreeherderJobUrl(failureInstance, currentData);
+                    if (treeherderUrl) {
+                        links.push(`<a href="${treeherderUrl}" target="_blank" onclick="event.stopPropagation();">Job</a>`);
+                    }
+                    html += `<span class="view-links">View: ${links.join(' ')}</span>`;
                     html += '</div>';
                 } else {
                     // Multiple failures - show test with expand capability
@@ -891,7 +901,12 @@
                 html += `<div class="failure-instance-row" onclick="window.open('${profilerUrl}', '_blank')">`;
                 html += `<div class="failure-job-name">${escapeHtml(failureInstance.jobName)}</div>`;
                 html += `<div class="failure-time">${new Date(failureInstance.timestamp).toLocaleString()}</div>`;
-                html += `<a href="${profilerUrl}" target="_blank" class="failure-link" onclick="event.stopPropagation();">View Profile</a>`;
+                const links = [`<a href="${profilerUrl}" target="_blank" onclick="event.stopPropagation();">Profile</a>`];
+                const treeherderUrl = getTreeherderJobUrl(failureInstance, currentData);
+                if (treeherderUrl) {
+                    links.push(`<a href="${treeherderUrl}" target="_blank" onclick="event.stopPropagation();">Job</a>`);
+                }
+                html += `<span class="view-links">View: ${links.join(' ')}</span>`;
                 html += '</div>';
             }
 

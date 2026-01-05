@@ -33,21 +33,63 @@ function getCrashViewerUrl(crashInstance) {
 }
 
 /**
- * Render links for a crash instance (Profile + Crash Viewer)
+ * Generate Treeherder job URL for a test run
+ * @param {Object} instance - Test run instance with taskId, retryId
+ * @param {Object} currentData - The data structure containing tables and taskInfo
+ * @returns {string|null} - Treeherder URL or null if commit ID is not available
+ */
+function getTreeherderJobUrl(instance, currentData) {
+    // Find the taskIdId by looking up the task ID string
+    const taskIdString = `${instance.taskId}.${instance.retryId || 0}`;
+    const taskIdId = currentData.tables.taskIds.indexOf(taskIdString);
+
+    if (taskIdId === -1) {
+        return null;
+    }
+
+    // Get repository
+    const repositoryId = currentData.taskInfo.repositoryIds[taskIdId];
+    const repository = currentData.tables.repositories[repositoryId];
+
+    // Get commit ID - only show link if commit ID is available
+    const commitId = currentData.taskInfo.commitIds?.[taskIdId];
+    if (commitId === undefined || commitId === null) {
+        return null;
+    }
+    const commitIdString = currentData.tables.commitIds[commitId];
+    if (!commitIdString) {
+        return null;
+    }
+
+    return `https://treeherder.mozilla.org/jobs?repo=${encodeURIComponent(repository)}&selectedTaskRun=${encodeURIComponent(taskIdString)}&revision=${encodeURIComponent(commitIdString)}`;
+}
+
+/**
+ * Render links for a crash instance (Profile + Crash Viewer + Treeherder Job)
  * @param {Object} crashInstance - Crash instance
  * @param {string} [testName] - Optional test name to filter markers
+ * @param {Object} [currentData] - Optional data structure for Treeherder link
  * @returns {string} - HTML string with links
  */
-function renderCrashLinks(crashInstance, testName) {
-    let html = '';
+function renderCrashLinks(crashInstance, testName, currentData) {
+    const links = [];
+
     const profilerUrl = getProfilerUrl(crashInstance, testName);
-    html += `<a href="${profilerUrl}" target="_blank" class="crash-link" style="margin-right: 10px;">View Profile</a>`;
+    links.push(`<a href="${profilerUrl}" target="_blank">Profile</a>`);
 
     const crashUrl = getCrashViewerUrl(crashInstance);
     if (crashUrl) {
-        html += `<a href="${crashUrl}" target="_blank" class="crash-link">View Crash</a>`;
+        links.push(`<a href="${crashUrl}" target="_blank">Crash</a>`);
     }
-    return html;
+
+    if (currentData) {
+        const treeherderUrl = getTreeherderJobUrl(crashInstance, currentData);
+        if (treeherderUrl) {
+            links.push(`<a href="${treeherderUrl}" target="_blank">Job</a>`);
+        }
+    }
+
+    return `<span class="view-links">View: ${links.join(' ')}</span>`;
 }
 
 /**
@@ -114,6 +156,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         getProfilerUrl,
         getCrashViewerUrl,
+        getTreeherderJobUrl,
         renderCrashLinks,
         getBugzillaUrl
     };

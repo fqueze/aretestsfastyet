@@ -473,6 +473,11 @@
             padding: 3px 0;
         }
 
+        .issue-run-item .view-links {
+            margin-left: 20px;
+            color: black;
+        }
+
         .issue-run-item a {
             color: #007bff;
             text-decoration: none;
@@ -3123,11 +3128,29 @@
             }
 
             return runs.map(run => {
-                const link = run.link ? `<a href="${run.link}" target="_blank">${run.jobName}</a>` : run.jobName;
+                // Make job name a link - crash viewer for crashes, profile for others
+                const mainLink = (run.issueType === 'CRASH' && run.crashLink) ? run.crashLink : run.profileLink;
+                const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${run.jobName}</a>` : run.jobName;
+
                 // Don't show duration for skips (they don't run)
                 const showDuration = run.issueType !== 'SKIP' && run.duration !== null && run.duration !== undefined;
                 const formattedDuration = showDuration ? ` - ${formatDurationMs(run.duration, true)}` : '';
-                return `<div class="issue-run-item">${link}${formattedDuration}</div>`;
+
+                // Build view links
+                const links = [];
+                if (run.profileLink) {
+                    links.push(`<a href="${run.profileLink}" target="_blank">Profile</a>`);
+                }
+                if (run.crashLink) {
+                    links.push(`<a href="${run.crashLink}" target="_blank">Crash</a>`);
+                }
+                if (run.treeherderLink) {
+                    links.push(`<a href="${run.treeherderLink}" target="_blank">Job</a>`);
+                }
+
+                const viewLinks = links.length > 0 ? `<span class="view-links">View: ${links.join(' ')}</span>` : '';
+
+                return `<div class="issue-run-item">${jobNameLink}${formattedDuration} ${viewLinks}</div>`;
             }).join('');
         }
 
@@ -3137,18 +3160,23 @@
             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
             const [taskId, retryId] = taskIdString.split('.');
 
-            let link = null;
+            // Generate profile URL
+            const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+            const profileName = `${jobName} (${taskIdString})`;
+            const testName = testPath.split('/').pop();
+            const profileLink = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+
+            // Generate crash viewer URL if applicable
+            let crashLink = null;
             if (issueType === 'CRASH' && minidump) {
                 const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${minidump}.json`;
-                link = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
-            } else {
-                const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
-                const profileName = `${jobName} (${taskIdString})`;
-                const testName = testPath.split('/').pop();
-                link = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+                crashLink = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
             }
 
-            return { jobName, link, taskIdString, duration, issueType };
+            // Generate Treeherder job link
+            const treeherderLink = getTreeherderJobUrl({ taskId, retryId }, currentData);
+
+            return { jobName, profileLink, crashLink, taskIdString, duration, issueType, treeherderLink };
         }
 
         // Show visual feedback for successful copy

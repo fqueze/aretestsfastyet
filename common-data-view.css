@@ -398,6 +398,20 @@
     text-decoration: underline;
 }
 
+.view-links {
+    font-size: 12px;
+    word-spacing: 3px;
+}
+
+.view-links > a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.view-links > a:hover {
+    text-decoration: underline;
+}
+
 .test-crash-count,
 .test-failure-count {
     color: #666;
