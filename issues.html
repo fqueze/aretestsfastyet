@@ -2987,16 +2987,21 @@
                     html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}`;
                     // Add bug filing button for FAIL items with valid component
                     if (type === 'FAIL' && testData.component?.includes(' :: ')) {
+                        // Get the date range for the entire dataset
+                        const { firstDate, lastDate } = getDataDateRange(currentData);
+
                         const bugUrl = getBugzillaUrl({
                             testPath,
                             summary: message,
                             component: testData.component,
                             stats: {
                                 failureCount: count,
-                                totalRuns: testData.stats?.runCount
+                                totalRuns: testData.stats?.runCount,
+                                firstDate,
+                                lastDate
                             }
                         });
-                        html += `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this failure">🐛</a>`;
+                        html += getBugButton(bugUrl, 'File bug for this failure');
                     }
                     html += `</span>`;
                     html += `</div>`;

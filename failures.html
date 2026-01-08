@@ -738,14 +738,8 @@
         function generateBugButton(testPath, message, component, testData, totalRuns) {
             // Only show bug button if we have a valid component (Product :: Component format)
             if (component?.includes(' :: ')) {
-                // Calculate date range from failure instances
-                let firstSeen = null;
-                let lastSeen = null;
-                if (testData.failures && testData.failures.length > 0) {
-                    const timestamps = testData.failures.map(f => f.timestamp);
-                    firstSeen = Math.min(...timestamps);
-                    lastSeen = Math.max(...timestamps);
-                }
+                // Get the date range for the entire dataset (first to last run)
+                const { firstDate, lastDate } = getDataDateRange(currentData);
 
                 const bugUrl = getBugzillaUrl({
                     testPath,
@@ -753,12 +747,12 @@
                     component,
                     stats: {
                         failureCount: testData.totalCount,
-                        firstSeen,
-                        lastSeen,
+                        firstDate,
+                        lastDate,
                         totalRuns
                     }
                 });
-                return `<a href="${bugUrl}" target="_blank" class="action-button" onclick="event.stopPropagation();" title="File bug for this test">🐛</a>`;
+                return getBugButton(bugUrl);
             }
             return '';
         }
