@@ -219,21 +219,49 @@
             color: #000;
         }
 
-        .explanation ul {
-            margin: 8px 0;
-            padding-left: 25px;
-        }
-
-        .explanation li {
-            margin: 4px 0;
-        }
-
         .explanation code {
             background-color: #e9ecef;
             padding: 2px 5px;
             border-radius: 3px;
             font-family: 'Courier New', monospace;
             font-size: 13px;
+        }
+
+        .issue-type-filters {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-checkbox {
+            display: flex;
+            align-items: flex-start;
+            cursor: pointer;
+            padding: 2px 0;
+        }
+
+        .filter-checkbox input[type="checkbox"] {
+            margin-right: 8px;
+            margin-top: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .filter-checkbox strong {
+            margin-right: 6px;
+        }
+
+        .filter-checkbox:hover {
+            background-color: #e9ecef;
+            border-radius: 3px;
+            padding-left: 5px;
+            margin-left: -5px;
+        }
+
+        .filter-note {
+            display: block;
+            margin-top: 2px;
         }
 
         .no-data {
@@ -586,13 +614,28 @@
         </div>
 
         <div class="explanation">
-            <strong>Issues</strong> include:
-            <ul>
-                <li><strong>Failures:</strong> Tests that ran but failed</li>
-                <li><strong>Timeouts:</strong> Tests that exceeded their time limit and didn't finish</li>
-                <li><strong>Crashes:</strong> Tests that caused a process to crash</li>
-                <li><strong>Skips (<code>skip-if</code>):</strong> Tests that didn't run because they are known to be unreliable on some platforms or configurations.<br><strong>Note:</strong> Tests annotated with <code>run-if</code> are explicitly platform-specific and are not considered issues when they don't run on other platforms.</li>
-            </ul>
+            <strong>Count as issues:</strong>
+            <div class="issue-type-filters">
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="filter-failures" checked onchange="updateIssueFilters()">
+                    <strong>Failures:</strong> Tests that ran but failed
+                </label>
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="filter-timeouts" checked onchange="updateIssueFilters()">
+                    <strong>Timeouts:</strong> Tests that exceeded their time limit and didn't finish
+                </label>
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="filter-crashes" checked onchange="updateIssueFilters()">
+                    <strong>Crashes:</strong> Tests that caused a process to crash
+                </label>
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="filter-skips" checked onchange="updateIssueFilters()">
+                    <span>
+                        <strong>Skips (<code>skip-if</code>):</strong> Tests that didn't run because they are known to be unreliable on some platforms or configurations.
+                        <span class="filter-note"><strong>Note:</strong> Tests annotated with <code>run-if</code> are explicitly platform-specific and are not considered issues when they don't run on other platforms.</span>
+                    </span>
+                </label>
+            </div>
         </div>
 
         <div id="error" class="error" style="display: none;"></div>
@@ -618,6 +661,14 @@
         let historicalData = null; // Store the loaded historical data
         let detailedData = null; // Store detailed data (with taskIds) when loaded
         let isLoadingDetailedData = false; // Flag to prevent duplicate fetches
+
+        // Track which issue types should be counted as issues
+        let issueTypeFilters = {
+            failures: true,
+            timeouts: true,
+            crashes: true,
+            skips: true
+        };
 
         // Placeholder message for failures without recorded details (e.g., Android logging issues)
         const FAILURE_NO_MESSAGE = 'Failure details not recorded (likely Android or platform logging issue)';
@@ -1007,6 +1058,13 @@
                 ? Math.round((parallelProblematicCount * 100) / parallelTotalRuns)
                 : 0;
 
+            // Calculate issueCount based on enabled filters
+            const filteredIssueCount =
+                (issueTypeFilters.skips ? skipCount : 0) +
+                (issueTypeFilters.failures ? failCount : 0) +
+                (issueTypeFilters.timeouts ? timeoutCount : 0) +
+                (issueTypeFilters.crashes ? crashCount : 0);
+
             return {
                 runCount: runCount,
                 skipCount: skipCount,
@@ -1014,7 +1072,7 @@
                 timeoutCount: timeoutCount,
                 failCount: failCount,
                 crashCount: crashCount,
-                issueCount: skipCount + failCount + timeoutCount + crashCount,
+                issueCount: filteredIssueCount,
                 parallelFailCount: parallelFailCount,
                 parallelTimeoutCount: parallelTimeoutCount,
                 parallelPassCount: parallelPassCount,
@@ -1022,7 +1080,7 @@
                 sequentialFailCount: sequentialFailCount,
                 sequentialTimeoutCount: sequentialTimeoutCount,
                 parallelFailPercentage: parallelFailPercentage,
-                issuePercentage: (runCount + skipCount) > 0 ? ((skipCount + failCount + timeoutCount + crashCount) / (runCount + skipCount) * 100) : 0
+                issuePercentage: (runCount + skipCount) > 0 ? (filteredIssueCount / (runCount + skipCount) * 100) : 0
             };
         }
 
@@ -2962,9 +3020,21 @@
                 // Sort by count descending
                 allIssues.sort((a, b) => b.count - a.count);
 
-                // Render single list
-                html += `<div class="issue-section">`;
-                allIssues.forEach(({count, type, message}, index) => {
+                // Filter issues based on enabled issue types
+                const filteredIssues = allIssues.filter(issue => {
+                    if (issue.type === 'SKIP') return issueTypeFilters.skips;
+                    if (issue.type === 'FAIL') return issueTypeFilters.failures;
+                    if (issue.type === 'CRASH') return issueTypeFilters.crashes;
+                    if (issue.type === 'TIMEOUT') return issueTypeFilters.timeouts;
+                    return true;
+                });
+
+                if (filteredIssues.length === 0) {
+                    html += `<div class="issue-section"><p>No issues of the selected types found for this test.</p></div>`;
+                } else {
+                    // Render single list
+                    html += `<div class="issue-section">`;
+                    filteredIssues.forEach(({count, type, message}, index) => {
                     const badgeClass = type === 'SKIP' ? 'badge-skip' :
                                       type === 'FAIL' ? 'badge-fail' :
                                       type === 'CRASH' ? 'badge-crash' : 'badge-timeout';
@@ -3013,6 +3083,7 @@
                     html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
                 });
                 html += `</div>`;
+                }
             }
 
             html += `</div>`;
@@ -3346,6 +3417,26 @@
             }
         }
 
+        // Update issue type filters based on checkbox states
+        function updateIssueFilters() {
+            issueTypeFilters.failures = document.getElementById('filter-failures').checked;
+            issueTypeFilters.timeouts = document.getElementById('filter-timeouts').checked;
+            issueTypeFilters.crashes = document.getElementById('filter-crashes').checked;
+            issueTypeFilters.skips = document.getElementById('filter-skips').checked;
+
+            // Clear cached stats so they get recomputed with new filter settings
+            if (aggregatedData) {
+                for (const testPath in aggregatedData) {
+                    delete aggregatedData[testPath].stats;
+                }
+            }
+
+            // Re-render the display with the new filter settings
+            if (currentData) {
+                renderComponentsView();
+            }
+        }
+
         // Load data from cache
         async function loadData() {
             setStatusText('Loading data...');
@@ -3553,6 +3644,12 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
+            // Initialize issue type filters from checkbox states (in case browser preserved them on reload)
+            issueTypeFilters.failures = document.getElementById('filter-failures').checked;
+            issueTypeFilters.timeouts = document.getElementById('filter-timeouts').checked;
+            issueTypeFilters.crashes = document.getElementById('filter-crashes').checked;
+            issueTypeFilters.skips = document.getElementById('filter-skips').checked;
+
             // Get references to search elements
             const searchBox = document.getElementById('search-box');
             const clearButton = document.getElementById('search-clear');
