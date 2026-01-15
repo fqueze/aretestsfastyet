@@ -931,8 +931,8 @@
 
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
-                const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
-                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'CRASH', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
+                const isTimeout = status && status.startsWith('TIMEOUT');
+                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL'].includes(status);
 
                 // Add counts for this status group
                 if (isSkip) {
@@ -1218,7 +1218,7 @@
                         if (!statusGroup) continue;
 
                         const status = currentData.tables.statuses[statusId];
-                        const isPass = status === 'PASS' || status === 'PASS-PARALLEL' || status === 'PASS-SEQUENTIAL';
+                        const isPass = status && status.startsWith('PASS');
 
                         // Only track timing for passing tests in non-aggregated format (durations not available in aggregated)
                         const isBucketedFormat = statusGroup.hours !== undefined;
@@ -1276,7 +1276,7 @@
 
                         const status = currentData.tables.statuses[statusId];
                         const isSkip = status === 'SKIP';
-                        const isTimeout = status === 'TIMEOUT' || status === 'TIMEOUT-PARALLEL' || status === 'TIMEOUT-SEQUENTIAL';
+                        const isTimeout = status && status.startsWith('TIMEOUT');
                         const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
 
                         if (!statusGroup.taskIdIds) continue;
@@ -1481,9 +1481,9 @@
 
             const testGroup = currentData.testRuns[testId];
 
-            // Find all FAIL-* status IDs
+            // Find all FAIL* status IDs
             const failStatusIds = currentData.tables.statuses
-                .map((status, idx) => status.startsWith('FAIL-') ? idx : -1)
+                .map((status, idx) => status.startsWith('FAIL') ? idx : -1)
                 .filter(idx => idx !== -1);
 
             if (failStatusIds.length === 0) return [];
@@ -3080,9 +3080,9 @@
                     }
                 }
             } else if (issueType === 'FAIL') {
-                // Find all FAIL-* statuses
+                // Find all FAIL* statuses
                 const failStatusIds = currentData.tables.statuses
-                    .map((status, idx) => status.startsWith('FAIL-') ? idx : -1)
+                    .map((status, idx) => status.startsWith('FAIL') ? idx : -1)
                     .filter(idx => idx !== -1);
 
                 failStatusIds.forEach(statusId => {
@@ -3113,11 +3113,9 @@
                     }
                 }
             } else if (issueType === 'TIMEOUT') {
-                // Find TIMEOUT statuses
-                const timeoutStatuses = ['TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL'];
-                timeoutStatuses.forEach(status => {
-                    const statusId = currentData.tables.statuses.indexOf(status);
-                    if (statusId !== -1) {
+                // Find all TIMEOUT statuses
+                currentData.tables.statuses.forEach((status, statusId) => {
+                    if (status && status.startsWith('TIMEOUT')) {
                         const statusGroup = testGroup[statusId];
                         if (statusGroup) {
                             forEachTaskId(statusGroup, (taskIdIndex) => {
@@ -3544,7 +3542,7 @@
                 }
             } catch (e) {
                 console.warn('Could not load date index:', e);
-                showError('Error loading data index. Please ensure xpcshell-data/index.json exists.', true);
+                showError('Error loading data index. Please ensure data/index.json exists.', true);
             }
         }
 
