@@ -983,7 +983,7 @@
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
                 const isTimeout = status && status.startsWith('TIMEOUT');
-                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL'].includes(status);
+                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL', 'OK'].includes(status);
 
                 // Add counts for this status group
                 if (isSkip) {
@@ -1335,7 +1335,7 @@
                         const status = currentData.tables.statuses[statusId];
                         const isSkip = status === 'SKIP';
                         const isTimeout = status && status.startsWith('TIMEOUT');
-                        const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL'].includes(status);
+                        const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL', 'OK'].includes(status);
 
                         if (!statusGroup.taskIdIds) continue;
 
