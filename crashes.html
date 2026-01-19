@@ -188,7 +188,8 @@
             try {
                 document.getElementById('statusText').textContent = 'Loading...';
 
-                const file = `xpcshell-${dateToLoad}.json`;
+                const harness = getHarnessType();
+                const file = `${harness}-${dateToLoad}.json`;
                 const response = await fetchData(file);
 
                 if (!response.ok) {

@@ -2991,11 +2991,12 @@
             hideError();
 
             try {
-                const file = `xpcshell-try-${revision}.json`;
+                const harness = getHarnessType();
+                const file = `${harness}-try-${revision}.json`;
                 const response = await fetchData(file);
 
                 if (!response.ok) {
-                    throw new Error(`Try revision data not found. Run: node fetch-xpcshell-data.js --try ${revision}`);
+                    throw new Error(`Try revision data not found. Run: node fetch-test-data.js --harness ${harness} --try ${revision}`);
                 }
 
                 currentData = await response.json();
@@ -3034,7 +3035,8 @@
                     throw new Error('No date selected');
                 }
 
-                const file = `xpcshell-${dateToLoad}.json`;
+                const harness = getHarnessType();
+                const file = `${harness}-${dateToLoad}.json`;
                 const response = await fetchData(file);
 
                 if (!response.ok) {

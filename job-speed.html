@@ -599,10 +599,11 @@
                     '<tr><td colspan="10" style="text-align: center; padding: 40px;">Loading data...</td></tr>';
 
                 // Determine if this is a try revision or a date
+                const harness = getHarnessType();
                 const isTryRevision = dateOrRevision.length === 40; // Try revisions are 40-char hashes
                 const filename = isTryRevision
-                    ? `xpcshell-try-${dateOrRevision}.json`
-                    : `xpcshell-${dateOrRevision}.json`;
+                    ? `${harness}-try-${dateOrRevision}.json`
+                    : `${harness}-${dateOrRevision}.json`;
 
                 const response = await fetchData(filename);
                 currentData = await response.json();

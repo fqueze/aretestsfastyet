@@ -1015,7 +1015,7 @@
                 } else if (status === 'UNKNOWN') {
                     // For UNKNOWN status, check durations only if available (not aggregated)
                     // Otherwise just count as passes
-                    if (!isAggregatedFormat && statusGroup.durations) {
+                    if (statusGroup.durations) {
                         for (const duration of statusGroup.durations) {
                             if (duration < 100) {
                                 skipCount++;
@@ -3335,11 +3335,12 @@
             hideError();
 
             try {
-                const file = `xpcshell-try-${revision}.json`;
+                const harness = getHarnessType();
+                const file = `${harness}-try-${revision}.json`;
                 const response = await fetchData(file);
 
                 if (!response.ok) {
-                    throw new Error(`Try revision data not found. Run: node fetch-xpcshell-data.js --try ${revision}`);
+                    throw new Error(`Try revision data not found. Run: node fetch-test-data.js --harness ${harness} --try ${revision}`);
                 }
 
                 currentData = await response.json();
@@ -3378,7 +3379,8 @@
             console.log('Loading detailed data in background...');
 
             try {
-                const response = await fetchData('xpcshell-issues-with-taskids.json');
+                const harness = getHarnessType();
+                const response = await fetchData(`${harness}-issues-with-taskids.json`);
                 if (!response.ok) {
                     console.warn('Detailed data not available');
                     isLoadingDetailedData = false;
@@ -3449,7 +3451,8 @@
                     throw new Error('No date selected');
                 }
 
-                const file = `xpcshell-${dateToLoad}.json`;
+                const harness = getHarnessType();
+                const file = `${harness}-${dateToLoad}.json`;
                 const response = await fetchData(file);
 
                 if (!response.ok) {
@@ -3516,7 +3519,8 @@
                     detailedData = null;
                     isLoadingDetailedData = false;
 
-                    const response = await fetchData('xpcshell-issues.json');
+                    const harness = getHarnessType();
+                    const response = await fetchData(`${harness}-issues.json`);
                     if (!response.ok) {
                         throw new Error('Historical data not available');
                     }

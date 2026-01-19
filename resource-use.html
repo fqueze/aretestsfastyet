@@ -337,7 +337,8 @@
         // Load resource usage data for a date
         async function loadData(date) {
             try {
-                const response = await fetchData(`xpcshell-${date}-resources.json`);
+                const harness = getHarnessType();
+                const response = await fetchData(`${harness}-${date}-resources.json`);
                 currentData = await response.json();
 
                 // Decompress timestamps
