@@ -2996,6 +2996,7 @@
 
             // Get crash data
             const crashData = getCrashData(testData.testId);
+
             crashData.signatures.forEach(({signature, count}) => {
                 allIssues.push({
                     count: count,
@@ -3003,6 +3004,17 @@
                     message: signature
                 });
             });
+
+            // Add fallback for crashes without signatures
+            const totalCrashCount = testData.stats?.crashCount || 0;
+            const crashMessagesCount = crashData.signatures.reduce((sum, sig) => sum + sig.count, 0);
+            if (totalCrashCount > crashMessagesCount) {
+                allIssues.push({
+                    count: totalCrashCount - crashMessagesCount,
+                    type: 'CRASH',
+                    message: 'Crash signature not recorded'
+                });
+            }
 
             // Get timeout data
             const timeoutCount = testData.stats?.timeoutCount || 0;
@@ -3162,7 +3174,7 @@
                         forEachMatchingTaskId(statusGroup, (i) => {
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                            return message === issueMessage || (!message && issueMessage.includes('not recorded'));
+                            return message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE);
                         }, (taskIdIndex) => {
                             runs.push(createRunInfo(taskIdIndex, issueType, testPath));
                         });
@@ -3176,7 +3188,7 @@
                         forEachMatchingTaskId(statusGroup, (i) => {
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
-                            return signature === issueMessage;
+                            return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
                         }, (taskIdIndex, i) => {
                             const minidump = statusGroup.minidumps?.[i];
                             runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
