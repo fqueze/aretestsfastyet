@@ -765,12 +765,15 @@
 
 
         // Get CSS class and display value for issue percentage
-        function getIssuePercentageDisplay(issueCount, totalCount) {
+        function getIssuePercentageDisplay(stats) {
+            // Calculate total count based on filter settings - only include skipCount if skips are enabled
+            const totalCount = stats.runCount + (issueTypeFilters.skips ? stats.skipCount : 0);
+
             if (totalCount === 0) {
                 return { displayValue: '0%', cssClass: 'zero' };
             }
 
-            const exactPercentage = (issueCount / totalCount) * 100;
+            const exactPercentage = (stats.issueCount / totalCount) * 100;
 
             if (exactPercentage === 0) {
                 return { displayValue: '0%', cssClass: 'zero' };
@@ -805,7 +808,7 @@
             let html = '';
             html += generateStatItem('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'fail' : '');
 
-            const issuePercentageDisplay = getIssuePercentageDisplay(stats.issueCount, stats.runCount + stats.skipCount);
+            const issuePercentageDisplay = getIssuePercentageDisplay(stats);
             html += generateStatItem('Issue %', issuePercentageDisplay.displayValue, issuePercentageDisplay.cssClass);
 
             const issueClass = stats.issueCount > 0 ? 'fail' : 'zero';
@@ -1065,6 +1068,9 @@
                 (issueTypeFilters.timeouts ? timeoutCount : 0) +
                 (issueTypeFilters.crashes ? crashCount : 0);
 
+            // Calculate total count for percentage - only include skipCount if skips are enabled in filters
+            const totalCountForPercentage = runCount + (issueTypeFilters.skips ? skipCount : 0);
+
             return {
                 runCount: runCount,
                 skipCount: skipCount,
@@ -1080,7 +1086,7 @@
                 sequentialFailCount: sequentialFailCount,
                 sequentialTimeoutCount: sequentialTimeoutCount,
                 parallelFailPercentage: parallelFailPercentage,
-                issuePercentage: (runCount + skipCount) > 0 ? (filteredIssueCount / (runCount + skipCount) * 100) : 0
+                issuePercentage: totalCountForPercentage > 0 ? (filteredIssueCount / totalCountForPercentage * 100) : 0
             };
         }
 
@@ -1839,7 +1845,7 @@
 
             html += generateStatItem('Runs', formatNumber(totalStats.runCount), totalStats.runCount === 0 ? 'fail' : '');
 
-            const totalIssuePercentageDisplay = getIssuePercentageDisplay(totalStats.issueCount, totalStats.runCount + totalStats.skipCount);
+            const totalIssuePercentageDisplay = getIssuePercentageDisplay(totalStats);
             html += generateStatItem('Issue %', totalIssuePercentageDisplay.displayValue, totalIssuePercentageDisplay.cssClass);
 
             // Skips with lazy tooltip
@@ -2030,12 +2036,10 @@
                         valueB = groupB.totalStats.runCount || 0;
                         break;
                     case 'issuePercentage':
-                        valueA = (groupA.totalStats.runCount + groupA.totalStats.skipCount) > 0
-                            ? groupA.totalStats.issueCount / (groupA.totalStats.runCount + groupA.totalStats.skipCount)
-                            : 0;
-                        valueB = (groupB.totalStats.runCount + groupB.totalStats.skipCount) > 0
-                            ? groupB.totalStats.issueCount / (groupB.totalStats.runCount + groupB.totalStats.skipCount)
-                            : 0;
+                        const totalCountA = groupA.totalStats.runCount + (issueTypeFilters.skips ? groupA.totalStats.skipCount : 0);
+                        valueA = totalCountA > 0 ? (groupA.totalStats.issueCount / totalCountA) : 0;
+                        const totalCountB = groupB.totalStats.runCount + (issueTypeFilters.skips ? groupB.totalStats.skipCount : 0);
+                        valueB = totalCountB > 0 ? (groupB.totalStats.issueCount / totalCountB) : 0;
                         break;
                     case 'skipCount':
                         valueA = groupA.totalStats.skipCount || 0;
@@ -2106,7 +2110,7 @@
 
                 // Show aggregate stats for component
                 const totalStats = group.totalStats;
-                const componentIssuePercentageDisplay = getIssuePercentageDisplay(totalStats.issueCount, totalStats.runCount + totalStats.skipCount);
+                const componentIssuePercentageDisplay = getIssuePercentageDisplay(totalStats);
 
                 html += generateStatItem('Runs', formatNumber(totalStats.runCount));
                 html += generateStatItem('Issue %', componentIssuePercentageDisplay.displayValue, componentIssuePercentageDisplay.cssClass);
