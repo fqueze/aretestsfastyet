@@ -133,11 +133,13 @@
             });
 
             // Initialize historical toggle
+            const harness = getHarnessType();
             historicalToggleManager = initHistoricalToggle({
                 buttonId: 'historicalButton',
                 selectId: 'dateSelect',
                 statusTextId: 'statusText',
                 fetchData: fetchData,
+                historicalDataFile: `${harness}-issues-with-taskids.json`,
                 onToggle: async (isHistorical, data) => {
                     isHistoricalMode = isHistorical;
                     if (isHistorical) {
