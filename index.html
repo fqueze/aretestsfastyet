@@ -175,8 +175,8 @@
             <thead>
                 <tr>
                     <th>Harness</th>
-                    <th>Test Failures</th>
-                    <th>Job Failures</th>
+                    <th>Flaky Test Failures</th>
+                    <th>Flaky Job Failures</th>
                     <th>Skip Rate</th>
                     <th>Invalid Jobs</th>
                 </tr>
@@ -203,7 +203,7 @@
     <div class="charts-grid">
         <div class="chart-container" id="testFailureContainer">
             <div class="chart-header">
-                <h2 id="test-failures">Test Failures</h2>
+                <h2 id="test-failures">Flaky Test Failures</h2>
                 <p class="info-text">Percentage of test runs that failed</p>
             </div>
             <div id="testFailureChart"></div>
@@ -211,8 +211,8 @@
 
         <div class="chart-container" id="jobFailureContainer">
             <div class="chart-header">
-                <h2 id="job-failures">Job Failures</h2>
-                <p class="info-text">Percentage of jobs that failed due to test failures</p>
+                <h2 id="job-failures">Flaky Job Failures</h2>
+                <p class="info-text">Percentage of jobs that failed due to test flakiness (excludes invalid jobs from infrastructure or harness issues, and failures due to broken patches that were backed out)</p>
             </div>
             <div id="jobFailureChart"></div>
         </div>
@@ -225,12 +225,15 @@
             <div id="skipRateChart"></div>
         </div>
 
-        <div class="chart-container" id="invalidJobsContainer">
+        <div class="chart-container" id="xpcshellBreakdownContainer">
             <div class="chart-header">
-                <h2 id="invalid-jobs">Invalid Jobs</h2>
-                <p class="info-text">Jobs that failed to produce a valid resource usage profile (harness issues, job timeouts, etc.)</p>
+                <h2 id="failure-breakdown">Job Failure Breakdown</h2>
+                <p class="info-text">Breakdown of all failed test jobs by category: intermittent test failures, invalid (infrastructure or harness issues), and backout (known broken patches)</p>
             </div>
-            <div id="invalidJobsChart"></div>
+            <h3 id="xpcshell-failure-breakdown">XPCShell</h2>
+            <div id="xpcshellBreakdownChart"></div>
+            <h3 id="mochitest-failure-breakdown">Mochitest</h2>
+            <div id="mochitestBreakdownChart"></div>
         </div>
     </div>
 
@@ -289,7 +292,8 @@
                 skippedTestRuns: stats.skippedTestRuns.slice(0, count),
                 processedJobCount: stats.processedJobCount.slice(0, count),
                 failedJobs: stats.failedJobs.slice(0, count),
-                invalidJobs: stats.invalidJobs.slice(0, count)
+                invalidJobs: stats.invalidJobs.slice(0, count),
+                ignoredJobs: stats.ignoredJobs ? stats.ignoredJobs.slice(0, count) : new Array(count).fill(0)
             };
         }
 
@@ -340,7 +344,7 @@
                         </a>
                     </td>
                     <td>
-                        <a href="green.html#${harness.kind}" class="stat-link" title="Percentage of jobs that failed due to test failures (excludes invalid jobs from infrastructure issues)">
+                        <a href="green.html#${harness.kind}" class="stat-link" title="Percentage of jobs that failed due to test flakiness (excludes invalid jobs from infrastructure issues, and failures due to broken patches that were backed out)">
                             <div class="stat-cell">
                                 <div class="stat-value">${jobFailRate}%</div>
                                 <div class="stat-secondary">${testFailedJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
@@ -542,49 +546,251 @@
 
             Plotly.newPlot('skipRateChart', skipTraces, skipLayout, { responsive: true });
 
-            // Invalid Jobs Chart
-            const invalidTraces = [];
+            // XPCShell Failure Breakdown Chart
             if (xpcData) {
-                invalidTraces.push(createPercentageTrace(
-                    xpcData.dates,
-                    xpcData.invalidJobs,
-                    xpcData.processedJobCount,
-                    'XPCShell',
-                    '#0060df'
-                ));
-            }
+                const xpcBreakdownTraces = [];
+                const intermittent = xpcData.failedJobs.map((failed, i) =>
+                    (failed !== null && xpcData.invalidJobs[i] !== null) ? failed - xpcData.invalidJobs[i] : failed
+                );
 
-            if (mochData) {
-                invalidTraces.push(createPercentageTrace(
-                    mochData.dates,
-                    mochData.invalidJobs,
-                    mochData.processedJobCount,
-                    'Mochitest',
-                    '#ff6b6b'
-                ));
-            }
-
-            const invalidLayout = {
-                xaxis: { title: 'Date', type: 'date' },
-                yaxis: {
-                    title: currentDisplayMode === 'percentage' ? 'Invalid Job Percentage (%)' : 'Invalid Jobs',
-                    rangemode: 'tozero'
-                },
-                hovermode: 'closest',
-                showlegend: true,
-                margin: { l: 60, r: 40, t: 20, b: 60 },
-                hoverlabel: {
-                    bgcolor: '#2a2a2a',
-                    bordercolor: '#2a2a2a',
-                    font: {
-                        size: 15,
-                        color: 'white',
-                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-                    }
+                const intermittentCustomData = [];
+                const intermittentY = [];
+                for (let i = 0; i < xpcData.dates.length; i++) {
+                    const total = xpcData.processedJobCount[i] + (xpcData.invalidJobs[i] || 0) + (xpcData.ignoredJobs[i] || 0);
+                    const val = intermittent[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    intermittentY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    intermittentCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
                 }
-            };
 
-            Plotly.newPlot('invalidJobsChart', invalidTraces, invalidLayout, { responsive: true });
+                xpcBreakdownTraces.push({
+                    x: xpcData.dates,
+                    y: intermittentY,
+                    name: 'Intermittent',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#ff9500', width: 0 },
+                    fillcolor: '#ff9500',
+                    customdata: intermittentCustomData,
+                    hovertemplate: '<b>Intermittent</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const invalidCustomData = [];
+                const invalidY = [];
+                for (let i = 0; i < xpcData.dates.length; i++) {
+                    const total = xpcData.processedJobCount[i] + (xpcData.invalidJobs[i] || 0) + (xpcData.ignoredJobs[i] || 0);
+                    const val = xpcData.invalidJobs[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    invalidY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    invalidCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
+                }
+
+                xpcBreakdownTraces.push({
+                    x: xpcData.dates,
+                    y: invalidY,
+                    name: 'Invalid',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#888', width: 0 },
+                    fillcolor: '#888',
+                    customdata: invalidCustomData,
+                    hovertemplate: '<b>Invalid</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const backoutCustomData = [];
+                const backoutY = [];
+                for (let i = 0; i < xpcData.dates.length; i++) {
+                    const total = xpcData.processedJobCount[i] + (xpcData.invalidJobs[i] || 0) + (xpcData.ignoredJobs[i] || 0);
+                    const val = xpcData.ignoredJobs[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    backoutY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    backoutCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
+                }
+
+                xpcBreakdownTraces.push({
+                    x: xpcData.dates,
+                    y: backoutY,
+                    name: 'Backout',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#0060df', width: 0 },
+                    fillcolor: '#0060df',
+                    customdata: backoutCustomData,
+                    hovertemplate: '<b>Backout</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const xpcBreakdownLayout = {
+                    xaxis: { title: 'Date', type: 'date' },
+                    yaxis: {
+                        title: currentDisplayMode === 'percentage' ? 'Percentage of Total Jobs (%)' : 'Job Count',
+                        rangemode: 'tozero'
+                    },
+                    hovermode: 'closest',
+                    showlegend: true,
+                    margin: { l: 60, r: 40, t: 20, b: 60 },
+                    hoverlabel: {
+                        bgcolor: '#2a2a2a',
+                        bordercolor: '#2a2a2a',
+                        font: {
+                            size: 15,
+                            color: 'white',
+                            family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                        }
+                    }
+                };
+
+                Plotly.newPlot('xpcshellBreakdownChart', xpcBreakdownTraces, xpcBreakdownLayout, { responsive: true });
+            }
+
+            // Mochitest Failure Breakdown Chart
+            if (mochData) {
+                const mochBreakdownTraces = [];
+                const intermittent = mochData.failedJobs.map((failed, i) =>
+                    (failed !== null && mochData.invalidJobs[i] !== null) ? failed - mochData.invalidJobs[i] : failed
+                );
+
+                const intermittentCustomData = [];
+                const intermittentY = [];
+                for (let i = 0; i < mochData.dates.length; i++) {
+                    const total = mochData.processedJobCount[i] + (mochData.invalidJobs[i] || 0) + (mochData.ignoredJobs[i] || 0);
+                    const val = intermittent[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    intermittentY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    intermittentCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
+                }
+
+                mochBreakdownTraces.push({
+                    x: mochData.dates,
+                    y: intermittentY,
+                    name: 'Intermittent',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#ff9500', width: 0 },
+                    fillcolor: '#ff9500',
+                    customdata: intermittentCustomData,
+                    hovertemplate: '<b>Intermittent</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const invalidCustomData = [];
+                const invalidY = [];
+                for (let i = 0; i < mochData.dates.length; i++) {
+                    const total = mochData.processedJobCount[i] + (mochData.invalidJobs[i] || 0) + (mochData.ignoredJobs[i] || 0);
+                    const val = mochData.invalidJobs[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    invalidY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    invalidCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
+                }
+
+                mochBreakdownTraces.push({
+                    x: mochData.dates,
+                    y: invalidY,
+                    name: 'Invalid',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#888', width: 0 },
+                    fillcolor: '#888',
+                    customdata: invalidCustomData,
+                    hovertemplate: '<b>Invalid</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const backoutCustomData = [];
+                const backoutY = [];
+                for (let i = 0; i < mochData.dates.length; i++) {
+                    const total = mochData.processedJobCount[i] + (mochData.invalidJobs[i] || 0) + (mochData.ignoredJobs[i] || 0);
+                    const val = mochData.ignoredJobs[i];
+                    const percentage = total > 0 && val !== null ? (val / total * 100) : null;
+                    backoutY.push(currentDisplayMode === 'percentage' ? percentage : val);
+                    backoutCustomData.push({
+                        count: val !== null ? val.toLocaleString() : '0',
+                        total: total.toLocaleString(),
+                        percentage: percentage !== null ? percentage.toFixed(2) : '0.00'
+                    });
+                }
+
+                mochBreakdownTraces.push({
+                    x: mochData.dates,
+                    y: backoutY,
+                    name: 'Backout',
+                    type: 'scatter',
+                    mode: 'lines',
+                    stackgroup: 'one',
+                    line: { color: '#0060df', width: 0 },
+                    fillcolor: '#0060df',
+                    customdata: backoutCustomData,
+                    hovertemplate: '<b>Backout</b><br>' +
+                                   'Date: %{x}<br>' +
+                                   'Percentage: %{customdata.percentage}%<br>' +
+                                   'Count: %{customdata.count} / %{customdata.total}<br>' +
+                                   '<extra></extra>'
+                });
+
+                const mochBreakdownLayout = {
+                    xaxis: { title: 'Date', type: 'date' },
+                    yaxis: {
+                        title: currentDisplayMode === 'percentage' ? 'Percentage of Total Jobs (%)' : 'Job Count',
+                        rangemode: 'tozero'
+                    },
+                    hovermode: 'closest',
+                    showlegend: true,
+                    margin: { l: 60, r: 40, t: 20, b: 60 },
+                    hoverlabel: {
+                        bgcolor: '#2a2a2a',
+                        bordercolor: '#2a2a2a',
+                        font: {
+                            size: 15,
+                            color: 'white',
+                            family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                        }
+                    }
+                };
+
+                Plotly.newPlot('mochitestBreakdownChart', mochBreakdownTraces, mochBreakdownLayout, { responsive: true });
+            }
         }
 
         function updateDisplay() {
