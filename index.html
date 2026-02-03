@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firefox Test Health</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="fetch-utils.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stats-section {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stats-section h2 {
+            margin-top: 0;
+        }
+
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .stats-table th {
+            text-align: center;
+            padding: 12px 15px;
+            border-bottom: 2px solid #e0e0e0;
+            font-size: 0.9rem;
+            color: #666;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .stats-table th:first-child {
+            text-align: left;
+        }
+
+        .stats-table td {
+            padding: 20px 15px;
+            border-bottom: 1px solid #f5f5f5;
+            text-align: center;
+            vertical-align: top;
+        }
+
+        .stats-table td:first-child {
+            text-align: left;
+        }
+
+        .stats-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .stats-table tbody tr:hover {
+            background-color: #fafafa;
+        }
+
+        .harness-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 1.1rem;
+        }
+
+        .stat-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #333;
+            font-size: 1.8rem;
+            line-height: 1;
+        }
+
+        .stat-link {
+            color: inherit;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: block;
+        }
+
+        .stat-link:hover .stat-value {
+            color: #0060df;
+        }
+
+        .stat-secondary {
+            font-size: 0.85rem;
+            color: #999;
+            white-space: nowrap;
+        }
+
+        .info-text {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+
+        .chart-container {
+            min-height: 600px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Firefox Test Health</h1>
+
+    <div class="stats-section">
+        <h2 id="summary">Summary (Last 7 Days)</h2>
+        <table class="stats-table">
+            <thead>
+                <tr>
+                    <th>Harness</th>
+                    <th>Test Failures</th>
+                    <th>Job Failures</th>
+                    <th>Skip Rate</th>
+                    <th>Invalid Jobs</th>
+                </tr>
+            </thead>
+            <tbody id="statsSummary">
+                <tr><td colspan="5" style="text-align: center; color: #999;">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="controls">
+        <label>Display:</label>
+        <div class="btn-group">
+            <button onclick="setDisplayMode('percentage')" class="active" id="btnPercentage">Percentage</button>
+            <button onclick="setDisplayMode('count')" id="btnCount">Raw Counts</button>
+        </div>
+    </div>
+
+    <div class="charts-grid">
+        <div class="chart-container" id="testFailureContainer">
+            <h2 id="test-failures">Test Failures</h2>
+            <p class="info-text">Percentage of test runs that failed</p>
+            <div id="testFailureChart"></div>
+        </div>
+
+        <div class="chart-container" id="jobFailureContainer">
+            <h2 id="job-failures">Job Failures</h2>
+            <p class="info-text">
+                Percentage of jobs that failed due to test failures.
+            </p>
+            <div id="jobFailureChart"></div>
+        </div>
+
+        <div class="chart-container" id="skipRateContainer">
+            <h2 id="test-skips">Test Skips</h2>
+            <p class="info-text">Percentage of tests skipped (excluding platform-irrelevant skips like run-if)</p>
+            <div id="skipRateChart"></div>
+        </div>
+
+        <div class="chart-container" id="invalidJobsContainer">
+            <h2 id="invalid-jobs">Invalid Jobs</h2>
+            <p class="info-text">Jobs that failed to produce a valid resource usage profile (harness issues, job timeouts, etc.)</p>
+            <div id="invalidJobsChart"></div>
+        </div>
+    </div>
+
+    <div id="errorMessage" class="error" style="display: none;"></div>
+
+    <script>
+        let xpcshellStats = null;
+        let mochitestStats = null;
+        let currentDisplayMode = 'percentage';
+
+        async function loadData() {
+            try {
+                // Load XPCShell stats
+                const xpcResponse = await fetchData('xpcshell-stats.json');
+                if (xpcResponse.ok) {
+                    xpcshellStats = await xpcResponse.json();
+                    console.log('Loaded XPCShell stats:', xpcshellStats.dates.length, 'days');
+                }
+
+                // Load Mochitest stats
+                const mochResponse = await fetchData('mochitest-stats.json');
+                if (mochResponse.ok) {
+                    mochitestStats = await mochResponse.json();
+                    console.log('Loaded Mochitest stats:', mochitestStats.dates.length, 'days');
+                }
+
+                if (!xpcshellStats && !mochitestStats) {
+                    throw new Error('No stats data available');
+                }
+
+                updateDisplay();
+            } catch (error) {
+                console.error('Failed to load stats:', error);
+                document.getElementById('errorMessage').textContent =
+                    'Error: Could not load statistics. Generate stats by running: node fetch-test-data.js --harness xpcshell --days 30 && node fetch-test-data.js --harness mochitest --days 30';
+                document.getElementById('errorMessage').style.display = 'block';
+            }
+        }
+
+        function setDisplayMode(mode) {
+            currentDisplayMode = mode;
+            document.getElementById('btnPercentage').classList.remove('active');
+            document.getElementById('btnCount').classList.remove('active');
+            document.getElementById(`btn${mode.charAt(0).toUpperCase() + mode.slice(1)}`).classList.add('active');
+            updateDisplay();
+        }
+
+        function getRecentStats(stats, days = 7) {
+            if (!stats) return null;
+
+            const count = Math.min(days, stats.dates.length);
+            return {
+                dates: stats.dates.slice(0, count),
+                totalTestRuns: stats.totalTestRuns.slice(0, count),
+                failedTestRuns: stats.failedTestRuns.slice(0, count),
+                skippedTestRuns: stats.skippedTestRuns.slice(0, count),
+                processedJobCount: stats.processedJobCount.slice(0, count),
+                failedJobs: stats.failedJobs.slice(0, count),
+                invalidJobs: stats.invalidJobs.slice(0, count)
+            };
+        }
+
+        function sumArray(arr) {
+            let sum = 0;
+            for (let i = 0; i < arr.length; i++) {
+                if (arr[i] !== null) {
+                    sum += arr[i];
+                }
+            }
+            return sum;
+        }
+
+        function updateStatsSummary() {
+            const tbody = document.getElementById('statsSummary');
+            tbody.innerHTML = '';
+
+            const harnesses = [];
+            if (xpcshellStats) {
+                harnesses.push({ name: 'XPCShell', kind: 'xpcshell', data: getRecentStats(xpcshellStats, 7) });
+            }
+            if (mochitestStats) {
+                harnesses.push({ name: 'Mochitest', kind: 'mochitest', data: getRecentStats(mochitestStats, 7) });
+            }
+
+            for (const harness of harnesses) {
+                const data = harness.data;
+                if (!data) continue;
+
+                const totalTests = sumArray(data.totalTestRuns);
+                const totalFailed = sumArray(data.failedTestRuns);
+                const totalSkipped = sumArray(data.skippedTestRuns);
+                const totalJobs = sumArray(data.processedJobCount);
+                const failedJobs = sumArray(data.failedJobs);
+                const invalidJobs = sumArray(data.invalidJobs);
+                const testFailedJobs = failedJobs - invalidJobs; // Only test-related failures
+
+                const testFailRate = totalTests > 0 ? ((totalFailed / totalTests) * 100).toFixed(2) : '0.00';
+                const jobFailRate = totalJobs > 0 ? ((testFailedJobs / totalJobs) * 100).toFixed(2) : '0.00';
+                const skipRate = totalTests > 0 ? ((totalSkipped / totalTests) * 100).toFixed(2) : '0.00';
+                const invalidRate = totalJobs > 0 ? ((invalidJobs / totalJobs) * 100).toFixed(2) : '0.00';
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="harness-name">${harness.name}</td>
+                    <td>
+                        <a href="issues.html?kind=${harness.kind}#date=21days" class="stat-link">
+                            <div class="stat-cell">
+                                <div class="stat-value">${testFailRate}%</div>
+                                <div class="stat-secondary">${totalFailed.toLocaleString()} / ${totalTests.toLocaleString()}</div>
+                            </div>
+                        </a>
+                    </td>
+                    <td>
+                        <a href="green.html#${harness.kind}" class="stat-link">
+                            <div class="stat-cell">
+                                <div class="stat-value">${jobFailRate}%</div>
+                                <div class="stat-secondary">${testFailedJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
+                            </div>
+                        </a>
+                    </td>
+                    <td>
+                        <div class="stat-cell">
+                            <div class="stat-value">${skipRate}%</div>
+                            <div class="stat-secondary">${totalSkipped.toLocaleString()} / ${totalTests.toLocaleString()}</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="stat-cell">
+                            <div class="stat-value">${invalidRate}%</div>
+                            <div class="stat-secondary">${invalidJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            }
+        }
+
+        function createPercentageTrace(dates, numerator, denominator, name, color) {
+            const yValues = [];
+            const validDates = [];
+            const customData = [];
+
+            for (let i = 0; i < dates.length; i++) {
+                if (numerator[i] !== null && denominator[i] !== null && denominator[i] > 0) {
+                    const percentage = (numerator[i] / denominator[i]) * 100;
+                    yValues.push(currentDisplayMode === 'percentage' ? percentage : numerator[i]);
+                    validDates.push(dates[i]);
+                    customData.push({
+                        numerator: numerator[i].toLocaleString(),
+                        denominator: denominator[i].toLocaleString(),
+                        percentage: percentage.toFixed(2)
+                    });
+                }
+            }
+
+            return {
+                x: validDates,
+                y: yValues,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: name,
+                line: { color: color, width: 2 },
+                marker: { size: 6 },
+                customdata: customData,
+                hovertemplate: '<b>%{fullData.name}</b><br>' +
+                               'Date: %{x}<br>' +
+                               'Percentage: %{customdata.percentage}%<br>' +
+                               'Count: %{customdata.numerator} / %{customdata.denominator}<br>' +
+                               '<extra></extra>'
+            };
+        }
+
+        function updateCharts() {
+            // Show all available data in charts
+            const xpcData = xpcshellStats;
+            const mochData = mochitestStats;
+
+            // Test Failure Chart
+            const traces = [];
+
+            if (xpcData) {
+                traces.push(createPercentageTrace(
+                    xpcData.dates,
+                    xpcData.failedTestRuns,
+                    xpcData.totalTestRuns,
+                    'XPCShell',
+                    '#0060df'
+                ));
+            }
+
+            if (mochData) {
+                traces.push(createPercentageTrace(
+                    mochData.dates,
+                    mochData.failedTestRuns,
+                    mochData.totalTestRuns,
+                    'Mochitest',
+                    '#ff6b6b'
+                ));
+            }
+
+            const layout = {
+                xaxis: { title: 'Date', type: 'date' },
+                yaxis: {
+                    title: currentDisplayMode === 'percentage' ? 'Failure Percentage (%)' : 'Failed Test Runs',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'closest',
+                showlegend: true,
+                margin: { l: 60, r: 40, t: 20, b: 60 },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 15,
+                        color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    }
+                }
+            };
+
+            Plotly.newPlot('testFailureChart', traces, layout, { responsive: true });
+
+            // Job Failure Chart (failedJobs - invalidJobs to show only test-related failures)
+            const jobTraces = [];
+            if (xpcData) {
+                const testFailedJobs = xpcData.failedJobs.map((failed, i) =>
+                    (failed !== null && xpcData.invalidJobs[i] !== null) ? failed - xpcData.invalidJobs[i] : failed
+                );
+                jobTraces.push(createPercentageTrace(
+                    xpcData.dates,
+                    testFailedJobs,
+                    xpcData.processedJobCount,
+                    'XPCShell',
+                    '#0060df'
+                ));
+            }
+
+            if (mochData) {
+                const testFailedJobs = mochData.failedJobs.map((failed, i) =>
+                    (failed !== null && mochData.invalidJobs[i] !== null) ? failed - mochData.invalidJobs[i] : failed
+                );
+                jobTraces.push(createPercentageTrace(
+                    mochData.dates,
+                    testFailedJobs,
+                    mochData.processedJobCount,
+                    'Mochitest',
+                    '#ff6b6b'
+                ));
+            }
+
+            const jobLayout = {
+                xaxis: { title: 'Date', type: 'date' },
+                yaxis: {
+                    title: currentDisplayMode === 'percentage' ? 'Failure Percentage (%)' : 'Failed Jobs',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'closest',
+                showlegend: true,
+                margin: { l: 60, r: 40, t: 20, b: 60 },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 15,
+                        color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    }
+                }
+            };
+
+            Plotly.newPlot('jobFailureChart', jobTraces, jobLayout, { responsive: true });
+
+            // Skip Rate Chart
+            const skipTraces = [];
+            if (xpcData) {
+                skipTraces.push(createPercentageTrace(
+                    xpcData.dates,
+                    xpcData.skippedTestRuns,
+                    xpcData.totalTestRuns,
+                    'XPCShell',
+                    '#0060df'
+                ));
+            }
+
+            if (mochData) {
+                skipTraces.push(createPercentageTrace(
+                    mochData.dates,
+                    mochData.skippedTestRuns,
+                    mochData.totalTestRuns,
+                    'Mochitest',
+                    '#ff6b6b'
+                ));
+            }
+
+            const skipLayout = {
+                xaxis: { title: 'Date', type: 'date' },
+                yaxis: {
+                    title: currentDisplayMode === 'percentage' ? 'Skip Percentage (%)' : 'Skipped Test Runs',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'closest',
+                showlegend: true,
+                margin: { l: 60, r: 40, t: 20, b: 60 },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 15,
+                        color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    }
+                }
+            };
+
+            Plotly.newPlot('skipRateChart', skipTraces, skipLayout, { responsive: true });
+
+            // Invalid Jobs Chart
+            const invalidTraces = [];
+            if (xpcData) {
+                invalidTraces.push(createPercentageTrace(
+                    xpcData.dates,
+                    xpcData.invalidJobs,
+                    xpcData.processedJobCount,
+                    'XPCShell',
+                    '#0060df'
+                ));
+            }
+
+            if (mochData) {
+                invalidTraces.push(createPercentageTrace(
+                    mochData.dates,
+                    mochData.invalidJobs,
+                    mochData.processedJobCount,
+                    'Mochitest',
+                    '#ff6b6b'
+                ));
+            }
+
+            const invalidLayout = {
+                xaxis: { title: 'Date', type: 'date' },
+                yaxis: {
+                    title: currentDisplayMode === 'percentage' ? 'Invalid Job Percentage (%)' : 'Invalid Jobs',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'closest',
+                showlegend: true,
+                margin: { l: 60, r: 40, t: 20, b: 60 },
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 15,
+                        color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    }
+                }
+            };
+
+            Plotly.newPlot('invalidJobsChart', invalidTraces, invalidLayout, { responsive: true });
+        }
+
+        function updateDisplay() {
+            if (!xpcshellStats && !mochitestStats) return;
+
+            updateStatsSummary();
+            updateCharts();
+        }
+
+        // Add click handlers to h2 elements for anchor functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('h2[id]').forEach(function(header) {
+                header.addEventListener('click', function() {
+                    window.location.hash = '#' + this.id;
+                });
+            });
+        });
+
+        setupWindowResize();
+        loadData();
+    </script>
+</body>
+</html>
