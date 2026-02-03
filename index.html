@@ -15,6 +15,31 @@
             border-radius: 8px;
             margin-bottom: 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            margin: 0;
+        }
+
+        .header .controls {
+            background: transparent;
+            padding: 0;
+            margin: 0;
+            box-shadow: none;
+            border-radius: 0;
+        }
+
+        .header .controls label {
+            font-size: 0.85rem;
+            margin-right: 8px;
+        }
+
+        .header .controls .btn-group button {
+            padding: 6px 12px;
+            font-size: 0.85rem;
         }
 
         .stats-section {
@@ -32,6 +57,7 @@
         .stats-table {
             width: 100%;
             border-collapse: collapse;
+            table-layout: fixed;
         }
 
         .stats-table th {
@@ -43,6 +69,7 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            width: 20%;
         }
 
         .stats-table th:first-child {
@@ -105,22 +132,42 @@
             white-space: nowrap;
         }
 
+        .chart-container h2 {
+            display: inline;
+            margin-right: 10px;
+        }
+
         .info-text {
-            font-size: 0.9rem;
+            display: inline;
+            font-size: 0.85rem;
             color: #666;
+            margin: 0 0 15px 0;
+        }
+
+        .chart-header {
             margin-bottom: 15px;
-            padding: 10px;
-            background: #f9f9f9;
-            border-radius: 4px;
         }
 
         .chart-container {
-            min-height: 600px;
+            min-height: 0;
+        }
+
+        .chart-container > div[id$="Chart"] {
+            height: 450px;
         }
     </style>
 </head>
 <body>
-    <h1>Firefox Test Health</h1>
+    <div class="header">
+        <h1>Firefox Test Health</h1>
+        <div class="controls">
+            <label>Display:</label>
+            <div class="btn-group">
+                <button onclick="setDisplayMode('percentage')" class="active" id="btnPercentage">Percentage</button>
+                <button onclick="setDisplayMode('count')" id="btnCount">Raw Counts</button>
+            </div>
+        </div>
+    </div>
 
     <div class="stats-section">
         <h2 id="summary">Summary (Last 7 Days)</h2>
@@ -135,43 +182,54 @@
                 </tr>
             </thead>
             <tbody id="statsSummary">
-                <tr><td colspan="5" style="text-align: center; color: #999;">Loading...</td></tr>
+                <tr data-harness="xpcshell">
+                    <td class="harness-name">XPCShell</td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                </tr>
+                <tr data-harness="mochitest">
+                    <td class="harness-name">Mochitest</td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                    <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
+                </tr>
             </tbody>
         </table>
     </div>
 
-    <div class="controls">
-        <label>Display:</label>
-        <div class="btn-group">
-            <button onclick="setDisplayMode('percentage')" class="active" id="btnPercentage">Percentage</button>
-            <button onclick="setDisplayMode('count')" id="btnCount">Raw Counts</button>
-        </div>
-    </div>
-
     <div class="charts-grid">
         <div class="chart-container" id="testFailureContainer">
-            <h2 id="test-failures">Test Failures</h2>
-            <p class="info-text">Percentage of test runs that failed</p>
+            <div class="chart-header">
+                <h2 id="test-failures">Test Failures</h2>
+                <p class="info-text">Percentage of test runs that failed</p>
+            </div>
             <div id="testFailureChart"></div>
         </div>
 
         <div class="chart-container" id="jobFailureContainer">
-            <h2 id="job-failures">Job Failures</h2>
-            <p class="info-text">
-                Percentage of jobs that failed due to test failures.
-            </p>
+            <div class="chart-header">
+                <h2 id="job-failures">Job Failures</h2>
+                <p class="info-text">Percentage of jobs that failed due to test failures</p>
+            </div>
             <div id="jobFailureChart"></div>
         </div>
 
         <div class="chart-container" id="skipRateContainer">
-            <h2 id="test-skips">Test Skips</h2>
-            <p class="info-text">Percentage of tests skipped (excluding platform-irrelevant skips like run-if)</p>
+            <div class="chart-header">
+                <h2 id="test-skips">Test Skips</h2>
+                <p class="info-text">Percentage of tests skipped (excluding platform-irrelevant skips like run-if)</p>
+            </div>
             <div id="skipRateChart"></div>
         </div>
 
         <div class="chart-container" id="invalidJobsContainer">
-            <h2 id="invalid-jobs">Invalid Jobs</h2>
-            <p class="info-text">Jobs that failed to produce a valid resource usage profile (harness issues, job timeouts, etc.)</p>
+            <div class="chart-header">
+                <h2 id="invalid-jobs">Invalid Jobs</h2>
+                <p class="info-text">Jobs that failed to produce a valid resource usage profile (harness issues, job timeouts, etc.)</p>
+            </div>
             <div id="invalidJobsChart"></div>
         </div>
     </div>
@@ -246,19 +304,16 @@
         }
 
         function updateStatsSummary() {
-            const tbody = document.getElementById('statsSummary');
-            tbody.innerHTML = '';
-
-            const harnesses = [];
-            if (xpcshellStats) {
-                harnesses.push({ name: 'XPCShell', kind: 'xpcshell', data: getRecentStats(xpcshellStats, 7) });
-            }
-            if (mochitestStats) {
-                harnesses.push({ name: 'Mochitest', kind: 'mochitest', data: getRecentStats(mochitestStats, 7) });
-            }
+            const harnesses = [
+                { name: 'XPCShell', kind: 'xpcshell', stats: xpcshellStats },
+                { name: 'Mochitest', kind: 'mochitest', stats: mochitestStats }
+            ];
 
             for (const harness of harnesses) {
-                const data = harness.data;
+                const row = document.querySelector(`tr[data-harness="${harness.kind}"]`);
+                if (!row) continue;
+
+                const data = getRecentStats(harness.stats, 7);
                 if (!data) continue;
 
                 const totalTests = sumArray(data.totalTestRuns);
@@ -274,11 +329,10 @@
                 const skipRate = totalTests > 0 ? ((totalSkipped / totalTests) * 100).toFixed(2) : '0.00';
                 const invalidRate = totalJobs > 0 ? ((invalidJobs / totalJobs) * 100).toFixed(2) : '0.00';
 
-                const row = document.createElement('tr');
                 row.innerHTML = `
                     <td class="harness-name">${harness.name}</td>
                     <td>
-                        <a href="issues.html?kind=${harness.kind}#date=21days" class="stat-link">
+                        <a href="issues.html?kind=${harness.kind}#date=21days" class="stat-link" title="Percentage of test runs that failed">
                             <div class="stat-cell">
                                 <div class="stat-value">${testFailRate}%</div>
                                 <div class="stat-secondary">${totalFailed.toLocaleString()} / ${totalTests.toLocaleString()}</div>
@@ -286,27 +340,26 @@
                         </a>
                     </td>
                     <td>
-                        <a href="green.html#${harness.kind}" class="stat-link">
+                        <a href="green.html#${harness.kind}" class="stat-link" title="Percentage of jobs that failed due to test failures (excludes invalid jobs from infrastructure issues)">
                             <div class="stat-cell">
                                 <div class="stat-value">${jobFailRate}%</div>
                                 <div class="stat-secondary">${testFailedJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
                             </div>
                         </a>
                     </td>
-                    <td>
+                    <td title="Percentage of test runs that were skipped (excludes platform-irrelevant skips like run-if)">
                         <div class="stat-cell">
                             <div class="stat-value">${skipRate}%</div>
                             <div class="stat-secondary">${totalSkipped.toLocaleString()} / ${totalTests.toLocaleString()}</div>
                         </div>
                     </td>
-                    <td>
+                    <td title="Percentage of jobs that failed to produce valid results due to infrastructure issues (harness failures, timeouts, etc.)">
                         <div class="stat-cell">
                             <div class="stat-value">${invalidRate}%</div>
                             <div class="stat-secondary">${invalidJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
                         </div>
                     </td>
                 `;
-                tbody.appendChild(row);
             }
         }
 
