@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Manifest Runtime Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="fetch-utils.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .controls {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-weight: 600;
+            color: #666;
+            font-size: 0.85rem;
+        }
+
+        .search-input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            min-width: 300px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .manifest-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .manifest-table th {
+            background: #f5f5f5;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 0.85rem;
+            border-bottom: 2px solid #e0e0e0;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .manifest-table th:hover {
+            background: #e8e8e8;
+        }
+
+        .manifest-table th .sort-indicator {
+            display: inline-block;
+            margin-left: 5px;
+            opacity: 0.5;
+        }
+
+        .manifest-table th.sorted .sort-indicator {
+            opacity: 1;
+        }
+
+        .manifest-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .manifest-row {
+            cursor: pointer;
+            background: white;
+        }
+
+        .manifest-row:hover {
+            background: #fafafa;
+        }
+
+        .manifest-row.expanded {
+            background: #f0f7ff;
+        }
+
+        .job-row {
+            background: #fafafa;
+        }
+
+        .job-row:hover {
+            background: #f5f5f5;
+        }
+
+        .job-row td:first-child {
+            padding-left: 40px;
+        }
+
+        .chart-row {
+            background: #f9f9f9;
+        }
+
+        .chart-row td {
+            padding: 20px;
+        }
+
+        .manifest-name {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .expand-icon {
+            display: inline-block;
+            width: 0;
+            height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid #666;
+            transition: transform 0.2s;
+        }
+
+        .expand-icon.expanded {
+            transform: rotate(180deg);
+        }
+
+        .job-name {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #0060df;
+            cursor: pointer;
+        }
+
+        .job-name:hover {
+            text-decoration: underline;
+        }
+
+        .time-value {
+            font-family: monospace;
+            font-weight: 500;
+        }
+
+        .job-expand-icon {
+            display: inline-block;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid #999;
+            transition: transform 0.2s;
+            margin-right: 8px;
+        }
+
+        .job-expand-icon.expanded {
+            transform: rotate(180deg);
+        }
+
+        .job-name-wrapper {
+            display: flex;
+            align-items: center;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #fee;
+            border: 1px solid #fcc;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            color: #c00;
+        }
+
+        .section-header {
+            margin-bottom: 15px;
+        }
+
+        .pagination {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+            align-items: center;
+        }
+
+        .pagination button {
+            padding: 8px 16px;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .pagination button:hover:not(:disabled) {
+            background: #e0e0e0;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Manifest Runtime Analysis</h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="manifestSearch">Search Manifests:</label>
+                <input type="text" id="manifestSearch" class="search-input"
+                       placeholder="Filter by manifest path..."
+                       oninput="filterManifests()">
+            </div>
+
+            <div class="control-group">
+                <label for="jobSearch">Filter Jobs:</label>
+                <input type="text" id="jobSearch" class="search-input"
+                       placeholder="Filter by job name..."
+                       oninput="filterManifests()">
+            </div>
+        </div>
+
+        <div id="errorMessage" class="error" style="display: none;"></div>
+        <div id="loadingMessage" class="loading">Loading manifest timing data...</div>
+
+        <div id="contentArea" style="display: none;">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Manifests</div>
+                    <div class="stat-value" id="statManifests">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Jobs</div>
+                    <div class="stat-value" id="statJobs">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Runs</div>
+                    <div class="stat-value" id="statRuns">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Data Date</div>
+                    <div class="stat-value" id="statDate">—</div>
+                </div>
+            </div>
+
+            <div class="section-header">
+                <h2>Manifest Runtimes by Job</h2>
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table class="manifest-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40%;" onclick="sortBy('manifest')">Manifest / Job <span class="sort-indicator">▼</span></th>
+                            <th style="width: 10%;" onclick="sortBy('jobTypes')">Job Types <span class="sort-indicator">▼</span></th>
+                            <th style="width: 15%;" onclick="sortBy('runs')">Runs <span class="sort-indicator">▼</span></th>
+                            <th style="width: 15%;" onclick="sortBy('median')">Median Runtime <span class="sort-indicator">▼</span></th>
+                            <th style="width: 20%;" onclick="sortBy('mean')">Mean Runtime <span class="sort-indicator">▼</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="manifestTableBody">
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination">
+                <button onclick="prevPage()" id="btnPrev">Previous</button>
+                <span id="pageInfo">Page 1 of 1</span>
+                <button onclick="nextPage()" id="btnNext">Next</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        let manifestData = null;
+        let filteredData = [];
+        let expandedManifests = new Set();
+        let expandedJobs = new Set();
+        let currentPage = 1;
+        const itemsPerPage = 50;
+        let currentSortColumn = 'median';
+        let currentSortDirection = 'desc';
+
+        async function fetchManifestData() {
+            const response = await fetchFromCI('manifest', 'try', 'manifests.json');
+            if (!response.ok) {
+                throw new Error(`Failed to fetch manifest data: ${response.status}`);
+            }
+            return await response.json();
+        }
+
+        function processManifestData(data) {
+            // Build a map of manifest -> jobs -> run details
+            const manifestMap = new Map();
+
+            for (let i = 0; i < data.runs.durations.length; i++) {
+                const manifestId = data.runs.manifestIds[i];
+                const jobNameId = data.runs.jobNameIds[i];
+                const taskIdx = data.runs.taskIds[i];
+                const duration = data.runs.durations[i];
+
+                const manifestName = data.manifests[manifestId];
+                const jobName = data.jobNames[jobNameId];
+                const taskId = data.tasks.id[taskIdx];
+                const commitIdx = data.tasks.commitId[taskIdx];
+                const commit = data.commits[commitIdx];
+                const prefixIdx = data.tasks.prefix[taskIdx];
+                const prefix = data.prefixes[prefixIdx];
+
+                if (!manifestMap.has(manifestName)) {
+                    manifestMap.set(manifestName, new Map());
+                }
+
+                const jobMap = manifestMap.get(manifestName);
+                if (!jobMap.has(jobName)) {
+                    jobMap.set(jobName, []);
+                }
+
+                jobMap.get(jobName).push({
+                    duration: duration,
+                    taskId: taskId,
+                    commit: commit,
+                    prefix: prefix
+                });
+            }
+
+            // Convert to array format for display
+            const result = [];
+            for (const [manifestName, jobMap] of manifestMap.entries()) {
+                const jobStats = [];
+                let totalRuns = 0;
+                let allRuntimes = [];
+
+                for (const [jobName, runs] of jobMap.entries()) {
+                    const durations = runs.map(r => r.duration);
+                    durations.sort((a, b) => a - b);
+                    const median = durations[Math.floor(durations.length / 2)];
+                    const mean = durations.reduce((sum, val) => sum + val, 0) / durations.length;
+
+                    jobStats.push({
+                        jobName: jobName,
+                        runs: runs,
+                        runCount: runs.length,
+                        median: median,
+                        mean: mean
+                    });
+
+                    totalRuns += runs.length;
+                    allRuntimes.push(...durations);
+                }
+
+                // Sort jobs by median runtime (descending)
+                jobStats.sort((a, b) => b.median - a.median);
+
+                // Calculate overall stats
+                allRuntimes.sort((a, b) => a - b);
+                const overallMedian = allRuntimes[Math.floor(allRuntimes.length / 2)];
+                const overallMean = allRuntimes.reduce((sum, val) => sum + val, 0) / allRuntimes.length;
+
+                result.push({
+                    manifest: manifestName,
+                    jobStats: jobStats,
+                    totalJobs: jobStats.length,
+                    totalRuns: totalRuns,
+                    overallMedian: overallMedian,
+                    overallMean: overallMean
+                });
+            }
+
+            // Sort by overall median runtime (descending)
+            result.sort((a, b) => b.overallMedian - a.overallMedian);
+
+            return result;
+        }
+
+        function formatDuration(ms) {
+            if (ms < 1000) {
+                return `${Math.round(ms)}ms`;
+            } else if (ms < 60000) {
+                return `${(ms / 1000).toFixed(1)}s`;
+            } else {
+                const minutes = Math.floor(ms / 60000);
+                const seconds = Math.floor((ms % 60000) / 1000);
+                return `${minutes}m ${seconds}s`;
+            }
+        }
+
+        function sortBy(column) {
+            if (currentSortColumn === column) {
+                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortColumn = column;
+                currentSortDirection = 'desc';
+            }
+
+            const sortFunctions = {
+                'manifest': (a, b) => a.manifest.localeCompare(b.manifest),
+                'jobTypes': (a, b) => a.totalJobs - b.totalJobs,
+                'runs': (a, b) => a.totalRuns - b.totalRuns,
+                'median': (a, b) => a.overallMedian - b.overallMedian,
+                'mean': (a, b) => a.overallMean - b.overallMean
+            };
+
+            filteredData.sort((a, b) => {
+                const result = sortFunctions[column](a, b);
+                return currentSortDirection === 'asc' ? result : -result;
+            });
+
+            updateSortIndicators();
+            renderTable();
+        }
+
+        function updateSortIndicators() {
+            const headers = document.querySelectorAll('.manifest-table th');
+            headers.forEach(th => {
+                th.classList.remove('sorted');
+                const indicator = th.querySelector('.sort-indicator');
+                if (indicator) {
+                    indicator.textContent = '▼';
+                }
+            });
+
+            const columnMap = {
+                'manifest': 0,
+                'jobTypes': 1,
+                'runs': 2,
+                'median': 3,
+                'mean': 4
+            };
+
+            const headerIndex = columnMap[currentSortColumn];
+            if (headerIndex !== undefined) {
+                const header = headers[headerIndex];
+                header.classList.add('sorted');
+                const indicator = header.querySelector('.sort-indicator');
+                if (indicator) {
+                    indicator.textContent = currentSortDirection === 'asc' ? '▲' : '▼';
+                }
+            }
+        }
+
+        function filterManifests() {
+            const manifestSearch = document.getElementById('manifestSearch').value.toLowerCase();
+            const jobSearch = document.getElementById('jobSearch').value.toLowerCase();
+
+            filteredData = manifestData.processedData.filter(item => {
+                const manifestMatch = item.manifest.toLowerCase().includes(manifestSearch);
+                const jobMatch = jobSearch === '' || item.jobStats.some(js => js.jobName.toLowerCase().includes(jobSearch));
+                return manifestMatch && jobMatch;
+            });
+
+            // Re-sort after filtering
+            sortBy(currentSortColumn);
+            currentPage = 1;
+        }
+
+        function toggleManifest(manifestName) {
+            if (expandedManifests.has(manifestName)) {
+                expandedManifests.delete(manifestName);
+            } else {
+                expandedManifests.add(manifestName);
+            }
+            renderTable();
+        }
+
+        function toggleJob(manifestName, jobName) {
+            const key = `${manifestName}|||${jobName}`;
+            if (expandedJobs.has(key)) {
+                expandedJobs.delete(key);
+            } else {
+                expandedJobs.add(key);
+            }
+            renderTable();
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('manifestTableBody');
+            tbody.innerHTML = '';
+
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageData = filteredData.slice(start, end);
+
+            for (const item of pageData) {
+                const isExpanded = expandedManifests.has(item.manifest);
+
+                // Manifest row
+                const row = document.createElement('tr');
+                row.className = 'manifest-row' + (isExpanded ? ' expanded' : '');
+                row.onclick = () => toggleManifest(item.manifest);
+
+                const manifestCell = document.createElement('td');
+                manifestCell.innerHTML = `
+                    <div class="manifest-name">
+                        <span class="expand-icon${isExpanded ? ' expanded' : ''}"></span>
+                        <span>${escapeHtml(item.manifest)}</span>
+                    </div>
+                `;
+                row.appendChild(manifestCell);
+
+                const jobTypesCell = document.createElement('td');
+                jobTypesCell.textContent = item.totalJobs.toLocaleString();
+                row.appendChild(jobTypesCell);
+
+                const runsCell = document.createElement('td');
+                runsCell.innerHTML = `<span class="time-value">${item.totalRuns.toLocaleString()}</span>`;
+                row.appendChild(runsCell);
+
+                const medianCell = document.createElement('td');
+                medianCell.innerHTML = `<span class="time-value">${formatDuration(item.overallMedian)}</span>`;
+                row.appendChild(medianCell);
+
+                const meanCell = document.createElement('td');
+                meanCell.innerHTML = `<span class="time-value">${formatDuration(item.overallMean)}</span>`;
+                row.appendChild(meanCell);
+
+                tbody.appendChild(row);
+
+                // Job rows (if expanded)
+                if (isExpanded) {
+                    for (const jobStat of item.jobStats) {
+                        const jobKey = `${item.manifest}|||${jobStat.jobName}`;
+                        const isJobExpanded = expandedJobs.has(jobKey);
+
+                        const jobRow = document.createElement('tr');
+                        jobRow.className = 'job-row';
+                        jobRow.onclick = (e) => {
+                            e.stopPropagation();
+                            toggleJob(item.manifest, jobStat.jobName);
+                        };
+
+                        const jobNameCell = document.createElement('td');
+                        jobNameCell.innerHTML = `
+                            <div class="job-name-wrapper">
+                                <span class="job-expand-icon${isJobExpanded ? ' expanded' : ''}"></span>
+                                <span class="job-name">${escapeHtml(jobStat.jobName)}</span>
+                            </div>
+                        `;
+                        jobRow.appendChild(jobNameCell);
+
+                        const jobTypeCell = document.createElement('td');
+                        jobTypeCell.textContent = '';
+                        jobRow.appendChild(jobTypeCell);
+
+                        const jobRunsCell = document.createElement('td');
+                        jobRunsCell.innerHTML = `<span class="time-value">${jobStat.runCount.toLocaleString()}</span>`;
+                        jobRow.appendChild(jobRunsCell);
+
+                        const jobMedianCell = document.createElement('td');
+                        jobMedianCell.innerHTML = `<span class="time-value">${formatDuration(jobStat.median)}</span>`;
+                        jobRow.appendChild(jobMedianCell);
+
+                        const jobMeanCell = document.createElement('td');
+                        jobMeanCell.innerHTML = `<span class="time-value">${formatDuration(jobStat.mean)}</span>`;
+                        jobRow.appendChild(jobMeanCell);
+
+                        tbody.appendChild(jobRow);
+
+                        // Chart row (if job expanded)
+                        if (isJobExpanded) {
+                            const chartRow = document.createElement('tr');
+                            chartRow.className = 'chart-row';
+
+                            const chartCell = document.createElement('td');
+                            chartCell.colSpan = 5;
+
+                            const chartId = `chart-${item.manifest.replace(/[^a-z0-9]/gi, '-')}-${jobStat.jobName.replace(/[^a-z0-9]/gi, '-')}`;
+                            chartCell.innerHTML = `<div id="${chartId}" style="height: 400px;"></div>`;
+                            chartRow.appendChild(chartCell);
+
+                            tbody.appendChild(chartRow);
+
+                            // Render chart after DOM update
+                            setTimeout(() => renderJobChart(chartId, item.manifest, jobStat), 0);
+                        }
+                    }
+                }
+            }
+
+            // Update pagination
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+            document.getElementById('btnPrev').disabled = currentPage === 1;
+            document.getElementById('btnNext').disabled = currentPage === totalPages;
+        }
+
+        function renderJobChart(chartId, manifestName, jobStat) {
+            const chartElement = document.getElementById(chartId);
+            if (!chartElement) return;
+
+            // Prepare data for scatter plot
+            const x = [];
+            const y = [];
+            const customData = [];
+
+            for (let i = 0; i < jobStat.runs.length; i++) {
+                const run = jobStat.runs[i];
+                x.push(i + 1);
+                y.push(run.duration);
+                customData.push({
+                    taskId: run.taskId,
+                    commit: run.commit,
+                    manifest: manifestName,
+                    jobName: jobStat.jobName,
+                    duration: run.duration,
+                    prefix: run.prefix
+                });
+            }
+
+            const trace = {
+                x: x,
+                y: y,
+                type: 'scatter',
+                mode: 'markers',
+                marker: {
+                    size: 8,
+                    color: '#0060df'
+                },
+                customdata: customData,
+                hovertemplate: '<b>Run %{x}</b><br>' +
+                               'Duration: %{y}ms<br>' +
+                               'Task: %{customdata.taskId}<br>' +
+                               '<br>' +
+                               '<i>Click: resource profile</i><br>' +
+                               '<i>Alt+Click: error summary</i>' +
+                               '<extra></extra>'
+            };
+
+            const layout = {
+                xaxis: { title: 'Run Number' },
+                yaxis: { title: 'Runtime (ms)' },
+                hovermode: 'closest',
+                margin: { l: 60, r: 40, t: 20, b: 60 }
+            };
+
+            Plotly.newPlot(chartId, [trace], layout, { responsive: true });
+
+            // Add click handler to open resource profile or error summary
+            chartElement.on('plotly_click', function(data) {
+                const point = data.points[0];
+                const cd = point.customdata;
+                const event = data.event;
+
+                if (event.altKey) {
+                    openErrorSummary(cd.taskId, cd.prefix);
+                } else {
+                    openResourceProfile(cd.taskId, cd.manifest, cd.jobName);
+                }
+            });
+        }
+
+        function openResourceProfile(taskId, manifestName, jobName) {
+            // Extract retry ID from task ID if present
+            const taskIdParts = taskId.split('.');
+            const baseTaskId = taskIdParts[0];
+            const retryId = taskIdParts[1] || '0';
+
+            // Construct the raw profile URL
+            const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${baseTaskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+            const profileName = `${jobName} (${taskId})`;
+            const profilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(manifestName)}`;
+
+            window.open(profilerUrl, '_blank');
+        }
+
+        function openErrorSummary(taskId, prefix) {
+            // Extract retry ID from task ID if present
+            const taskIdParts = taskId.split('.');
+            const baseTaskId = taskIdParts[0];
+            const retryId = taskIdParts[1] || '0';
+
+            // Construct the error summary URL with the prefix
+            const errorSummaryUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${baseTaskId}/runs/${retryId}/artifacts/public/test_info/${prefix}_errorsummary.log`;
+
+            window.open(errorSummaryUrl, '_blank');
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderTable();
+            }
+        }
+
+        function nextPage() {
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderTable();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return text.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        async function loadData() {
+            try {
+                document.getElementById('loadingMessage').style.display = 'block';
+                document.getElementById('contentArea').style.display = 'none';
+                document.getElementById('errorMessage').style.display = 'none';
+
+                const data = await fetchManifestData();
+
+                manifestData = {
+                    raw: data,
+                    processedData: processManifestData(data)
+                };
+
+                // Update stats
+                document.getElementById('statManifests').textContent = data.manifests.length.toLocaleString();
+                document.getElementById('statJobs').textContent = data.jobNames.length.toLocaleString();
+                document.getElementById('statRuns').textContent = data.runs.durations.length.toLocaleString();
+                document.getElementById('statDate').textContent = data.metadata.date || 'Unknown';
+
+                filteredData = manifestData.processedData;
+                currentPage = 1;
+                sortBy(currentSortColumn);
+                updateSortIndicators();
+
+                document.getElementById('loadingMessage').style.display = 'none';
+                document.getElementById('contentArea').style.display = 'block';
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('errorMessage').textContent = `Error: ${error.message}`;
+                document.getElementById('errorMessage').style.display = 'block';
+                document.getElementById('loadingMessage').style.display = 'none';
+            }
+        }
+
+        setupWindowResize();
+        loadData();
+    </script>
+</body>
+</html>
