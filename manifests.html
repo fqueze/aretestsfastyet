@@ -29,12 +29,38 @@
             font-size: 0.85rem;
         }
 
+        .search-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
         .search-input {
-            padding: 8px 12px;
+            padding: 8px 30px 8px 12px;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 0.9rem;
             min-width: 300px;
+        }
+
+        .clear-search {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #999;
+            font-size: 18px;
+            display: none;
+            user-select: none;
+            padding: 0 4px;
+        }
+
+        .clear-search:hover {
+            color: #333;
+        }
+
+        .clear-search.visible {
+            display: block;
         }
 
         .stats-grid {
@@ -247,16 +273,22 @@
         <div class="controls">
             <div class="control-group">
                 <label for="manifestSearch">Search Manifests:</label>
-                <input type="text" id="manifestSearch" class="search-input"
-                       placeholder="Filter by manifest path..."
-                       oninput="filterManifests()">
+                <div class="search-wrapper">
+                    <input type="text" id="manifestSearch" class="search-input"
+                           placeholder="Filter by manifest path..."
+                           oninput="updateClearButtons(); filterManifests()">
+                    <span class="clear-search" id="clearManifest" onclick="clearSearch('manifestSearch')">&times;</span>
+                </div>
             </div>
 
             <div class="control-group">
                 <label for="jobSearch">Filter Jobs:</label>
-                <input type="text" id="jobSearch" class="search-input"
-                       placeholder="Filter by job name..."
-                       oninput="filterManifests()">
+                <div class="search-wrapper">
+                    <input type="text" id="jobSearch" class="search-input"
+                           placeholder="Filter by job name..."
+                           oninput="updateClearButtons(); filterManifests()">
+                    <span class="clear-search" id="clearJob" onclick="clearSearch('jobSearch')">&times;</span>
+                </div>
             </div>
         </div>
 
@@ -480,6 +512,31 @@
             }
         }
 
+        function updateClearButtons() {
+            const manifestInput = document.getElementById('manifestSearch');
+            const jobInput = document.getElementById('jobSearch');
+            const clearManifest = document.getElementById('clearManifest');
+            const clearJob = document.getElementById('clearJob');
+
+            if (manifestInput.value) {
+                clearManifest.classList.add('visible');
+            } else {
+                clearManifest.classList.remove('visible');
+            }
+
+            if (jobInput.value) {
+                clearJob.classList.add('visible');
+            } else {
+                clearJob.classList.remove('visible');
+            }
+        }
+
+        function clearSearch(inputId) {
+            document.getElementById(inputId).value = '';
+            updateClearButtons();
+            filterManifests();
+        }
+
         function filterManifests() {
             const manifestSearch = document.getElementById('manifestSearch').value.toLowerCase();
             const jobSearch = document.getElementById('jobSearch').value.toLowerCase();
@@ -559,7 +616,14 @@
 
                 // Job rows (if expanded)
                 if (isExpanded) {
-                    for (const jobStat of item.jobStats) {
+                    const jobSearch = document.getElementById('jobSearch').value.toLowerCase();
+
+                    // Filter jobs based on job search
+                    const filteredJobs = jobSearch === ''
+                        ? item.jobStats
+                        : item.jobStats.filter(js => js.jobName.toLowerCase().includes(jobSearch));
+
+                    for (const jobStat of filteredJobs) {
                         const jobKey = `${item.manifest}|||${jobStat.jobName}`;
                         const isJobExpanded = expandedJobs.has(jobKey);
 
