@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mochitest Performance Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Mochitest Performance Visualization</h1>
+
+        <div class="controls">
+            <div style="display: flex; align-items: center; gap: 30px;">
+                <div class="btn-group">
+                    <button id="autoland-btn" class="active" onclick="switchRepository('autoland')">Autoland</button>
+                    <button id="mozilla-central-btn" onclick="switchRepository('mozilla-central')">Mozilla Central</button>
+                </div>
+
+                <div class="platform-links" style="display: flex; align-items: center;">
+                    <span style="margin-right: 15px; color: #666;">Jump to:</span>
+                    <a id="browser-chrome-link" href="#autoland-browser-chrome" style="margin-right: 15px;">Browser-Chrome</a>
+                    <a id="plain-link" href="#autoland-plain" style="margin-right: 15px;">Plain Mochitests</a>
+                    <a id="chrome-link" href="#autoland-chrome" style="margin-right: 15px;">Chrome Mochitests</a>
+                    <a id="devtools-link" href="#autoland-devtools">DevTools</a>
+                </div>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="charts" class="charts-grid">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        let allData = null;
+        let currentRepository = 'autoland';
+
+        const colors = {
+            'debug': '#ff6b6b',
+            'opt': '#4ecdc4',
+            'asan': '#9467bd',
+            'tsan': '#8c564b',
+            'ccov': '#e377c2',
+            'msix': '#17becf',
+            'condprof': '#ffa500',
+            'debug-isolated-process': '#ffa500'
+        };
+
+        const testTypes = {
+            'browser-chrome': 'Browser-Chrome Tests',
+            'plain': 'Plain Mochitests',
+            'chrome': 'Chrome Mochitests',
+            'devtools': 'DevTools Mochitests'
+        };
+
+        async function fetchData() {
+            try {
+                // Fetch data from all mochitest query endpoints
+                const queries = {
+                    'browser-chrome': 'https://sql.telemetry.mozilla.org/api/queries/113691/results.json?api_key=x7FfWc7vw22JB0QQRb50gjBlhcudTOowqUkt8J7z',
+                    'plain': 'https://sql.telemetry.mozilla.org/api/queries/114495/results.json?api_key=yCcLryNRMk8jfzIRkzExZ8IbR6kGCbeYQsiNJUuo',
+                    'chrome': 'https://sql.telemetry.mozilla.org/api/queries/114496/results.json?api_key=EXt76dtBNbATaJTPWkkmf61838BeovjyX39GpVZE',
+                    'devtools': 'https://sql.telemetry.mozilla.org/api/queries/114497/results.json?api_key=61AOVvs6JpWaKMqT5XTdkTd034ufkIEprO4Inqpo'
+                };
+
+                const results = {};
+                for (const [testType, url] of Object.entries(queries)) {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const result = await response.json();
+
+                    // Process the data to extract platform and build type from the name field
+                    results[testType] = result.query_result.data.rows.map(row => {
+                        // Extract platform from name
+                        const platform = extractPlatform(row.name);
+
+                        // Extract build type from name (opt or debug) and check for special variants
+                        const isDebug = row.name.includes('/debug-');
+                        const isAsan = row.name.includes('-asan');
+                        const isTsan = row.name.includes('-tsan');
+                        const isCcov = row.name.includes('-ccov');
+                        const isMsix = row.name.includes('-msix');
+                        const isCondprof = row.name.includes('-condprof');
+                        const isIsolatedProcess = row.name.includes('-isolated-process');
+                        let buildType;
+                        if (isAsan) {
+                            buildType = 'asan';
+                        } else if (isTsan) {
+                            buildType = 'tsan';
+                        } else if (isCcov) {
+                            buildType = 'ccov';
+                        } else if (isMsix) {
+                            buildType = 'msix';
+                        } else if (isCondprof) {
+                            buildType = 'condprof';
+                        } else if (isDebug && isIsolatedProcess) {
+                            buildType = 'debug-isolated-process';
+                        } else if (isDebug) {
+                            buildType = 'debug';
+                        } else {
+                            buildType = 'opt';
+                        }
+
+                        // Extract suite from name (part after the last slash and before any numbers)
+                        const suite = row.name.split('/').pop().replace(/-\d+$/, '');
+
+                        return {
+                            ...row,
+                            platform: platform,
+                            build_type: buildType,
+                            suite: suite,
+                            date: row.start_time,
+                            duration_seconds: row.time_seconds,
+                            task_id: row.task_id,
+                            retry_id: row.retry_id,
+                            name: row.name,
+                            machine_name: row.machine_name,
+                            test_type: testType
+                        };
+                    });
+                }
+
+                return results;
+            } catch (error) {
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                throw error;
+            }
+        }
+
+
+        function createTestScatterPlot(platformData, testType, platform) {
+            const section = document.createElement('div');
+            section.className = 'charts-section';
+
+            const header = document.createElement('h3');
+            header.id = `${currentRepository}-${testType}-${platform}-tests`;
+            header.textContent = `${platforms[platform]}`;
+            header.style.cursor = 'pointer';
+            section.appendChild(header);
+
+            const container = document.createElement('div');
+            container.className = 'chart-container';
+            container.id = `chart-${testType}-${platform}`;
+
+            // Check if this chart is targeted by URL hash
+            const hash = window.location.hash.substring(1);
+            const isTargeted = hash === `${currentRepository}-${testType}-${platform}-tests` ||
+                              hash === `${currentRepository}-${testType}`;
+
+            // Store platform and test type data for lazy loading
+            container.dataset.platform = platform;
+            container.dataset.testType = testType;
+
+            section.appendChild(container);
+
+            if (isTargeted) {
+                // Load immediately for hash-targeted charts (after adding to DOM)
+                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
+                createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
+                container.dataset.loaded = 'true';
+            } else {
+                // Add loading placeholder for lazy loading
+                container.innerHTML = '<div class="loading">Loading...</div>';
+                container.dataset.loaded = 'false';
+            }
+
+            return section;
+        }
+
+        let chartObserver = null;
+
+        function renderCharts() {
+            const chartsDiv = document.getElementById('charts');
+            chartsDiv.innerHTML = '';
+
+            // Disconnect existing observer
+            if (chartObserver) {
+                chartObserver.disconnect();
+            }
+
+            if (!allData) return;
+
+            // Store all data for lazy loading
+            window.currentAllData = allData;
+
+            // Create sections for each test type
+            Object.keys(testTypes).forEach(testType => {
+                const testTypeData = allData[testType];
+                if (!testTypeData || testTypeData.length === 0) return;
+
+                const filteredData = testTypeData.filter(d => d.repository === currentRepository);
+                if (filteredData.length === 0) return;
+
+                // Create main section for this test type
+                const mainSection = document.createElement('div');
+                mainSection.className = 'charts-section';
+                mainSection.style.marginBottom = '40px';
+
+                const mainHeader = document.createElement('h2');
+                mainHeader.id = `${currentRepository}-${testType}`;
+                mainHeader.textContent = testTypes[testType];
+                mainHeader.style.cursor = 'pointer';
+                mainSection.appendChild(mainHeader);
+
+                // Create subsections for each platform
+                Object.keys(platforms).forEach(platform => {
+                    const platformData = filteredData.filter(d => d.platform === platform);
+                    if (platformData.length > 0) {
+                        const platformSection = createTestScatterPlot(platformData, testType, platform);
+                        mainSection.appendChild(platformSection);
+                    }
+                });
+
+                chartsDiv.appendChild(mainSection);
+            });
+
+            // Set up intersection observer for lazy loading
+            setupChartObserver();
+        }
+
+        function setupChartObserver() {
+            const chartContainers = document.querySelectorAll('.chart-container[data-loaded="false"]');
+
+            if (chartContainers.length === 0) return;
+
+            chartObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting && entry.target.dataset.loaded === 'false') {
+                        loadChart(entry.target);
+                    }
+                });
+            }, {
+                rootMargin: '100px' // Start loading 100px before the chart comes into view
+            });
+
+            chartContainers.forEach(container => {
+                chartObserver.observe(container);
+            });
+        }
+
+        function loadChart(container) {
+            const platform = container.dataset.platform;
+            const testType = container.dataset.testType;
+            const testTypeData = window.currentAllData[testType];
+
+            if (!testTypeData) return;
+
+            const filteredData = testTypeData.filter(d => d.repository === currentRepository);
+            const platformData = filteredData.filter(d => d.platform === platform);
+
+            if (platformData.length > 0) {
+                container.innerHTML = ''; // Remove loading placeholder
+                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
+                createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
+                container.dataset.loaded = 'true';
+
+                // Stop observing this container
+                if (chartObserver) {
+                    chartObserver.unobserve(container);
+                }
+            }
+        }
+
+        function switchRepository(repo, updateHash = true) {
+            currentRepository = repo;
+
+            document.getElementById('autoland-btn').classList.toggle('active', repo === 'autoland');
+            document.getElementById('mozilla-central-btn').classList.toggle('active', repo === 'mozilla-central');
+
+            // Update test type link targets
+            Object.keys(testTypes).forEach(testType => {
+                document.getElementById(`${testType}-link`).href = `#${repo}-${testType}`;
+            });
+
+            renderCharts();
+
+            // Update URL hash
+            if (updateHash) {
+                const hash = window.location.hash.substring(1);
+                if (hash) {
+                    // Extract test type from current hash
+                    let testType = '';
+                    if (hash.startsWith('autoland-')) {
+                        testType = hash.slice(9);
+                    } else if (hash.startsWith('mozilla-central-')) {
+                        testType = hash.slice(16);
+                    }
+                    window.location.hash = testType ? `${repo}-${testType}` : '';
+                } else {
+                    window.location.hash = '';
+                }
+            }
+        }
+
+
+        async function initialize() {
+            try {
+                // Parse initial hash for test type
+                const hash = window.location.hash.substring(1);
+                let repository = 'autoland';
+                let testType = '';
+
+                if (hash) {
+                    if (hash.startsWith('mozilla-central-')) {
+                        repository = 'mozilla-central';
+                        testType = hash.slice(16);
+                    } else if (hash.startsWith('autoland-')) {
+                        repository = 'autoland';
+                        testType = hash.slice(9);
+                    }
+                }
+
+                currentRepository = repository;
+                document.getElementById('autoland-btn').classList.toggle('active', repository === 'autoland');
+                document.getElementById('mozilla-central-btn').classList.toggle('active', repository === 'mozilla-central');
+
+                allData = await fetchData();
+                renderCharts();
+
+                // Scroll to specific test type if specified in hash
+                if (testType) {
+                    setTimeout(() => {
+                        const element = document.getElementById(`${repository}-${testType}`);
+                        if (element) {
+                            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                    }, 500);
+                }
+            } catch (error) {
+                console.error('Failed to initialize:', error);
+            }
+        }
+
+        // Setup event handlers
+        handleHashChange((repo, updateHash) => switchRepository(repo, updateHash));
+        setupWindowResize();
+
+        // Add click handler for h2 and h3 headers to update URL hash
+        document.addEventListener('click', function(event) {
+            if ((event.target.tagName === 'H2' || event.target.tagName === 'H3') && event.target.id) {
+                window.location.hash = event.target.id;
+            }
+        });
+
+        initialize();
+    </script>
+</body>
+</html>
