@@ -247,19 +247,19 @@
 
                 if (testName === undefined) return;
 
-                const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.hours !== undefined;
+                const isBucketedFormat = statusGroup.taskIdIds !== undefined && statusGroup.days !== undefined;
 
                 // Group crashes by signature with crash instances
                 const crashesBySignature = new Map();
 
                 if (isBucketedFormat) {
                     // Bucketed format with array of arrays - extract individual crash instances
-                    // Decompress hours to get timestamps (hours from start)
+                    // Decompress days to get timestamps (days from start)
                     const decompressedTimestamps = [];
-                    let cumulativeHours = 0;
-                    for (let i = 0; i < statusGroup.hours.length; i++) {
-                        cumulativeHours += statusGroup.hours[i];
-                        decompressedTimestamps.push((currentData.metadata.startTime + cumulativeHours * 3600) * 1000);
+                    let cumulativeDays = 0;
+                    for (let i = 0; i < statusGroup.days.length; i++) {
+                        cumulativeDays += statusGroup.days[i];
+                        decompressedTimestamps.push((currentData.metadata.startTime + cumulativeDays * 86400) * 1000);
                     }
 
                     statusGroup.crashSignatureIds.forEach((sigId, index) => {

@@ -64,12 +64,11 @@ function calculateDailyRates(options) {
             // Skip if this status doesn't match what we're looking for
             if (!status.startsWith(statusName)) continue;
 
-            // Historical data uses bucketed format with hours
-            if (statusGroup.taskIdIds && statusGroup.hours) {
-                let currentHour = 0;
-                for (let i = 0; i < statusGroup.hours.length; i++) {
-                    currentHour += statusGroup.hours[i];
-                    const day = Math.floor(currentHour / 24);
+            // Historical data uses bucketed format with days
+            if (statusGroup.taskIdIds && statusGroup.days) {
+                let day = 0;
+                for (let i = 0; i < statusGroup.days.length; i++) {
+                    day += statusGroup.days[i];
                     if (day < days) {
                         const bucket = statusGroup.taskIdIds[i];
                         const count = bucket.length;
@@ -118,11 +117,11 @@ function getTestTotalRuns(historicalData, dirPath, testName) {
                 const status = historicalData.tables.statuses[statusId];
                 if (status === 'SKIP' || status.startsWith('SKIP')) continue;
 
-                if (statusGroup.taskIdIds && statusGroup.hours) {
+                if (statusGroup.taskIdIds && statusGroup.days) {
                     for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                         totalRuns += statusGroup.taskIdIds[i].length;
                     }
-                } else if (statusGroup.counts && statusGroup.hours) {
+                } else if (statusGroup.counts && statusGroup.days) {
                     for (let i = 0; i < statusGroup.counts.length; i++) {
                         totalRuns += statusGroup.counts[i];
                     }
@@ -168,11 +167,10 @@ function countDailyRunsForTests(historicalData, testIds, targetValueId, valueFie
 
             const status = historicalData.tables.statuses[statusId];
 
-            if (statusGroup.taskIdIds && statusGroup.hours) {
-                let currentHour = 0;
-                for (let i = 0; i < statusGroup.hours.length; i++) {
-                    currentHour += statusGroup.hours[i];
-                    const day = Math.floor(currentHour / 24);
+            if (statusGroup.taskIdIds && statusGroup.days) {
+                let day = 0;
+                for (let i = 0; i < statusGroup.days.length; i++) {
+                    day += statusGroup.days[i];
                     if (day < days) {
                         const count = statusGroup.taskIdIds[i].length;
 
@@ -188,11 +186,10 @@ function countDailyRunsForTests(historicalData, testIds, targetValueId, valueFie
                         }
                     }
                 }
-            } else if (statusGroup.counts && statusGroup.hours) {
-                let currentHour = 0;
-                for (let i = 0; i < statusGroup.hours.length; i++) {
-                    currentHour += statusGroup.hours[i];
-                    const day = Math.floor(currentHour / 24);
+            } else if (statusGroup.counts && statusGroup.days) {
+                let day = 0;
+                for (let i = 0; i < statusGroup.days.length; i++) {
+                    day += statusGroup.days[i];
                     if (day < days) {
                         const count = statusGroup.counts[i];
 
