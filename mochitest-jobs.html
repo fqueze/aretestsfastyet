@@ -69,7 +69,7 @@
                 };
 
                 const results = {};
-                for (const [testType, url] of Object.entries(queries)) {
+                await Promise.all(Object.entries(queries).map(async ([testType, url]) => {
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const result = await response.json();
@@ -123,7 +123,7 @@
                             test_type: testType
                         };
                     });
-                }
+                }));
 
                 return results;
             } catch (error) {
