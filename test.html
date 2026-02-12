@@ -1,0 +1,2075 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Info</title>
+    <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .test-header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .test-header h1 {
+            margin: 0 0 8px 0;
+            font-family: monospace;
+            font-size: 22px;
+            word-break: break-all;
+        }
+
+        .test-path-line {
+            font-family: monospace;
+            font-size: 13px;
+            color: #555;
+            word-break: break-all;
+            margin-bottom: 6px;
+        }
+
+        .test-path-line a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .test-path-line a:hover {
+            text-decoration: underline;
+        }
+
+        .copy-btn {
+            background: none;
+            border: 1px solid #ddd;
+            cursor: pointer;
+            padding: 2px 6px;
+            margin-left: 8px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            vertical-align: middle;
+        }
+
+        .copy-btn:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .component-line {
+            font-size: 13px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .harness-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .harness-xpcshell {
+            background-color: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .harness-mochitest {
+            background-color: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .summary-stats {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .summary-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 80px;
+        }
+
+        .summary-stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .summary-stat-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .summary-stat-value.fail { color: #d00; }
+        .summary-stat-value.timeout { color: #f60; }
+        .summary-stat-value.skip { color: #888; }
+        .summary-stat-value.zero { color: #ccc; }
+        .summary-stat-value.good { color: #28a745; }
+
+        .section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .section h2 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #333;
+            cursor: default;
+        }
+
+        .section h2::before {
+            content: none;
+        }
+
+        .platform-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .platform-table th {
+            text-align: left;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+        }
+
+        .platform-table th.num {
+            text-align: right;
+        }
+
+        .platform-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .platform-table td.num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .platform-table td.fail { color: #d00; font-weight: bold; }
+        .platform-table td.timeout { color: #f60; font-weight: bold; }
+        .platform-table td.crash { color: #d00; font-weight: bold; }
+
+        .platform-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .platform-table tfoot td {
+            font-weight: bold;
+            background: #f8f9fa;
+            border-top: 2px solid #ddd;
+        }
+
+        .timing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .timing-card {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .timing-card-platform {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .timing-card-values {
+            display: flex;
+            justify-content: space-around;
+            gap: 8px;
+        }
+
+        .timing-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .timing-value {
+            font-weight: bold;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .timing-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #888;
+        }
+
+        .chart-container {
+            min-height: 400px;
+        }
+
+        .chart-container-small {
+            min-height: 300px;
+        }
+
+        /* Issue details styles (adapted from issues.html) */
+        .issue-section {
+            margin-bottom: 20px;
+        }
+
+        .issue-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .issue-section h4 {
+            margin: 0 0 10px 0;
+            font-size: 13px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .issue-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .issue-item:hover {
+            background-color: #e9ecef;
+        }
+
+        .issue-item:hover .action-button {
+            opacity: 1;
+        }
+
+        .issue-item:last-child {
+            border-bottom: none;
+        }
+
+        .issue-runs {
+            margin-left: 50px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .issue-run-item {
+            padding: 3px 0;
+        }
+
+        .issue-run-item .view-links {
+            margin-left: 20px;
+            color: black;
+        }
+
+        .issue-run-item a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .issue-run-item a:hover {
+            text-decoration: underline;
+        }
+
+        .issue-count {
+            font-weight: bold;
+            margin-right: 10px;
+            min-width: 30px;
+            text-align: right;
+            flex-shrink: 0;
+            color: #333;
+        }
+
+        .issue-badge {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-right: 10px;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+
+        .badge-pass { background-color: #28a745; color: #fff; }
+        .badge-skip { background-color: #6c757d; color: #fff; }
+        .badge-fail { background-color: #ff8c00; color: #fff; }
+        .badge-crash { background-color: #dc3545; color: #fff; }
+        .badge-timeout { background-color: #ffc107; color: #000; }
+
+        .issue-message {
+            flex: 1;
+            color: #333;
+            line-height: 1.4;
+            word-break: break-word;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 6px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .action-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .status-line {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        /* Daily rate chart styles (Chart.js) */
+        .historical-chart {
+            margin: 0;
+            padding: 0;
+        }
+
+        .historical-chart-canvas {
+            max-height: 100px;
+            height: 100px;
+            width: 100%;
+        }
+
+        .historical-chart-canvas.skips-canvas {
+            max-height: 70px;
+            height: 70px;
+        }
+
+        .historical-chart-canvas.no-x-axis {
+            max-height: 60px;
+            height: 60px;
+        }
+
+        .job-table {
+            width: auto;
+        }
+
+        .job-table td {
+            padding: 4px 8px;
+        }
+
+        .job-cell {
+            white-space: nowrap;
+            line-height: 1.4;
+        }
+
+        .job-cell .issue-badge {
+            margin-right: 0;
+        }
+
+        .job-cell br + .issue-badge {
+            margin-top: 1px;
+        }
+
+        .job-na {
+            color: #ccc;
+            display: inline-block;
+            padding: 2px 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading" class="loading">Loading test data...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="content" style="display: none;"></div>
+    </div>
+
+    <script>
+        let currentData = null;
+
+        // Format duration in milliseconds to human readable
+        function formatDurationMs(ms, hasData = true) {
+            if (!hasData || ms === 0) {
+                return '\u2014';  // Em dash for no data
+            }
+            if (ms < 1000) {
+                return `${Math.round(ms)}ms`;
+            } else if (ms < 60000) {
+                return `${(ms / 1000).toFixed(1)}s`;
+            } else if (ms < 3600000) {
+                const minutes = Math.floor(ms / 60000);
+                const seconds = Math.floor((ms % 60000) / 1000);
+                if (seconds === 0) {
+                    return `${minutes}m`;
+                }
+                return `${minutes}m ${seconds}s`;
+            } else if (ms < 86400000) {
+                const hours = Math.floor(ms / 3600000);
+                const minutes = Math.floor((ms % 3600000) / 60000);
+                if (minutes === 0) {
+                    return `${hours}h`;
+                }
+                return `${hours}h ${minutes}m`;
+            } else {
+                const days = Math.floor(ms / 86400000);
+                const hours = Math.floor((ms % 86400000) / 3600000);
+                if (hours === 0) {
+                    return `${days}d`;
+                }
+                return `${days}d ${hours}h`;
+            }
+        }
+
+        // Detect harness type from test file name
+        function detectHarness(testPath) {
+            const fileName = testPath.split('/').pop();
+            if (fileName.startsWith('browser_') && fileName.endsWith('.js')) {
+                return 'mochitest';
+            }
+            if (fileName.startsWith('test_') && fileName.endsWith('.html')) {
+                return 'mochitest';
+            }
+            if (fileName.startsWith('test_') && fileName.endsWith('.js')) {
+                return 'xpcshell';
+            }
+            // Default to xpcshell
+            return 'xpcshell';
+        }
+
+        // Get count for a specific index in a statusGroup, handling all formats
+        function getCountAtIndex(statusGroup, index) {
+            if (statusGroup.counts !== undefined) {
+                return statusGroup.counts[index];
+            } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                return statusGroup.taskIdIds[index].length;
+            } else {
+                return 1;
+            }
+        }
+
+        // Iterate over all taskIdIndexes in a statusGroup
+        function forEachTaskId(statusGroup, callback) {
+            if (!statusGroup.taskIdIds) return;
+            const isBucketedFormat = statusGroup.days !== undefined;
+            if (isBucketedFormat) {
+                for (const bucket of statusGroup.taskIdIds) {
+                    for (const taskIdIndex of bucket) {
+                        callback(taskIdIndex);
+                    }
+                }
+            } else {
+                for (const taskIdIndex of statusGroup.taskIdIds) {
+                    callback(taskIdIndex);
+                }
+            }
+        }
+
+        // Iterate by index, then for each matching index, iterate taskIds in that bucket
+        function forEachMatchingTaskId(statusGroup, matchFn, callback) {
+            if (!statusGroup.taskIdIds) return;
+            const isBucketedFormat = statusGroup.days !== undefined;
+            if (isBucketedFormat) {
+                for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                    if (matchFn(i)) {
+                        const bucket = statusGroup.taskIdIds[i];
+                        for (const taskIdIndex of bucket) {
+                            callback(taskIdIndex, i);
+                        }
+                    }
+                }
+            } else {
+                for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                    if (matchFn(i)) {
+                        callback(statusGroup.taskIdIds[i], i);
+                    }
+                }
+            }
+        }
+
+        // Helper to truncate long messages
+        function truncateMessage(message, maxLength = 100) {
+            if (!message) return '';
+            const firstLine = message.split('\n')[0];
+            if (firstLine.length > maxLength) {
+                return firstLine.substring(0, maxLength) + '...';
+            } else if (message.includes('\n')) {
+                return firstLine + '...';
+            }
+            return firstLine;
+        }
+
+        // Placeholder message for failures without recorded details
+        const FAILURE_NO_MESSAGE = 'Failure details not recorded (likely Android or platform logging issue)';
+
+        // Find test in data by matching full path
+        function findTest(data, testPath) {
+            if (!data.testRuns || !data.tables || !data.testInfo) return null;
+
+            for (let testId = 0; testId < data.testRuns.length; testId++) {
+                const testGroup = data.testRuns[testId];
+                if (!testGroup) continue;
+
+                const dirPath = data.tables.testPaths[data.testInfo.testPathIds[testId]];
+                const testName = data.tables.testNames[data.testInfo.testNameIds[testId]];
+                const fullPath = dirPath ? `${dirPath}/${testName}` : testName;
+
+                if (fullPath === testPath) {
+                    const componentId = data.testInfo.componentIds ? data.testInfo.componentIds[testId] : null;
+                    const component = (componentId !== null && data.tables.components) ? data.tables.components[componentId] : null;
+                    return { testId, fullPath, component };
+                }
+            }
+            return null;
+        }
+
+        // Compute statistics for a test
+        function computeTestStats(testId) {
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) {
+                return { runCount: 0, skipCount: 0, passCount: 0, failCount: 0, timeoutCount: 0, crashCount: 0, max: 0, min: 0, totalDuration: 0 };
+            }
+
+            let skipCount = 0, timeoutCount = 0, failCount = 0, crashCount = 0, passCount = 0;
+            let maxDuration = 0, minDuration = Infinity, totalDuration = 0;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+
+                let runCount = 0;
+                if (statusGroup.counts !== undefined) {
+                    runCount = statusGroup.counts.reduce((sum, count) => sum + count, 0);
+                } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                    runCount = statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
+                } else if (statusGroup.taskIdIds) {
+                    runCount = statusGroup.taskIdIds.length;
+                }
+
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status && status.startsWith('TIMEOUT');
+                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL', 'OK'].includes(status);
+
+                if (isSkip) {
+                    if (statusGroup.messageIds) {
+                        for (let i = 0; i < statusGroup.messageIds.length; i++) {
+                            const messageId = statusGroup.messageIds[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            if (!message || !message.startsWith('run-if')) {
+                                skipCount += getCountAtIndex(statusGroup, i);
+                            }
+                        }
+                    } else {
+                        skipCount += runCount;
+                    }
+                } else if (isCrash) {
+                    crashCount += runCount;
+                } else if (isTimeout) {
+                    timeoutCount += runCount;
+                } else if (status === 'UNKNOWN') {
+                    if (statusGroup.durations) {
+                        for (const duration of statusGroup.durations) {
+                            if (duration < 100) {
+                                skipCount++;
+                            } else if (duration > 300000) {
+                                timeoutCount++;
+                            } else {
+                                passCount++;
+                                totalDuration += duration;
+                                if (duration > maxDuration) maxDuration = duration;
+                                if (duration < minDuration) minDuration = duration;
+                            }
+                        }
+                    } else {
+                        passCount += runCount;
+                    }
+                } else if (isFail) {
+                    failCount += runCount;
+                } else {
+                    // PASS, EXPECTED-FAIL, PASS-PARALLEL, PASS-SEQUENTIAL, OK
+                    passCount += runCount;
+                    if (statusGroup.durations) {
+                        for (const duration of statusGroup.durations) {
+                            totalDuration += duration;
+                            if (duration > maxDuration) maxDuration = duration;
+                            if (duration < minDuration) minDuration = duration;
+                        }
+                    }
+                }
+            }
+
+            const totalRunCount = timeoutCount + failCount + crashCount + passCount;
+            if (minDuration === Infinity) minDuration = 0;
+
+            return {
+                runCount: totalRunCount,
+                skipCount,
+                passCount,
+                failCount,
+                timeoutCount,
+                crashCount,
+                max: maxDuration,
+                min: minDuration,
+                totalDuration,
+                passPercentage: totalRunCount > 0 ? Math.round((passCount / totalRunCount) * 10000) / 100 : 0
+            };
+        }
+
+        // Calculate platform breakdown for a test (issues only - passes are in aggregated format without taskIdIds)
+        function calculateTestPlatformBreakdown(testId) {
+            const platforms = {};
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return platforms;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup || !statusGroup.taskIdIds) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status && status.startsWith('TIMEOUT');
+                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL', 'OK'].includes(status);
+
+                // Only interested in issues (failures, timeouts, crashes, skips)
+                if (!isSkip && !isCrash && !isTimeout && !isFail) continue;
+
+                const isBucketedFormat = statusGroup.days !== undefined;
+
+                const processTaskId = (taskIdIndex, isSkipRunIf) => {
+                    if (isSkipRunIf) return;
+                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                    const platform = extractPlatform(jobName) || 'unknown';
+                    if (!platforms[platform]) platforms[platform] = { skips: 0, failures: 0, timeouts: 0, crashes: 0 };
+                    if (isSkip) platforms[platform].skips++;
+                    else if (isCrash) platforms[platform].crashes++;
+                    else if (isTimeout) platforms[platform].timeouts++;
+                    else if (isFail) platforms[platform].failures++;
+                };
+
+                if (isBucketedFormat) {
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        const bucket = statusGroup.taskIdIds[i];
+                        const isRunIf = isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if');
+                        for (const taskIdIndex of bucket) {
+                            processTaskId(taskIdIndex, isRunIf);
+                        }
+                    }
+                } else {
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        const isRunIf = isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if');
+                        processTaskId(statusGroup.taskIdIds[i], isRunIf);
+                    }
+                }
+            }
+            return platforms;
+        }
+
+        // Calculate platform timing breakdown
+        function calculateTestPlatformTimingBreakdown(testId) {
+            const platforms = {};
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return platforms;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                const isPass = status && status.startsWith('PASS');
+                const isBucketedFormat = statusGroup.days !== undefined;
+
+                if (isPass && statusGroup.taskIdIds && !isBucketedFormat && statusGroup.durations) {
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        const taskIdIndex = statusGroup.taskIdIds[i];
+                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                        const platform = extractPlatform(jobName) || 'unknown';
+                        const duration = statusGroup.durations[i];
+
+                        if (!platforms[platform]) {
+                            platforms[platform] = { min: Infinity, max: 0, total: 0, count: 0 };
+                        }
+                        platforms[platform].total += duration;
+                        platforms[platform].count++;
+                        platforms[platform].min = Math.min(platforms[platform].min, duration);
+                        platforms[platform].max = Math.max(platforms[platform].max, duration);
+                    }
+                }
+            }
+
+            Object.keys(platforms).forEach(platform => {
+                const p = platforms[platform];
+                p.avg = p.count > 0 ? p.total / p.count : 0;
+                if (p.min === Infinity) p.min = 0;
+            });
+
+            return platforms;
+        }
+
+        // Get test runs for Plotly charts (adapted from xpcshell-timings.html)
+        function getTestRuns(testId) {
+            const testGroup = currentData.testRuns[testId];
+            const runs = [];
+            const startTime = (currentData.metadata.startTime || 0) * 1000;
+
+            if (!testGroup) return runs;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+
+                // Need taskIdIds for individual run data
+                if (!statusGroup.taskIdIds) continue;
+                const isBucketedFormat = statusGroup.days !== undefined;
+                if (isBucketedFormat) continue; // Can't create individual runs from bucketed format
+
+                const runCount = statusGroup.taskIdIds.length;
+
+                // Decompress differential timestamps
+                const decompressedTimestamps = [];
+                if (statusGroup.timestamps && statusGroup.timestamps.length > 0) {
+                    let currentTimestamp = 0;
+                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                        currentTimestamp += statusGroup.timestamps[i];
+                        decompressedTimestamps.push(currentTimestamp);
+                    }
+                }
+
+                for (let i = 0; i < runCount; i++) {
+                    const duration = statusGroup.durations ? statusGroup.durations[i] : 0;
+                    const taskIdIndex = statusGroup.taskIdIds[i];
+                    const taskIdString = currentData.tables.taskIds[taskIdIndex];
+                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+
+                    const run = {
+                        duration,
+                        repository: currentData.tables.repositories[currentData.taskInfo.repositoryIds[taskIdIndex]],
+                        jobName,
+                        taskIdString,
+                        status,
+                        timestamp: startTime + ((decompressedTimestamps[i] || 0) * 1000),
+                        isFail: status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL'].includes(status),
+                        isSkip: status === 'SKIP',
+                        isTimeout: (status && status.startsWith('TIMEOUT')) || (status === 'UNKNOWN' && duration > 300000)
+                    };
+
+                    if (status === 'CRASH' && statusGroup.crashSignatureIds && statusGroup.minidumps) {
+                        const crashSigId = statusGroup.crashSignatureIds[i];
+                        run.crashSignature = crashSigId !== null ? currentData.tables.crashSignatures[crashSigId] : null;
+                        run.minidump = statusGroup.minidumps[i];
+                    }
+
+                    if (status && status.startsWith('FAIL') && statusGroup.messageIds) {
+                        const messageId = statusGroup.messageIds[i];
+                        run.failureMessage = messageId !== null ? currentData.tables.messages[messageId] : null;
+                    }
+
+                    runs.push(run);
+                }
+            }
+
+            return runs;
+        }
+
+        // Get skip message counts
+        function getSkipMessageCounts(testId) {
+            const messageCounts = new Map();
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) return [];
+
+            const testGroup = currentData.testRuns[testId];
+            const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
+            if (skipStatusId === -1) return [];
+
+            const statusGroup = testGroup[skipStatusId];
+            if (!statusGroup || !statusGroup.messageIds) return [];
+
+            statusGroup.messageIds.forEach((messageId, i) => {
+                if (messageId !== null) {
+                    const message = currentData.tables.messages[messageId];
+                    if (message && !message.startsWith('run-if')) {
+                        const count = getCountAtIndex(statusGroup, i);
+                        messageCounts.set(message, (messageCounts.get(message) || 0) + count);
+                    }
+                }
+            });
+
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
+        // Get failure message counts
+        function getFailureMessageCounts(testId) {
+            const messageCounts = new Map();
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) return [];
+
+            const testGroup = currentData.testRuns[testId];
+            const failStatusIds = currentData.tables.statuses
+                .map((status, idx) => status.startsWith('FAIL') ? idx : -1)
+                .filter(idx => idx !== -1);
+            if (failStatusIds.length === 0) return [];
+
+            failStatusIds.forEach(statusId => {
+                const statusGroup = testGroup[statusId];
+                if (statusGroup && statusGroup.messageIds) {
+                    statusGroup.messageIds.forEach((messageId, i) => {
+                        if (messageId !== null) {
+                            const message = currentData.tables.messages[messageId];
+                            if (message) {
+                                const count = getCountAtIndex(statusGroup, i);
+                                messageCounts.set(message, (messageCounts.get(message) || 0) + count);
+                            }
+                        }
+                    });
+                }
+            });
+
+            return Array.from(messageCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([message, count]) => ({ message, count }));
+        }
+
+        // Get crash data
+        function getCrashData(testId) {
+            if (!currentData || !currentData.testRuns || !currentData.testRuns[testId]) {
+                return { signatures: [] };
+            }
+
+            const testGroup = currentData.testRuns[testId];
+            const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+            if (crashStatusId === -1) return { signatures: [] };
+
+            const statusGroup = testGroup[crashStatusId];
+            if (!statusGroup || !statusGroup.crashSignatureIds) return { signatures: [] };
+
+            const signatureCounts = new Map();
+            statusGroup.crashSignatureIds.forEach((sigId, i) => {
+                if (sigId !== null) {
+                    const signature = currentData.tables.crashSignatures[sigId];
+                    if (signature) {
+                        const count = getCountAtIndex(statusGroup, i);
+                        signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + count);
+                    }
+                }
+            });
+
+            return {
+                signatures: Array.from(signatureCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([signature, count]) => ({ signature, count }))
+            };
+        }
+
+        // Create run info for issue detail expansion
+        function createRunInfo(taskIdIndex, issueType, testPath, minidump) {
+            const taskIdString = currentData.tables.taskIds[taskIdIndex];
+            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            const [taskId, retryId] = taskIdString.split('.');
+
+            const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+            const profileName = `${jobName} (${taskIdString})`;
+            const testName = testPath.split('/').pop();
+            const profileLink = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+
+            let crashLink = null;
+            if (issueType === 'CRASH' && minidump) {
+                const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${minidump}.json`;
+                crashLink = `crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`;
+            }
+
+            const treeherderLink = getTreeherderJobUrl({ taskId, retryId }, currentData);
+
+            return { jobName, profileLink, crashLink, taskIdString, issueType, treeherderLink };
+        }
+
+        // Get runs for a specific issue
+        function getIssueRuns(testId, testPath, issueType, issueMessage) {
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return '<div class="issue-run-item">No run data available</div>';
+
+            const runs = [];
+
+            if (issueType === 'SKIP') {
+                const skipStatusId = currentData.tables.statuses.indexOf('SKIP');
+                if (skipStatusId !== -1) {
+                    const statusGroup = testGroup[skipStatusId];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            const displayMessage = message ? message.replace(/^skip-if:\s*/, '') : '';
+                            return displayMessage === issueMessage;
+                        }, (taskIdIndex) => {
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, null));
+                        });
+                    }
+                }
+            } else if (issueType === 'FAIL') {
+                const failStatusIds = currentData.tables.statuses
+                    .map((status, idx) => status.startsWith('FAIL') ? idx : -1)
+                    .filter(idx => idx !== -1);
+                failStatusIds.forEach(statusId => {
+                    const statusGroup = testGroup[statusId];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
+                            return message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE);
+                        }, (taskIdIndex) => {
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, null));
+                        });
+                    }
+                });
+            } else if (issueType === 'CRASH') {
+                const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
+                if (crashStatusId !== -1) {
+                    const statusGroup = testGroup[crashStatusId];
+                    if (statusGroup) {
+                        forEachMatchingTaskId(statusGroup, (i) => {
+                            const sigId = statusGroup.crashSignatureIds?.[i];
+                            const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
+                            return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
+                        }, (taskIdIndex, i) => {
+                            const minidump = statusGroup.minidumps?.[i];
+                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, minidump));
+                        });
+                    }
+                }
+            } else if (issueType === 'TIMEOUT') {
+                currentData.tables.statuses.forEach((status, statusId) => {
+                    if (status && status.startsWith('TIMEOUT')) {
+                        const statusGroup = testGroup[statusId];
+                        if (statusGroup) {
+                            forEachTaskId(statusGroup, (taskIdIndex) => {
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, null));
+                            });
+                        }
+                    }
+                });
+            }
+
+            if (runs.length === 0) {
+                return '<div class="issue-run-item">No matching runs found</div>';
+            }
+
+            return runs.map(run => {
+                const mainLink = (run.issueType === 'CRASH' && run.crashLink) ? run.crashLink : run.profileLink;
+                const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${escapeHtml(run.jobName)}</a>` : escapeHtml(run.jobName);
+
+                const links = [];
+                if (run.profileLink) links.push(`<a href="${run.profileLink}" target="_blank">Profile</a>`);
+                if (run.crashLink) links.push(`<a href="${run.crashLink}" target="_blank">Crash</a>`);
+                if (run.treeherderLink) links.push(`<a href="${run.treeherderLink}" target="_blank">Job</a>`);
+                const viewLinks = links.length > 0 ? `<span class="view-links">View: ${links.join(' ')}</span>` : '';
+
+                return `<div class="issue-run-item">${jobNameLink} ${viewLinks}</div>`;
+            }).join('');
+        }
+
+        // Toggle issue runs expansion
+        function toggleIssueRuns(issueItem, event) {
+            event.stopPropagation();
+
+            const issueId = issueItem.dataset.issueId;
+            const runsDiv = document.getElementById(`${issueId}-runs`);
+
+            if (runsDiv.style.display === 'none') {
+                const testId = parseInt(issueItem.dataset.testId);
+                const testPath = issueItem.dataset.testPath;
+                const issueType = issueItem.dataset.issueType;
+                const issueMessage = issueItem.dataset.issueMessage.replace(/&quot;/g, '"');
+
+                runsDiv.innerHTML = getIssueRuns(testId, testPath, issueType, issueMessage);
+                runsDiv.style.display = 'block';
+            } else {
+                runsDiv.style.display = 'none';
+            }
+        }
+
+        // Copy to clipboard
+        function copyTestPath(testPath) {
+            const button = event.target;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(testPath).then(() => {
+                    showCopySuccess(button);
+                }).catch(() => {
+                    fallbackCopy(testPath, button);
+                });
+            } else {
+                fallbackCopy(testPath, button);
+            }
+        }
+
+        function fallbackCopy(text, button) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                if (document.execCommand('copy')) {
+                    showCopySuccess(button);
+                }
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+            document.body.removeChild(textArea);
+        }
+
+        function showCopySuccess(button) {
+            const original = button.textContent;
+            button.textContent = '\u2713';
+            button.style.color = '#28a745';
+            setTimeout(() => {
+                button.textContent = original;
+                button.style.color = '';
+            }, 1000);
+        }
+
+        // Wait for Plotly to load
+        async function waitForPlotly() {
+            if (typeof Plotly !== 'undefined') return;
+            await new Promise(resolve => {
+                const check = setInterval(() => {
+                    if (typeof Plotly !== 'undefined') {
+                        clearInterval(check);
+                        resolve();
+                    }
+                }, 50);
+            });
+        }
+
+        // Render the Plotly scatter charts (adapted from xpcshell-timings.html)
+        async function renderCharts(testId, testPath) {
+            await waitForPlotly();
+
+            const runs = getTestRuns(testId);
+            if (runs.length === 0) {
+                return;
+            }
+
+            // Show the charts section
+            document.getElementById('charts-section').style.display = 'block';
+
+            const plotlyClickHandler = function(data) {
+                if (data.points.length > 0) {
+                    const point = data.points[0];
+                    const { taskIdString, jobName } = point.customdata;
+                    const [taskId, retryId] = taskIdString.split('.');
+                    const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+                    const profileName = `${jobName} (${taskIdString})`;
+                    const testName = testPath.split('/').pop();
+                    const profilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+                    window.open(profilerUrl, '_blank');
+                }
+            };
+
+            const platformColors = {
+                'android': '#8e44ad',
+                'linux': '#1f77b4',
+                'windows': '#ff7f0e',
+                'mac': '#9467bd',
+                'unknown': '#7f7f7f'
+            };
+            const failureColor = '#d62728';
+
+            // Prepare traces
+            const traces = {};
+            const timeoutTraces = {};
+            const crashTraces = {};
+            let hasTimeouts = false;
+            let hasCrashes = false;
+
+            runs.forEach(run => {
+                if (run.isSkip) return;
+                const platform = extractPlatform(run.jobName) || 'unknown';
+
+                if (run.status === 'CRASH') {
+                    hasCrashes = true;
+                    if (!crashTraces[platform]) {
+                        crashTraces[platform] = {
+                            x: [], y: [], mode: 'markers', type: 'scatter',
+                            name: `${platform} (crash)`,
+                            marker: { color: platformColors[platform], size: 8, opacity: 0.7 },
+                            customdata: [],
+                            hovertemplate: '<b>%{customdata.jobName}</b><br>Signature: %{customdata.signature}<br>Repository: %{customdata.repository}<br>Duration: %{customdata.durationStr}<br>Date: %{customdata.dateStr}<br><i>Click to view crash report</i><br><extra></extra>'
+                        };
+                    }
+                    crashTraces[platform].x.push(new Date(run.timestamp));
+                    crashTraces[platform].y.push(run.duration / 1000);
+                    crashTraces[platform].customdata.push({
+                        repository: run.repository, taskIdString: run.taskIdString,
+                        jobName: run.jobName, signature: run.crashSignature || 'Unknown',
+                        minidump: run.minidump,
+                        durationStr: formatDurationMs(run.duration),
+                        dateStr: new Date(run.timestamp).toLocaleString()
+                    });
+                } else if (run.isTimeout) {
+                    hasTimeouts = true;
+                    if (!timeoutTraces[platform]) {
+                        timeoutTraces[platform] = {
+                            x: [], y: [], mode: 'markers', type: 'scatter',
+                            name: `${platform} (timeout)`,
+                            marker: { color: platformColors[platform], size: 8, opacity: 0.7 },
+                            customdata: [],
+                            hovertemplate: '<b>%{customdata.jobName}</b><br>Repository: %{customdata.repository}<br>Status: TIMEOUT<br>Duration: %{customdata.durationStr}<br>Date: %{customdata.dateStr}<br><i>Click to view profile</i><br><extra></extra>'
+                        };
+                    }
+                    timeoutTraces[platform].x.push(new Date(run.timestamp));
+                    timeoutTraces[platform].y.push(run.duration / 1000);
+                    timeoutTraces[platform].customdata.push({
+                        repository: run.repository, taskIdString: run.taskIdString,
+                        jobName: run.jobName,
+                        durationStr: formatDurationMs(run.duration),
+                        dateStr: new Date(run.timestamp).toLocaleString()
+                    });
+                } else {
+                    const isFail = run.isFail;
+                    const traceKey = `${platform}-${isFail ? 'fail' : 'pass'}`;
+                    if (!traces[traceKey]) {
+                        const color = isFail ? failureColor : platformColors[platform];
+                        traces[traceKey] = {
+                            x: [], y: [], mode: 'markers', type: 'scatter',
+                            name: isFail ? `${platform} (failures)` : platform,
+                            marker: { color, size: 8, opacity: 0.7 },
+                            customdata: [],
+                            hovertemplate: '<b>%{customdata.jobName}</b><br>Repository: %{customdata.repository}<br>Status: %{customdata.status}<br>' + (isFail ? '%{customdata.details}<br>' : '') + 'Duration: %{customdata.durationStr}<br>Date: %{customdata.dateStr}<br><i>Click to view profile</i><br><extra></extra>'
+                        };
+                    }
+                    traces[traceKey].x.push(new Date(run.timestamp));
+                    traces[traceKey].y.push(run.duration / 1000);
+
+                    let details = '';
+                    if (isFail) {
+                        if (run.crashSignature) details = `Crash: ${run.crashSignature}`;
+                        else if (run.failureMessage) details = `Message: ${truncateMessage(run.failureMessage, 80)}`;
+                    }
+
+                    traces[traceKey].customdata.push({
+                        repository: run.repository, taskIdString: run.taskIdString,
+                        jobName: run.jobName, status: run.status || 'UNKNOWN',
+                        details, durationStr: formatDurationMs(run.duration),
+                        dateStr: new Date(run.timestamp).toLocaleString()
+                    });
+                }
+            });
+
+            // Update trace names with counts
+            Object.values(traces).forEach(trace => {
+                const count = trace.x.length;
+                if (count > 0) {
+                    const isFail = trace.name.includes('(failures)');
+                    const platform = trace.name.replace(' (failures)', '');
+                    trace.name = isFail
+                        ? `${platform} (${count} failure${count !== 1 ? 's' : ''})`
+                        : `${platform} (${count} pass${count !== 1 ? 'es' : ''})`;
+                }
+            });
+
+            const config = { responsive: true, displayModeBar: true };
+
+            // Main chart
+            const mainChartEl = document.getElementById('main-chart');
+            Plotly.newPlot('main-chart', Object.values(traces), {
+                title: 'Run Times',
+                xaxis: { title: 'Date', type: 'date', tickformat: '%Y-%m-%d' },
+                yaxis: { title: 'Duration (seconds)', rangemode: 'tozero' },
+                hoverlabel: { font: { color: 'white' } },
+                hovermode: 'closest',
+                height: 400
+            }, config);
+            mainChartEl.on('plotly_click', plotlyClickHandler);
+
+            // Timeout chart
+            if (hasTimeouts) {
+                Object.values(timeoutTraces).forEach(trace => {
+                    const count = trace.x.length;
+                    const platform = trace.name.replace(' (timeout)', '');
+                    trace.name = `${platform} (${count} timeout${count !== 1 ? 's' : ''})`;
+                });
+
+                const timeoutChartEl = document.getElementById('timeout-chart');
+                timeoutChartEl.style.display = 'block';
+                Plotly.newPlot('timeout-chart', Object.values(timeoutTraces), {
+                    title: 'Timeouts',
+                    xaxis: { title: 'Date', type: 'date', tickformat: '%Y-%m-%d' },
+                    yaxis: { title: 'Duration (seconds)' },
+                    hoverlabel: { font: { color: 'white' } },
+                    hovermode: 'closest',
+                    height: 300
+                }, config);
+                timeoutChartEl.on('plotly_click', plotlyClickHandler);
+            }
+
+            // Crash chart
+            if (hasCrashes) {
+                Object.values(crashTraces).forEach(trace => {
+                    const count = trace.x.length;
+                    const platform = trace.name.replace(' (crash)', '');
+                    trace.name = `${platform} (${count} crash${count !== 1 ? 'es' : ''})`;
+                });
+
+                const crashChartEl = document.getElementById('crash-chart');
+                crashChartEl.style.display = 'block';
+                Plotly.newPlot('crash-chart', Object.values(crashTraces), {
+                    title: 'Crashes',
+                    xaxis: { title: 'Date', type: 'date', tickformat: '%Y-%m-%d' },
+                    yaxis: { title: 'Duration (seconds)' },
+                    hoverlabel: { font: { color: 'white' } },
+                    hovermode: 'closest',
+                    height: 300
+                }, config);
+                crashChartEl.on('plotly_click', function(data) {
+                    if (data.points.length > 0) {
+                        const point = data.points[0];
+                        const minidump = point.customdata.minidump;
+                        const { taskIdString } = point.customdata;
+                        if (minidump && taskIdString) {
+                            const [taskId, retryId] = taskIdString.split('.');
+                            const jsonUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${minidump}.json`;
+                            window.open(`crash-viewer.html?url=${encodeURIComponent(jsonUrl)}`, '_blank');
+                        }
+                    }
+                });
+            }
+        }
+
+        // Calculate daily failure rates for a test (adapted from issues.html)
+        function calculateDailyFailureRates(testId) {
+            const days = currentData.metadata.days || 21;
+            const startTime = currentData.metadata.startTime;
+            const dailyData = [];
+
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day: day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    passes: 0,
+                    failures: 0,
+                    timeouts: 0,
+                    crashes: 0,
+                    skips: 0
+                });
+            }
+
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return dailyData;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+
+                if (statusGroup.counts && statusGroup.days) {
+                    // Aggregated format - process by day
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.days.length; i++) {
+                        day += statusGroup.days[i];
+                        if (day < days) {
+                            const count = statusGroup.counts[i];
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes += count;
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes += count;
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts += count;
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips += count;
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures += count;
+                            }
+                        }
+                    }
+                } else if (statusGroup.taskIdIds && statusGroup.days) {
+                    // Bucketed format with taskIdIds (array of arrays)
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.days.length; i++) {
+                        day += statusGroup.days[i];
+                        if (day < days) {
+                            const bucket = statusGroup.taskIdIds[i];
+                            const count = bucket.length;
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes += count;
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes += count;
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts += count;
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips += count;
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures += count;
+                            }
+                        }
+                    }
+                } else if (statusGroup.timestamps) {
+                    // Flat format - process individual timestamps
+                    let currentTime = 0;
+                    for (const diff of statusGroup.timestamps) {
+                        currentTime += diff;
+                        const day = Math.floor(currentTime / 86400);
+                        if (day < days) {
+                            if (status && status.startsWith('PASS')) {
+                                dailyData[day].passes++;
+                            } else if (status === 'CRASH') {
+                                dailyData[day].crashes++;
+                            } else if (status && status.startsWith('TIMEOUT')) {
+                                dailyData[day].timeouts++;
+                            } else if (status === 'SKIP') {
+                                dailyData[day].skips++;
+                            } else if (status && status.startsWith('FAIL')) {
+                                dailyData[day].failures++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Chart.js common options (adapted from issues.html)
+        function getCommonChartOptions(yAxisLabel, tooltipCallback, additionalOptions = {}) {
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    title: { display: false },
+                    legend: { display: false },
+                    tooltip: {
+                        animation: false,
+                        callbacks: { label: tooltipCallback }
+                    }
+                },
+                scales: {
+                    x: {},
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: yAxisLabel },
+                        ticks: { callback: (value) => value + '%' }
+                    }
+                }
+            };
+            if (additionalOptions.stacked) {
+                options.scales.x.stacked = true;
+                options.scales.y.stacked = true;
+            }
+            if (additionalOptions.hideXAxis) {
+                options.scales.x.display = false;
+            }
+            if (additionalOptions.tooltipFooter) {
+                options.plugins.tooltip.callbacks.footer = additionalOptions.tooltipFooter;
+            }
+            return options;
+        }
+
+        // Create daily failure rate chart (adapted from issues.html)
+        function createFailureRateChart(canvasId, dailyData) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+
+            const labels = dailyData.map(d => d.date);
+            const percentageData = dailyData.map(d => {
+                const totalNonSkip = d.passes + d.failures + d.timeouts + d.crashes;
+                const totalWithSkips = totalNonSkip + d.skips;
+                return {
+                    failureRate: totalNonSkip > 0 ? (d.failures / totalNonSkip * 100) : 0,
+                    timeoutRate: totalNonSkip > 0 ? (d.timeouts / totalNonSkip * 100) : 0,
+                    crashRate: totalNonSkip > 0 ? (d.crashes / totalNonSkip * 100) : 0,
+                    skipRate: totalWithSkips > 0 ? (d.skips / totalWithSkips * 100) : 0
+                };
+            });
+
+            const hasIssues = dailyData.some(d => d.failures > 0 || d.timeouts > 0 || d.crashes > 0);
+            const hasSkips = dailyData.some(d => d.skips > 0);
+
+            const skipCanvasId = canvasId.replace('-canvas', '-skips-canvas').replace('daily-rate', 'daily');
+            const skipCanvas = document.getElementById(skipCanvasId);
+
+            if (hasIssues) {
+                canvas.style.display = 'block';
+                new Chart(canvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Failure %',
+                                data: percentageData.map(d => d.failureRate),
+                                backgroundColor: 'rgba(255, 140, 0, 0.7)',
+                                borderColor: '#ff8c00',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Timeout %',
+                                data: percentageData.map(d => d.timeoutRate),
+                                backgroundColor: 'rgba(255, 193, 7, 0.7)',
+                                borderColor: '#ffc107',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Crash %',
+                                data: percentageData.map(d => d.crashRate),
+                                backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                                borderColor: '#dc3545',
+                                borderWidth: 1
+                            }
+                        ]
+                    },
+                    options: getCommonChartOptions('% failures', function(context) {
+                        const dataIndex = context.dataIndex;
+                        const data = dailyData[dataIndex];
+                        const label = context.dataset.label;
+                        const percentage = context.parsed.y.toFixed(1);
+
+                        let count = 0, typeName = '';
+                        if (label === 'Failure %') {
+                            count = data.failures;
+                            typeName = count === 1 ? 'failure' : 'failures';
+                        } else if (label === 'Timeout %') {
+                            count = data.timeouts;
+                            typeName = count === 1 ? 'timeout' : 'timeouts';
+                        } else if (label === 'Crash %') {
+                            count = data.crashes;
+                            typeName = count === 1 ? 'crash' : 'crashes';
+                        }
+                        if (count === 0) return null;
+                        const total = data.passes + data.failures + data.timeouts + data.crashes;
+                        return `${formatNumber(count)} ${typeName} out of ${formatNumber(total)} runs (${percentage}%)`;
+                    }, {
+                        stacked: true,
+                        tooltipFooter: function(tooltipItems) {
+                            const dataIndex = tooltipItems[0].dataIndex;
+                            const data = dailyData[dataIndex];
+                            return `Passes: ${formatNumber(data.passes)}`;
+                        }
+                    })
+                });
+            } else {
+                canvas.style.display = 'none';
+            }
+
+            if (hasSkips && skipCanvas) {
+                skipCanvas.style.display = 'block';
+                if (hasIssues) {
+                    skipCanvas.classList.add('no-x-axis');
+                }
+                new Chart(skipCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Skip %',
+                            data: percentageData.map(d => d.skipRate),
+                            backgroundColor: 'rgba(108, 117, 125, 0.7)',
+                            borderColor: '#6c757d',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: getCommonChartOptions('% skips', function(context) {
+                        const dataIndex = context.dataIndex;
+                        const data = dailyData[dataIndex];
+                        const percentage = context.parsed.y.toFixed(1);
+                        if (data.skips === 0) return null;
+                        const total = data.passes + data.failures + data.timeouts + data.crashes + data.skips;
+                        const skipWord = data.skips === 1 ? 'skip' : 'skips';
+                        return `${formatNumber(data.skips)} ${skipWord} out of ${formatNumber(total)} scheduled runs (${percentage}%)`;
+                    }, {
+                        hideXAxis: hasIssues
+                    })
+                });
+            } else if (skipCanvas) {
+                skipCanvas.style.display = 'none';
+            }
+        }
+
+        // Render the full page content
+        function renderPage(testPath, testInfo, stats, harness) {
+            const testName = testPath.split('/').pop();
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}`;
+
+            // Build date range text
+            let dateRangeText = '';
+            if (currentData.metadata) {
+                const days = currentData.metadata.days || 21;
+                const startDate = currentData.metadata.startDate;
+                const endDate = currentData.metadata.endDate;
+                if (startDate && endDate) {
+                    dateRangeText = `${days} days (${startDate} to ${endDate})`;
+                }
+            }
+
+            let html = '';
+
+            // Header
+            html += `<div class="test-header">`;
+            html += `<h1>${escapeHtml(testName)}<span class="harness-badge harness-${harness}">${harness}</span></h1>`;
+            html += `<div class="test-path-line"><a href="${searchfoxUrl}" target="_blank">${escapeHtml(testPath)}</a>`;
+            html += `<button class="copy-btn" onclick="copyTestPath('${escapeAttr(testPath)}')" title="Copy test path">📋 Copy</button>`;
+            html += `</div>`;
+            if (testInfo.component) {
+                html += `<div class="component-line">Bugzilla: ${escapeHtml(testInfo.component)}</div>`;
+            }
+            html += `</div>`;
+
+            // Status line
+            if (dateRangeText) {
+                html += `<div class="status-line">${dateRangeText}</div>`;
+            }
+
+            // Summary stats
+            html += `<div class="summary-stats">`;
+            html += renderSummaryStat('Runs', formatNumber(stats.runCount), stats.runCount === 0 ? 'zero' : '');
+            html += renderSummaryStat('Pass %', `${stats.passPercentage}%`, stats.passPercentage === 100 ? 'good' : (stats.passPercentage < 90 ? 'fail' : ''));
+            html += renderSummaryStat('Failures', formatNumber(stats.failCount), stats.failCount > 0 ? 'fail' : 'zero');
+            html += renderSummaryStat('Timeouts', formatNumber(stats.timeoutCount), stats.timeoutCount > 0 ? 'timeout' : 'zero');
+            html += renderSummaryStat('Crashes', formatNumber(stats.crashCount), stats.crashCount > 0 ? 'fail' : 'zero');
+            html += renderSummaryStat('Skips', formatNumber(stats.skipCount), stats.skipCount > 0 ? 'skip' : 'zero');
+            html += `</div>`;
+
+            // Platform breakdown table
+            const platformBreakdown = calculateTestPlatformBreakdown(testInfo.testId);
+            const platformEntries = Object.entries(platformBreakdown)
+                .sort((a, b) => (b[1].failures + b[1].crashes + b[1].timeouts) - (a[1].failures + a[1].crashes + a[1].timeouts));
+
+            if (platformEntries.length > 0) {
+                html += `<div class="section">`;
+                html += `<h2>Platform Breakdown</h2>`;
+                html += `<table class="platform-table">`;
+                html += `<thead><tr><th>Platform</th><th class="num">Failures</th><th class="num">Timeouts</th><th class="num">Crashes</th><th class="num">Skips</th></tr></thead>`;
+                html += `<tbody>`;
+                platformEntries.forEach(([platform, counts]) => {
+                    html += `<tr>`;
+                    html += `<td>${escapeHtml(platform)}</td>`;
+                    html += `<td class="num${counts.failures > 0 ? ' fail' : ''}">${counts.failures.toLocaleString()}</td>`;
+                    html += `<td class="num${counts.timeouts > 0 ? ' timeout' : ''}">${counts.timeouts.toLocaleString()}</td>`;
+                    html += `<td class="num${counts.crashes > 0 ? ' crash' : ''}">${counts.crashes.toLocaleString()}</td>`;
+                    html += `<td class="num">${counts.skips.toLocaleString()}</td>`;
+                    html += `</tr>`;
+                });
+                // Totals row
+                html += `</tbody><tfoot><tr>`;
+                html += `<td>Total</td>`;
+                html += `<td class="num">${stats.failCount.toLocaleString()}</td>`;
+                html += `<td class="num">${stats.timeoutCount.toLocaleString()}</td>`;
+                html += `<td class="num">${stats.crashCount.toLocaleString()}</td>`;
+                html += `<td class="num">${stats.skipCount.toLocaleString()}</td>`;
+                html += `</tr></tfoot>`;
+                html += `</table>`;
+                html += `</div>`;
+            }
+
+            // Daily rate chart (Chart.js) - always show for 21-day data
+            html += `<div class="section">`;
+            html += `<h2>Daily Issue Rates</h2>`;
+            html += `<div class="historical-chart">`;
+            html += `<canvas id="daily-rate-canvas" class="historical-chart-canvas"></canvas>`;
+            html += `<canvas id="daily-skips-canvas" class="historical-chart-canvas skips-canvas"></canvas>`;
+            html += `</div>`;
+            html += `</div>`;
+
+            // Plotly scatter chart containers (will be populated async if run data is available)
+            html += `<div id="charts-section" style="display: none;">`;
+            html += `<div class="section">`;
+            html += `<h2>Run Duration Scatter Plot</h2>`;
+            html += `<div id="main-chart" class="chart-container"></div>`;
+            html += `<div id="timeout-chart" class="chart-container-small" style="display: none; margin-top: 10px;"></div>`;
+            html += `<div id="crash-chart" class="chart-container-small" style="display: none; margin-top: 10px;"></div>`;
+            html += `</div>`;
+            html += `</div>`;
+
+            // Issue details section
+            html += renderIssueDetails(testPath, testInfo);
+
+            return html;
+        }
+
+        function renderSummaryStat(label, value, cssClass) {
+            const cls = cssClass ? ` ${cssClass}` : '';
+            return `<div class="summary-stat"><span class="summary-stat-value${cls}">${value}</span><span class="summary-stat-label">${label}</span></div>`;
+        }
+
+        // Render issue details section
+        function renderIssueDetails(testPath, testInfo) {
+            const stats = computeTestStats(testInfo.testId);
+            const allIssues = [];
+
+            // Skip messages
+            const skipMessages = getSkipMessageCounts(testInfo.testId);
+            skipMessages.forEach(({ message, count }) => {
+                allIssues.push({ count, type: 'SKIP', message: message.replace(/^skip-if:\s*/, '') });
+            });
+
+            // Failure messages
+            const failureMessages = getFailureMessageCounts(testInfo.testId);
+            let failureMessagesCount = 0;
+            failureMessages.forEach(({ message, count }) => {
+                allIssues.push({ count, type: 'FAIL', message });
+                failureMessagesCount += count;
+            });
+            if (stats.failCount > failureMessagesCount) {
+                allIssues.push({ count: stats.failCount - failureMessagesCount, type: 'FAIL', message: FAILURE_NO_MESSAGE });
+            }
+
+            // Crash data
+            const crashData = getCrashData(testInfo.testId);
+            crashData.signatures.forEach(({ signature, count }) => {
+                allIssues.push({ count, type: 'CRASH', message: signature });
+            });
+            const crashMessagesCount = crashData.signatures.reduce((sum, sig) => sum + sig.count, 0);
+            if (stats.crashCount > crashMessagesCount) {
+                allIssues.push({ count: stats.crashCount - crashMessagesCount, type: 'CRASH', message: 'Crash signature not recorded' });
+            }
+
+            // Timeouts
+            if (stats.timeoutCount > 0) {
+                allIssues.push({ count: stats.timeoutCount, type: 'TIMEOUT', message: 'Test exceeded time limit' });
+            }
+
+            if (allIssues.length === 0) return '';
+
+            allIssues.sort((a, b) => b.count - a.count);
+
+            let html = `<div class="section">`;
+            html += `<h2>Issue Details</h2>`;
+            html += `<div class="issue-section">`;
+
+            allIssues.forEach(({ count, type, message }, index) => {
+                const badgeClass = type === 'SKIP' ? 'badge-skip' : type === 'FAIL' ? 'badge-fail' : type === 'CRASH' ? 'badge-crash' : 'badge-timeout';
+                const issueId = `issue-${index}`;
+                const escapedMessage = message.replace(/"/g, '&quot;');
+
+                let tooltip = '';
+                if (type === 'FAIL' && stats.runCount > 0) {
+                    const percentage = ((count / stats.runCount) * 100).toFixed(2);
+                    const occurrenceText = count === 1 ? 'occurrence' : 'occurrences';
+                    tooltip = `${count} ${occurrenceText} of this message out of ${stats.runCount.toLocaleString()} runs (${percentage}%)`;
+                }
+
+                html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                html += `<span class="issue-count"${tooltip ? ` title="${escapeAttr(tooltip)}"` : ''}>${count}</span>`;
+                html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
+                html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}`;
+
+                // Bug filing button for failures with component
+                if (type === 'FAIL' && testInfo.component?.includes(' :: ')) {
+                    const { firstDate, lastDate } = getDataDateRange(currentData);
+                    const bugUrl = getBugzillaUrl({
+                        testPath,
+                        summary: message,
+                        component: testInfo.component,
+                        stats: { failureCount: count, totalRuns: stats.runCount, firstDate, lastDate }
+                    });
+                    html += getBugButton(bugUrl, 'File bug for this failure');
+                }
+
+                html += `</span></div>`;
+                html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
+            });
+
+            html += `</div></div>`;
+            return html;
+        }
+
+        // Load the most recent single-day data file for timing information
+        async function loadDailyTimingData(usedHarness, testPath) {
+            try {
+                // Fetch index.json for the correct harness
+                // Can't use fetchData('index.json') because it defaults to xpcshell via getHarnessType()
+                const indexResponse = await fetchFromCI(usedHarness, 'try', 'index.json');
+                if (!indexResponse.ok) return null;
+
+                const index = await indexResponse.json();
+                if (!index.dates || index.dates.length === 0) return null;
+
+                // Fetch the most recent date's data
+                const mostRecentDate = index.dates[0];
+                const dailyFile = `${usedHarness}-${mostRecentDate}.json`;
+                const dailyResponse = await fetchData(dailyFile);
+                if (!dailyResponse.ok) return null;
+
+                const dailyData = await dailyResponse.json();
+
+                // Find the test in the daily data
+                const dailyTestInfo = findTest(dailyData, testPath);
+                if (!dailyTestInfo) return null;
+
+                return { data: dailyData, testInfo: dailyTestInfo, date: mostRecentDate };
+            } catch (error) {
+                console.warn('Could not load daily timing data:', error);
+                return null;
+            }
+        }
+
+        // Calculate per-job-name breakdown from daily data (which has flat taskIdIds for all statuses)
+        function calculateJobNameBreakdown(testId) {
+            const jobs = {};
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return jobs;
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup || !statusGroup.taskIdIds) continue;
+                // Only flat format (daily data) has per-run taskIdIds
+                if (statusGroup.days !== undefined) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status && status.startsWith('TIMEOUT');
+                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL', 'OK'].includes(status);
+
+                for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                    const taskIdIndex = statusGroup.taskIdIds[i];
+                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+
+                    // Skip run-if skips
+                    if (isSkip && currentData.tables.messages[statusGroup.messageIds?.[i]]?.startsWith('run-if')) continue;
+
+                    if (!jobs[jobName]) jobs[jobName] = { passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, skipMessages: new Map() };
+                    if (isSkip) {
+                        jobs[jobName].skips++;
+                        const msgId = statusGroup.messageIds?.[i];
+                        const msg = msgId !== null && msgId !== undefined ? currentData.tables.messages[msgId] : null;
+                        if (msg) {
+                            const display = msg.replace(/^skip-if:\s*/, '');
+                            jobs[jobName].skipMessages.set(display, (jobs[jobName].skipMessages.get(display) || 0) + 1);
+                        }
+                    }
+                    else if (isCrash) jobs[jobName].crashes++;
+                    else if (isTimeout) jobs[jobName].timeouts++;
+                    else if (isFail) jobs[jobName].failures++;
+                    else jobs[jobName].passes++;
+                }
+            }
+            return jobs;
+        }
+
+        // Render the job name breakdown table as a pivot: platforms as columns, job variant as rows
+        function renderJobNameTable(dailyData, dailyTestInfo, date) {
+            const savedData = currentData;
+            currentData = dailyData;
+            const jobs = calculateJobNameBreakdown(dailyTestInfo.testId);
+            currentData = savedData;
+
+            const jobEntries = Object.entries(jobs);
+            if (jobEntries.length === 0) return '';
+
+            // Extract platform and variant from each job name, group by variant
+            const variants = {};
+            const platformSet = new Set();
+            for (const [jobName, counts] of jobEntries) {
+                const platform = extractPlatform(jobName) || 'unknown';
+                // Variant = job name with platform and chunk number removed
+                // e.g. "test-linux1804-64/opt-xpcshell-1" -> "opt-xpcshell"
+                const slashIdx = jobName.indexOf('/');
+                let variant = slashIdx !== -1 ? jobName.substring(slashIdx + 1) : jobName;
+                variant = variant.replace(/-\d+$/, '');
+                platformSet.add(platform);
+                if (!variants[variant]) variants[variant] = {};
+                if (!variants[variant][platform]) {
+                    variants[variant][platform] = { passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, skipMessages: new Map() };
+                }
+                const v = variants[variant][platform];
+                v.passes += counts.passes;
+                v.failures += counts.failures;
+                v.timeouts += counts.timeouts;
+                v.crashes += counts.crashes;
+                v.skips += counts.skips;
+                for (const [msg, cnt] of counts.skipMessages) {
+                    v.skipMessages.set(msg, (v.skipMessages.get(msg) || 0) + cnt);
+                }
+            }
+
+            const platforms = Array.from(platformSet).sort();
+
+            let html = `<div class="section">`;
+            html += `<h2>Pass/Fail by Job <span style="font-size: 12px; color: #888; font-weight: normal;">(from ${date})</span></h2>`;
+            html += `<table class="platform-table job-table">`;
+            html += `<thead><tr><th>Job</th>`;
+            for (const platform of platforms) {
+                html += `<th>${escapeHtml(platform)}</th>`;
+            }
+            html += `</tr></thead><tbody>`;
+
+            const variantEntries = Object.entries(variants).sort((a, b) => a[0].localeCompare(b[0]));
+            for (const [variant, platformData] of variantEntries) {
+                html += `<tr><td style="font-family: monospace; font-size: 12px;">${escapeHtml(variant)}</td>`;
+                for (const platform of platforms) {
+                    const d = platformData[platform];
+                    if (!d) {
+                        html += `<td class="job-cell"><span class="job-na">\u2014</span></td>`;
+                        continue;
+                    }
+                    const total = d.passes + d.failures + d.timeouts + d.crashes;
+                    const issues = d.failures + d.timeouts + d.crashes;
+
+                    html += `<td class="job-cell">`;
+
+                    if (issues > 0) {
+                        // Build shared tooltip with a line per issue type
+                        const tooltipLines = [];
+                        if (d.failures > 0) tooltipLines.push(`${d.failures} failure${d.failures !== 1 ? 's' : ''}`);
+                        if (d.crashes > 0) tooltipLines.push(`${d.crashes} crash${d.crashes !== 1 ? 'es' : ''}`);
+                        if (d.timeouts > 0) tooltipLines.push(`${d.timeouts} timeout${d.timeouts !== 1 ? 's' : ''}`);
+                        if (d.passes > 0) tooltipLines.push(`${d.passes} pass${d.passes !== 1 ? 'es' : ''}`);
+                        tooltipLines.push(`${total} total runs`);
+                        const tooltip = escapeAttr(tooltipLines.join('\n'));
+
+                        const badges = [];
+                        if (d.failures > 0) {
+                            const pct = ((d.failures / total) * 100).toFixed(1);
+                            badges.push(`<span class="issue-badge badge-fail" title="${tooltip}">FAIL ${pct}%</span>`);
+                        }
+                        if (d.crashes > 0) {
+                            const pct = ((d.crashes / total) * 100).toFixed(1);
+                            badges.push(`<span class="issue-badge badge-crash" title="${tooltip}">CRASH ${pct}%</span>`);
+                        }
+                        if (d.timeouts > 0) {
+                            const pct = ((d.timeouts / total) * 100).toFixed(1);
+                            badges.push(`<span class="issue-badge badge-timeout" title="${tooltip}">TIMEOUT ${pct}%</span>`);
+                        }
+                        html += badges.join('<br>');
+                    } else if (total > 0) {
+                        html += `<span class="issue-badge badge-pass" title="${escapeAttr(`${d.passes} run${d.passes !== 1 ? 's' : ''}`)}">PASS</span>`;
+                    }
+
+                    if (d.skips > 0) {
+                        if (total > 0) html += '<br>';
+                        const skipCount = `${d.skips} skip${d.skips !== 1 ? 's' : ''}`;
+                        let skipTooltip;
+                        if (d.skipMessages.size === 1) {
+                            const [msg] = d.skipMessages.keys();
+                            skipTooltip = `${skipCount}\n${msg}`;
+                        } else if (d.skipMessages.size > 1) {
+                            const msgs = Array.from(d.skipMessages.entries())
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([msg, cnt]) => `${msg} (${cnt})`)
+                                .join('\n');
+                            skipTooltip = `${skipCount}\n${msgs}`;
+                        } else {
+                            skipTooltip = skipCount;
+                        }
+                        html += `<span class="issue-badge badge-skip" title="${escapeAttr(skipTooltip)}">SKIP</span>`;
+                    }
+
+                    html += `</td>`;
+                }
+                html += `</tr>`;
+            }
+
+            html += `</tbody></table></div>`;
+            return html;
+        }
+
+        // Render timing section using daily data (which has per-run durations)
+        function renderTimingFromDailyData(dailyData, dailyTestInfo, date) {
+            const savedData = currentData;
+            currentData = dailyData;
+
+            const stats = computeTestStats(dailyTestInfo.testId);
+            const timingBreakdown = calculateTestPlatformTimingBreakdown(dailyTestInfo.testId);
+            const timingEntries = Object.entries(timingBreakdown).filter(([, d]) => d.count > 0);
+
+            currentData = savedData; // Restore
+
+            if (stats.totalDuration === 0 && timingEntries.length === 0) return '';
+
+            const avgDuration = stats.passCount > 0 ? stats.totalDuration / stats.passCount : 0;
+            let html = `<div class="section">`;
+            html += `<h2>Run Times <span style="font-size: 12px; color: #888; font-weight: normal;">(from ${date})</span></h2>`;
+
+            html += `<div class="timing-grid">`;
+            html += `<div class="timing-card">`;
+            html += `<div class="timing-card-platform">Overall (${stats.passCount.toLocaleString()} passing runs)</div>`;
+            html += `<div class="timing-card-values">`;
+            html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(stats.min)}</span><span class="timing-label">Min</span></div>`;
+            html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(avgDuration)}</span><span class="timing-label">Avg</span></div>`;
+            html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(stats.max)}</span><span class="timing-label">Max</span></div>`;
+            html += `</div></div>`;
+
+            timingEntries
+                .sort((a, b) => b[1].avg - a[1].avg)
+                .forEach(([platform, data]) => {
+                    html += `<div class="timing-card">`;
+                    html += `<div class="timing-card-platform">${escapeHtml(platform)} (${data.count.toLocaleString()} runs)</div>`;
+                    html += `<div class="timing-card-values">`;
+                    html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(data.min)}</span><span class="timing-label">Min</span></div>`;
+                    html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(data.avg)}</span><span class="timing-label">Avg</span></div>`;
+                    html += `<div class="timing-item"><span class="timing-value">${formatDurationMs(data.max)}</span><span class="timing-label">Max</span></div>`;
+                    html += `</div></div>`;
+                });
+
+            html += `</div></div>`;
+            return html;
+        }
+
+        // Main entry point
+        async function loadTestData() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const testPath = urlParams.get('test');
+
+            if (!testPath) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = 'No test specified. Use ?test=path/to/test.js in the URL.';
+                return;
+            }
+
+            const harness = detectHarness(testPath);
+
+            try {
+                // Load 21-day data with task IDs
+                const dataFile = `${harness}-issues-with-taskids.json`;
+                document.getElementById('loading').textContent = `Loading ${harness} data...`;
+
+                let response = await fetchData(dataFile);
+                let data = null;
+                let testInfo = null;
+                let usedHarness = harness;
+
+                if (response.ok) {
+                    data = await response.json();
+                    currentData = data;
+                    testInfo = findTest(data, testPath);
+                }
+
+                // If not found, try the other harness
+                if (!testInfo) {
+                    const otherHarness = harness === 'xpcshell' ? 'mochitest' : 'xpcshell';
+                    const otherFile = `${otherHarness}-issues-with-taskids.json`;
+                    document.getElementById('loading').textContent = `Not found in ${harness}, trying ${otherHarness}...`;
+
+                    response = await fetchData(otherFile);
+                    if (response.ok) {
+                        data = await response.json();
+                        currentData = data;
+                        testInfo = findTest(data, testPath);
+                        if (testInfo) {
+                            usedHarness = otherHarness;
+                        }
+                    }
+                }
+
+                if (!testInfo) {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('error').textContent = `Test not found: ${testPath}. It may not have been run in the last 21 days, or the path may be incorrect.`;
+                    return;
+                }
+
+                // Compute stats
+                const stats = computeTestStats(testInfo.testId);
+
+                // Update page title
+                const testName = testPath.split('/').pop();
+                document.title = `${testName} - Test Info`;
+
+                // Render page
+                document.getElementById('loading').style.display = 'none';
+                const contentEl = document.getElementById('content');
+                contentEl.style.display = 'block';
+                contentEl.innerHTML = renderPage(testPath, testInfo, stats, usedHarness);
+
+                // Render daily rate chart (Chart.js)
+                const dailyRateData = calculateDailyFailureRates(testInfo.testId);
+                if (dailyRateData) {
+                    // Load Chart.js and render
+                    const chartScript = document.createElement('script');
+                    chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+                    chartScript.async = true;
+                    chartScript.onload = function() {
+                        createFailureRateChart('daily-rate-canvas', dailyRateData);
+                    };
+                    document.head.appendChild(chartScript);
+                }
+
+                // Load Plotly and render scatter charts (if 21-day data has individual runs)
+                const plotlyScript = document.createElement('script');
+                plotlyScript.src = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
+                plotlyScript.async = true;
+                document.head.appendChild(plotlyScript);
+
+                renderCharts(testInfo.testId, testPath);
+
+                // Also load most recent single-day data for timing and job breakdown
+                loadDailyTimingData(usedHarness, testPath).then(dailyResult => {
+                    if (dailyResult) {
+                        let dailySectionsHtml = '';
+
+                        const jobTableHtml = renderJobNameTable(dailyResult.data, dailyResult.testInfo, dailyResult.date);
+                        if (jobTableHtml) dailySectionsHtml += jobTableHtml;
+
+                        const timingHtml = renderTimingFromDailyData(dailyResult.data, dailyResult.testInfo, dailyResult.date);
+                        if (timingHtml) dailySectionsHtml += timingHtml;
+
+                        if (dailySectionsHtml) {
+                            // Insert before the Plotly charts section
+                            const chartsSection = document.getElementById('charts-section');
+                            if (chartsSection) {
+                                chartsSection.insertAdjacentHTML('beforebegin', dailySectionsHtml);
+                            } else {
+                                contentEl.insertAdjacentHTML('beforeend', dailySectionsHtml);
+                            }
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error('Error loading test data:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+            }
+        }
+
+        // Start loading when page is ready
+        loadTestData();
+    </script>
+</body>
+</html>
