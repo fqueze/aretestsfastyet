@@ -101,7 +101,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            min-width: 80px;
+            min-width: 85px;
         }
 
         .summary-stat-value {
@@ -471,7 +471,7 @@
 </head>
 <body>
     <div class="container">
-        <div id="loading" class="loading">Loading test data...</div>
+        <div id="loading" class="loading" style="display: none;">Loading test data...</div>
         <div id="error" class="error" style="display: none;"></div>
         <div id="content" style="display: none;"></div>
     </div>
@@ -1921,19 +1921,42 @@
             const testPath = urlParams.get('test');
 
             if (!testPath) {
-                document.getElementById('loading').style.display = 'none';
                 document.getElementById('error').style.display = 'block';
                 document.getElementById('error').textContent = 'No test specified. Use ?test=path/to/test.js in the URL.';
                 return;
             }
 
             const harness = detectHarness(testPath);
+            const testName = testPath.split('/').pop();
+            document.title = `${testName} - Test Info`;
+
+            // Show header immediately before fetching data
+            const contentEl = document.getElementById('content');
+            const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}`;
+            const placeholder = '\u00a0';
+            contentEl.innerHTML = `<div class="test-header">` +
+                `<h1>${escapeHtml(testName)}<span class="harness-badge harness-${harness}">${harness}</span></h1>` +
+                `<div class="test-path-line"><a href="${searchfoxUrl}" target="_blank">${escapeHtml(testPath)}</a>` +
+                `<button class="copy-btn" onclick="copyTestPath('${escapeAttr(testPath)}')" title="Copy test path">📋 Copy</button>` +
+                `</div>` +
+                `<div class="component-line">Bugzilla: <span id="component-value">...</span></div>` +
+                `</div>` +
+                `<div class="status-line" id="status-line">Loading ${harness} data...</div>` +
+                `<div class="summary-stats">` +
+                renderSummaryStat('Runs', placeholder, '') +
+                renderSummaryStat('Pass %', placeholder, '') +
+                renderSummaryStat('Failures', placeholder, '') +
+                renderSummaryStat('Timeouts', placeholder, '') +
+                renderSummaryStat('Crashes', placeholder, '') +
+                renderSummaryStat('Skips', placeholder, '') +
+                `</div>`;
+            contentEl.style.display = 'block';
+
             const chunkHex = getChunkIndex(testPath).toString(16).padStart(2, '0');
 
             try {
                 // Load chunk file for this test
                 const dataFile = `${harness}-${chunkHex}.json`;
-                document.getElementById('loading').textContent = `Loading ${harness} data...`;
 
                 let response = await fetchData(dataFile);
                 let data = null;
@@ -1950,7 +1973,7 @@
                 if (!testInfo) {
                     const otherHarness = harness === 'xpcshell' ? 'mochitest' : 'xpcshell';
                     const otherFile = `${otherHarness}-${chunkHex}.json`;
-                    document.getElementById('loading').textContent = `Not found in ${harness}, trying ${otherHarness}...`;
+                    document.getElementById('status-line').textContent = `Not found in ${harness}, trying ${otherHarness}...`;
 
                     response = await fetchData(otherFile);
                     if (response.ok) {
@@ -1964,23 +1987,15 @@
                 }
 
                 if (!testInfo) {
-                    document.getElementById('loading').style.display = 'none';
-                    document.getElementById('error').style.display = 'block';
-                    document.getElementById('error').textContent = `Test not found: ${testPath}. It may not have been run in the last 21 days, or the path may be incorrect.`;
+                    document.getElementById('status-line').textContent = `Test not found: ${testPath}. It may not have been run in the last 21 days, or the path may be incorrect.`;
+                    document.getElementById('status-line').style.color = '#dc3545';
                     return;
                 }
 
                 // Compute stats
                 const stats = computeTestStats(testInfo.testId);
 
-                // Update page title
-                const testName = testPath.split('/').pop();
-                document.title = `${testName} - Test Info`;
-
-                // Render page
-                document.getElementById('loading').style.display = 'none';
-                const contentEl = document.getElementById('content');
-                contentEl.style.display = 'block';
+                // Render page (replaces the initial header)
                 contentEl.innerHTML = renderPage(testPath, testInfo, stats, usedHarness);
 
                 // Insert job table and runtime panel side by side
@@ -2020,9 +2035,14 @@
 
             } catch (error) {
                 console.error('Error loading test data:', error);
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                const statusLine = document.getElementById('status-line');
+                if (statusLine) {
+                    statusLine.textContent = `Error loading data: ${error.message}`;
+                    statusLine.style.color = '#dc3545';
+                } else {
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                }
             }
         }
 
