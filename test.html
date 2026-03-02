@@ -697,22 +697,8 @@
                 } else if (isTimeout) {
                     timeoutCount += runCount;
                 } else if (status === 'UNKNOWN') {
-                    if (statusGroup.durations) {
-                        for (const duration of statusGroup.durations) {
-                            if (duration < 100) {
-                                skipCount++;
-                            } else if (duration > 300000) {
-                                timeoutCount++;
-                            } else {
-                                passCount++;
-                                totalDuration += duration;
-                                if (duration > maxDuration) maxDuration = duration;
-                                if (duration < minDuration) minDuration = duration;
-                            }
-                        }
-                    } else {
-                        passCount += runCount;
-                    }
+                    // Ignore UNKNOWN status — these are from before structured logging
+                    // was enabled (e.g. mochitest on android) and can't be classified.
                 } else if (isFail) {
                     failCount += runCount;
                 } else {
@@ -1470,14 +1456,16 @@
             html += renderSummaryStat('Skips', formatNumber(stats.skipCount), stats.skipCount > 0 ? 'skip' : 'zero');
             html += `</div>`;
 
-            // Daily rate chart (Chart.js) - always show for 21-day data
-            html += `<div class="section">`;
-            html += `<h2>Daily Issue Rates</h2>`;
-            html += `<div class="historical-chart">`;
-            html += `<canvas id="daily-rate-canvas" class="historical-chart-canvas"></canvas>`;
-            html += `<canvas id="daily-skips-canvas" class="historical-chart-canvas skips-canvas"></canvas>`;
-            html += `</div>`;
-            html += `</div>`;
+            // Daily rate chart (Chart.js) - only show when there are issues
+            if (stats.failCount + stats.timeoutCount + stats.crashCount + stats.skipCount > 0) {
+                html += `<div class="section">`;
+                html += `<h2>Daily Issue Rates</h2>`;
+                html += `<div class="historical-chart">`;
+                html += `<canvas id="daily-rate-canvas" class="historical-chart-canvas"></canvas>`;
+                html += `<canvas id="daily-skips-canvas" class="historical-chart-canvas skips-canvas"></canvas>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
 
             // Job table and runtime stats will be inserted here
             html += `<div id="runtime-sections"></div>`;
@@ -1594,7 +1582,7 @@
                 const isSkip = status === 'SKIP';
                 const isCrash = status === 'CRASH';
                 const isTimeout = status && status.startsWith('TIMEOUT');
-                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL', 'OK'].includes(status);
+                const isFail = status && !['PASS', 'PASS-PARALLEL', 'PASS-SEQUENTIAL', 'SKIP', 'TIMEOUT', 'TIMEOUT-PARALLEL', 'TIMEOUT-SEQUENTIAL', 'EXPECTED-FAIL', 'OK', 'UNKNOWN'].includes(status);
 
                 const addToJob = (jobName, count) => {
                     const job = ensureJob(jobName);
@@ -1861,9 +1849,9 @@
                     }
                 }
 
-                // Render daily rate chart (Chart.js)
+                // Render daily rate chart (Chart.js) - only if the canvas exists (hidden when no issues)
                 const dailyRateData = calculateDailyFailureRates(testInfo.testId);
-                if (dailyRateData) {
+                if (dailyRateData && document.getElementById('daily-rate-canvas')) {
                     const chartScript = document.createElement('script');
                     chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
                     chartScript.async = true;
