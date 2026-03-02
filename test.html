@@ -334,19 +334,16 @@
             padding: 0;
         }
 
-        .historical-chart-canvas {
-            max-height: 100px;
+        .chart-wrap {
+            position: relative;
             height: 100px;
-            width: 100%;
         }
 
-        .historical-chart-canvas.skips-canvas {
-            max-height: 70px;
+        .chart-wrap.skips {
             height: 70px;
         }
 
-        .historical-chart-canvas.no-x-axis {
-            max-height: 60px;
+        .chart-wrap.skips.no-x-axis {
             height: 60px;
         }
 
@@ -1122,9 +1119,10 @@
         }
 
         // Create daily failure rate chart (adapted from issues.html)
+        // Canvases are pre-rendered with correct visibility and CSS classes by renderPage.
         function createFailureRateChart(canvasId, dailyData) {
             const canvas = document.getElementById(canvasId);
-            if (!canvas) return;
+            const skipCanvas = document.getElementById('daily-skips-canvas');
 
             const labels = dailyData.map(d => d.date);
             const percentageData = dailyData.map(d => {
@@ -1138,14 +1136,7 @@
                 };
             });
 
-            const hasIssues = dailyData.some(d => d.failures > 0 || d.timeouts > 0 || d.crashes > 0);
-            const hasSkips = dailyData.some(d => d.skips > 0);
-
-            const skipCanvasId = canvasId.replace('-canvas', '-skips-canvas').replace('daily-rate', 'daily');
-            const skipCanvas = document.getElementById(skipCanvasId);
-
-            if (hasIssues) {
-                canvas.style.display = 'block';
+            if (canvas) {
                 new Chart(canvas, {
                     type: 'bar',
                     data: {
@@ -1203,15 +1194,9 @@
                         }
                     })
                 });
-            } else {
-                canvas.style.display = 'none';
             }
 
-            if (hasSkips && skipCanvas) {
-                skipCanvas.style.display = 'block';
-                if (hasIssues) {
-                    skipCanvas.classList.add('no-x-axis');
-                }
+            if (skipCanvas) {
                 new Chart(skipCanvas, {
                     type: 'bar',
                     data: {
@@ -1233,11 +1218,9 @@
                         const skipWord = data.skips === 1 ? 'skip' : 'skips';
                         return `${formatNumber(data.skips)} ${skipWord} out of ${formatNumber(total)} scheduled runs (${percentage}%)`;
                     }, {
-                        hideXAxis: hasIssues
+                        hideXAxis: !!canvas
                     })
                 });
-            } else if (skipCanvas) {
-                skipCanvas.style.display = 'none';
             }
         }
 
@@ -1612,13 +1595,20 @@
             html += renderSummaryStat('Skips', formatNumber(stats.skipCount), stats.skipCount > 0 ? 'skip' : 'zero');
             html += `</div>`;
 
-            // Daily rate chart (Chart.js) - only show when there are issues
-            if (stats.failCount + stats.timeoutCount + stats.crashCount + stats.skipCount > 0) {
+            // Daily rate chart (Chart.js) - only emit canvases that will be used
+            const dailyRateData = calculateDailyFailureRates(testInfo.testId);
+            const hasIssues = dailyRateData.some(d => d.failures > 0 || d.timeouts > 0 || d.crashes > 0);
+            const hasSkips = dailyRateData.some(d => d.skips > 0);
+            if (hasIssues || hasSkips) {
                 html += `<div class="section">`;
                 html += `<h2>Daily Issue Rates</h2>`;
                 html += `<div class="historical-chart">`;
-                html += `<canvas id="daily-rate-canvas" class="historical-chart-canvas"></canvas>`;
-                html += `<canvas id="daily-skips-canvas" class="historical-chart-canvas skips-canvas"></canvas>`;
+                if (hasIssues) {
+                    html += `<div class="chart-wrap"><canvas id="daily-rate-canvas"></canvas></div>`;
+                }
+                if (hasSkips) {
+                    html += `<div class="chart-wrap skips${hasIssues ? ' no-x-axis' : ''}"><canvas id="daily-skips-canvas"></canvas></div>`;
+                }
                 html += `</div>`;
                 html += `</div>`;
             }
@@ -2016,9 +2006,9 @@
                     }
                 }
 
-                // Render daily rate chart (Chart.js) - only if the canvas exists (hidden when no issues)
-                const dailyRateData = calculateDailyFailureRates(testInfo.testId);
-                if (dailyRateData && document.getElementById('daily-rate-canvas')) {
+                // Load Chart.js for daily rate charts (canvases already rendered with correct layout)
+                if (document.getElementById('daily-rate-canvas') || document.getElementById('daily-skips-canvas')) {
+                    const dailyRateData = calculateDailyFailureRates(testInfo.testId);
                     const chartScript = document.createElement('script');
                     chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
                     chartScript.async = true;
