@@ -93,6 +93,22 @@ function renderCrashLinks(crashInstance, testName, currentData) {
 }
 
 /**
+ * Generate Searchfox URL for a test path, optionally with a line number
+ * extracted from a failure message like "[child : 42] error text".
+ * @param {string} testPath - Full test path
+ * @param {string} [message] - Optional failure message to extract line number from
+ * @returns {string} - Searchfox URL
+ */
+function getSearchfoxUrl(testPath, message) {
+    let url = `https://searchfox.org/mozilla-central/source/${testPath}`;
+    if (message) {
+        const match = message.match(/^\[[^\] :]+ : (\d+)\]/);
+        if (match) url += `#${match[1]}`;
+    }
+    return url;
+}
+
+/**
  * Generate Bugzilla bug filing URL
  * @param {Object} options - Bug filing options
  * @param {string} options.testPath - Full test path (dirPath/testName)
@@ -118,18 +134,25 @@ function getBugzillaUrl(options) {
     // Pre-fill summary with failure message
     params.set('short_desc', `Intermittent ${testPath} | ${summary}`);
 
-    // Build URL with search filter for this specific failure message
-    // Limit to 150 chars to avoid excessively long URLs
-    const searchQuery = summary.length > 150 ? summary.substring(0, 150) : summary;
+    // Build dashboard URL for the bug description link
     const url = new URL(window.location.href);
-    url.hash = ''; // Clear existing hash
-    const hashParams = new URLSearchParams();
-    hashParams.set('q', searchQuery);
-    url.hash = hashParams.toString();
+    url.hash = '';
+    if (options.addSearchHash !== false) {
+        const searchQuery = summary.length > 150 ? summary.substring(0, 150) : summary;
+        const hashParams = new URLSearchParams();
+        hashParams.set('q', searchQuery);
+        url.hash = hashParams.toString();
+    }
 
-    // Build description
-    let description = `Test: ${testPath}\n\n`;
-    description += `Failure message: ${summary}\n\n`;
+    // Build description with Searchfox links
+    let description = `Test: [${testPath}](${getSearchfoxUrl(testPath)})\n\n`;
+    const lineUrl = getSearchfoxUrl(testPath, summary);
+    if (lineUrl.includes('#')) {
+        const end = summary.indexOf(']') + 1;
+        description += `Failure message: [${summary.substring(0, end)}](${lineUrl})${summary.substring(end)}\n\n`;
+    } else {
+        description += `Failure message: ${summary}\n\n`;
+    }
 
     if (stats?.failureCount) {
         const occurrenceText = stats.failureCount === 1 ? 'occurred once' : `occurred ${stats.failureCount} times`;

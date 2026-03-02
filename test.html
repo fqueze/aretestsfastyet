@@ -942,6 +942,7 @@
 
             const issueId = issueItem.dataset.issueId;
             const runsDiv = document.getElementById(`${issueId}-runs`);
+            const chartDiv = document.getElementById(`${issueId}-chart`);
 
             if (runsDiv.style.display === 'none') {
                 const testId = parseInt(issueItem.dataset.testId);
@@ -951,8 +952,18 @@
 
                 runsDiv.innerHTML = getIssueRuns(testId, testPath, issueType, issueMessage);
                 runsDiv.style.display = 'block';
+
+                // Show per-issue daily rate chart
+                if (chartDiv) {
+                    chartDiv.style.display = 'block';
+                    const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage);
+                    if (dailyData) {
+                        createIssueMessageChart(`${issueId}-canvas`, dailyData, issueType);
+                    }
+                }
             } else {
                 runsDiv.style.display = 'none';
+                if (chartDiv) chartDiv.style.display = 'none';
             }
         }
 
@@ -1228,6 +1239,151 @@
             } else if (skipCanvas) {
                 skipCanvas.style.display = 'none';
             }
+        }
+
+        // Calculate daily rates for a specific issue message (for per-issue chart)
+        function calculateIssueMessageDailyRates(testId, issueType, issueMessage) {
+            const days = currentData.metadata.days || 21;
+            const startTime = currentData.metadata.startTime;
+            const dailyData = [];
+
+            for (let day = 0; day < days; day++) {
+                dailyData.push({
+                    day,
+                    date: new Date((startTime + day * 86400) * 1000).toISOString().split('T')[0],
+                    count: 0,
+                    totalRuns: 0
+                });
+            }
+
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return dailyData;
+
+            // Count total runs per day (excluding SKIPs for non-SKIP issues)
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+                const status = currentData.tables.statuses[statusId];
+                if (status === 'UNKNOWN') continue;
+                if (issueType !== 'SKIP' && status === 'SKIP') continue;
+
+                if (statusGroup.days) {
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.days.length; i++) {
+                        day += statusGroup.days[i];
+                        if (day < days) {
+                            dailyData[day].totalRuns += getCountAtIndex(statusGroup, i);
+                        }
+                    }
+                } else if (statusGroup.timestamps) {
+                    let currentTime = 0;
+                    for (const diff of statusGroup.timestamps) {
+                        currentTime += diff;
+                        const day = Math.floor(currentTime / 86400);
+                        if (day < days) dailyData[day].totalRuns++;
+                    }
+                }
+            }
+
+            // Count occurrences of this specific issue message by day
+            const matchStatus = (status) => {
+                if (issueType === 'SKIP') return status === 'SKIP';
+                if (issueType === 'FAIL') return status && status.startsWith('FAIL');
+                if (issueType === 'CRASH') return status === 'CRASH';
+                if (issueType === 'TIMEOUT') return status && status.startsWith('TIMEOUT');
+                return false;
+            };
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+                const status = currentData.tables.statuses[statusId];
+                if (!matchStatus(status)) continue;
+
+                const matchesMessage = (i) => {
+                    if (issueType === 'TIMEOUT') return true;
+                    if (issueType === 'SKIP' || issueType === 'FAIL') {
+                        const messageId = statusGroup.messageIds?.[i];
+                        const message = messageId !== null && messageId !== undefined ? currentData.tables.messages[messageId] : null;
+                        const clean = message ? message.replace(/^skip-if:\s*/, '') : '';
+                        return issueMessage === FAILURE_NO_MESSAGE ? !clean : clean === issueMessage;
+                    }
+                    if (issueType === 'CRASH') {
+                        const sigId = statusGroup.crashSignatureIds?.[i];
+                        const sig = sigId !== null && sigId !== undefined ? currentData.tables.crashSignatures[sigId] : null;
+                        return sig === issueMessage || (!sig && issueMessage === 'Crash signature not recorded');
+                    }
+                    return false;
+                };
+
+                if (statusGroup.days) {
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.days.length; i++) {
+                        day += statusGroup.days[i];
+                        if (matchesMessage(i) && day < days) {
+                            dailyData[day].count += getCountAtIndex(statusGroup, i);
+                        }
+                    }
+                } else if (statusGroup.timestamps) {
+                    let currentTime = 0;
+                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                        currentTime += statusGroup.timestamps[i];
+                        const day = Math.floor(currentTime / 86400);
+                        if (matchesMessage(i) && day < days) {
+                            dailyData[day].count++;
+                        }
+                    }
+                }
+            }
+
+            return dailyData;
+        }
+
+        // Create a Chart.js bar chart for a specific issue message's daily rate
+        function createIssueMessageChart(canvasId, dailyData, issueType) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || typeof Chart === 'undefined') return;
+
+            const labels = dailyData.map(d => d.date);
+            const percentages = dailyData.map(d => d.totalRuns > 0 ? (d.count / d.totalRuns * 100) : 0);
+
+            const colors = {
+                SKIP: { bg: 'rgba(108, 117, 125, 0.7)', border: '#6c757d' },
+                FAIL: { bg: 'rgba(255, 140, 0, 0.7)', border: '#ff8c00' },
+                TIMEOUT: { bg: 'rgba(255, 193, 7, 0.7)', border: '#ffc107' },
+                CRASH: { bg: 'rgba(220, 53, 69, 0.7)', border: '#dc3545' }
+            };
+            const c = colors[issueType] || colors.CRASH;
+
+            const yAxisLabel = issueType === 'FAIL' ? '% failures' :
+                              issueType === 'TIMEOUT' ? '% timeouts' :
+                              issueType === 'CRASH' ? '% crashes' :
+                              issueType === 'SKIP' ? '% skips' : '% issues';
+
+            new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Occurrence Rate',
+                        data: percentages,
+                        backgroundColor: c.bg,
+                        borderColor: c.border,
+                        borderWidth: 1
+                    }]
+                },
+                options: getCommonChartOptions(yAxisLabel, function(context) {
+                    const data = dailyData[context.dataIndex];
+                    if (data.count === 0) return null;
+                    const percentage = context.parsed.y.toFixed(1);
+                    const typeName = issueType === 'FAIL' ? (data.count === 1 ? 'failure' : 'failures') :
+                                    issueType === 'TIMEOUT' ? (data.count === 1 ? 'timeout' : 'timeouts') :
+                                    issueType === 'CRASH' ? (data.count === 1 ? 'crash' : 'crashes') :
+                                    issueType === 'SKIP' ? (data.count === 1 ? 'skip' : 'skips') :
+                                    (data.count === 1 ? 'occurrence' : 'occurrences');
+                    return `${formatNumber(data.count)} ${typeName} out of ${formatNumber(data.totalRuns)} runs (${percentage}%)`;
+                })
+            });
         }
 
         // Collect all PASS durations from bucketed data with jobNameIds
@@ -1530,6 +1686,7 @@
                 const badgeClass = type === 'SKIP' ? 'badge-skip' : type === 'FAIL' ? 'badge-fail' : type === 'CRASH' ? 'badge-crash' : 'badge-timeout';
                 const issueId = `issue-${index}`;
                 const escapedMessage = message.replace(/"/g, '&quot;');
+                const isExpandable = type !== 'SKIP';
 
                 let tooltip = '';
                 if (type === 'FAIL' && stats.runCount > 0) {
@@ -1538,7 +1695,11 @@
                     tooltip = `${count} ${occurrenceText} of this message out of ${stats.runCount.toLocaleString()} runs (${percentage}%)`;
                 }
 
-                html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                if (isExpandable) {
+                    html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                } else {
+                    html += `<div class="issue-item" style="cursor: default;">`;
+                }
                 html += `<span class="issue-count"${tooltip ? ` title="${escapeAttr(tooltip)}"` : ''}>${count}</span>`;
                 html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
                 html += `<span class="issue-message">${type === 'FAIL' ? linkifyFailureMessage(message, testPath) : escapeHtml(message)}`;
@@ -1550,13 +1711,19 @@
                         testPath,
                         summary: message,
                         component: testInfo.component,
-                        stats: { failureCount: count, totalRuns: stats.runCount, firstDate, lastDate }
+                        stats: { failureCount: count, totalRuns: stats.runCount, firstDate, lastDate },
+                        addSearchHash: false
                     });
                     html += getBugButton(bugUrl, 'File bug for this failure');
                 }
 
                 html += `</span></div>`;
-                html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
+                if (isExpandable) {
+                    html += `<div class="historical-chart" id="${issueId}-chart" style="display: none; margin-left: 50px;">`;
+                    html += `<canvas id="${issueId}-canvas" class="historical-chart-canvas"></canvas>`;
+                    html += `</div>`;
+                    html += `<div class="issue-runs" id="${issueId}-runs" style="display: none;"></div>`;
+                }
             });
 
             html += `</div></div>`;

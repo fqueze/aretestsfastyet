@@ -20,16 +20,12 @@ function formatNumber(num) {
 }
 
 function linkifyFailureMessage(message, testPath) {
-    const pattern = /^\[([^\] :]+) : (\d+)\]/;
-    const match = message.match(pattern);
-
-    if (match) {
-        const [fullMatch, , lineNumber] = match;
-        const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${testPath}#${lineNumber}`;
-        const link = `<a href="${searchfoxUrl}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(fullMatch)}</a>`;
-        return link + escapeHtml(message.substring(fullMatch.length));
+    const url = getSearchfoxUrl(testPath, message);
+    if (url.includes('#')) {
+        const end = message.indexOf(']') + 1;
+        const link = `<a href="${url}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(message.substring(0, end))}</a>`;
+        return link + escapeHtml(message.substring(end));
     }
-
     return escapeHtml(message);
 }
 
