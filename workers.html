@@ -200,6 +200,7 @@ th.sortable.sort-desc::after {
           <th class="num sortable" data-sort="maxQueued">Peak<br>Queued</th>
           <th class="num sortable" data-sort="minQueueTime">Queue Time<br>Min</th>
           <th class="num sortable" data-sort="medianQueueTime">Queue Time<br>Median</th>
+          <th class="num sortable" data-sort="p90QueueTime">Queue Time<br>p90</th>
           <th class="num sortable" data-sort="maxQueueTime">Queue Time<br>Max</th>
           <th>Activity</th>
           <th></th>
@@ -354,6 +355,7 @@ function computeStats(tasks) {
     minQueueTime: n ? queueTimes[0] : null,
     maxQueueTime: n ? queueTimes[n - 1] : null,
     medianQueueTime: n ? queueTimes[Math.floor(n / 2)] : null,
+    p90QueueTime: n ? queueTimes[Math.floor(n * 0.9)] : null,
   };
 }
 
@@ -728,6 +730,7 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     { text: formatNumber(stats.maxQueued) },
     { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
     { text: formatDuration(stats.medianQueueTime), color: durationColorClass(stats.medianQueueTime) },
+    { text: formatDuration(stats.p90QueueTime),    color: durationColorClass(stats.p90QueueTime) },
     { text: formatDuration(stats.maxQueueTime),    color: durationColorClass(stats.maxQueueTime) },
   ];
   for (const cell of cells) {
