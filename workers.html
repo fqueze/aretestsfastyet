@@ -31,12 +31,22 @@
   color: #888;
   margin-top: 2px;
 }
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
 #filter {
   padding: 8px 12px;
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 14px;
   width: 300px;
+}
+#project-filters button {
+  padding: 5px 12px;
+  font-size: 12px;
 }
 .pool-table-wrapper {
   background: white;
@@ -178,6 +188,7 @@ th.sortable.sort-desc::after {
   <div id="summary" class="summary"></div>
   <div class="controls">
     <input type="text" id="filter" placeholder="Filter worker pools...">
+    <span id="project-filters" class="btn-group"></span>
   </div>
   <div class="pool-table-wrapper">
     <table class="pool-table">
@@ -288,6 +299,18 @@ function durationColorClass(ms) {
 
 function formatNumber(n) {
   return n.toLocaleString();
+}
+
+function jobsByProject(tasks) {
+  const counts = new Map();
+  for (const t of tasks) {
+    const proj = t.project || 'unknown';
+    counts.set(proj, (counts.get(proj) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([proj, count]) => proj + ': ' + formatNumber(count))
+    .join('\n');
 }
 
 // ==================== Stats Computation ====================
@@ -680,6 +703,9 @@ async function openInProfiler(tasks, name) {
 
 let allRows = []; // { tr, name } for filtering
 let currentSort = { key: 'totalJobs', desc: true };
+let currentProject = ''; // '' = all projects
+let allParsedRows = null; // all rows after timestamp parsing
+let globalTimeStart = 0, globalTimeEnd = 0;
 let renderContext = null; // { allPool, pools, globalStart, globalEnd }
 
 function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
@@ -697,7 +723,7 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
   // Stat columns
   const cells = [
-    { text: formatNumber(stats.totalJobs) },
+    { text: formatNumber(stats.totalJobs), tip: jobsByProject(pool.tasks) },
     { text: formatNumber(stats.maxRunning) },
     { text: formatNumber(stats.maxQueued) },
     { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
@@ -708,6 +734,7 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     const td = document.createElement('td');
     td.className = 'num' + (cell.color ? ' ' + cell.color : '');
     td.textContent = cell.text;
+    if (cell.tip) td.title = cell.tip;
     tr.appendChild(td);
   }
 
@@ -843,6 +870,65 @@ function applyFilter() {
     if (row.isAllTasks) continue;
     row.tr.style.display = (!query || row.name.includes(query)) ? '' : 'none';
   }
+  // Sync filter to URL
+  const url = new URL(location);
+  if (query) {
+    url.searchParams.set('filter', query);
+  } else {
+    url.searchParams.delete('filter');
+  }
+  history.replaceState(null, '', url);
+}
+
+let topProjectSet = new Set(); // populated in setupControls
+
+function rebuildForProject(project) {
+  currentProject = project;
+  let rows;
+  if (!project) {
+    rows = allParsedRows;
+  } else if (project === '_other') {
+    rows = allParsedRows.filter(r => !topProjectSet.has(r.project || 'unknown'));
+  } else {
+    rows = allParsedRows.filter(r => r.project === project);
+  }
+
+  const byPool = new Map();
+  for (const row of rows) {
+    const pool = row.task_queue_id || 'unknown';
+    if (!byPool.has(pool)) byPool.set(pool, []);
+    byPool.get(pool).push(row);
+  }
+
+  const pools = [];
+  for (const [name, tasks] of byPool) {
+    pools.push({
+      name,
+      tasks,
+      stats: computeStats(tasks),
+      timeSeries: buildTimeSeries(tasks),
+    });
+  }
+
+  const allPool = {
+    name: 'All Tasks',
+    tasks: rows,
+    stats: computeStats(rows),
+    timeSeries: buildTimeSeries(rows),
+  };
+
+  renderContext = { allPool, pools, globalStart: globalTimeStart, globalEnd: globalTimeEnd };
+  renderSummary(rows, pools, globalTimeStart, globalTimeEnd);
+  renderAllRows();
+
+  // Sync to URL
+  const url = new URL(location);
+  if (project) {
+    url.searchParams.set('project', project);
+  } else {
+    url.searchParams.delete('project');
+  }
+  history.replaceState(null, '', url);
 }
 
 function updateSortIndicators() {
@@ -855,8 +941,65 @@ function updateSortIndicators() {
 }
 
 function setupControls() {
-  document.getElementById('filter').addEventListener('input', applyFilter);
+  const input = document.getElementById('filter');
+  const params = new URLSearchParams(location.search);
+  const initialFilter = params.get('filter');
+  if (initialFilter) {
+    input.value = initialFilter;
+  }
+  input.addEventListener('input', applyFilter);
 
+  // Project filter buttons — top 9 named projects + "Other"
+  const projects = new Map();
+  for (const row of allParsedRows) {
+    const proj = row.project || 'unknown';
+    projects.set(proj, (projects.get(proj) || 0) + 1);
+  }
+  const sorted = [...projects.entries()]
+    .filter(([name]) => name !== 'unknown')
+    .sort((a, b) => b[1] - a[1]);
+  const topProjects = sorted.slice(0, 9).map(([name]) => name);
+  topProjectSet = new Set(topProjects);
+
+  const container = document.getElementById('project-filters');
+  const setActive = (activeBtn) => {
+    for (const b of container.querySelectorAll('button')) b.classList.remove('active');
+    activeBtn.classList.add('active');
+  };
+
+  const allBtn = document.createElement('button');
+  allBtn.textContent = 'All';
+  allBtn.className = 'active';
+  allBtn.onclick = () => { setActive(allBtn); rebuildForProject(''); };
+  container.appendChild(allBtn);
+
+  for (const proj of topProjects) {
+    const btn = document.createElement('button');
+    btn.textContent = proj;
+    btn.onclick = () => { setActive(btn); rebuildForProject(proj); };
+    container.appendChild(btn);
+  }
+
+  // "Other" button for remaining projects + unknown
+  const hasOther = sorted.length > 9 || projects.has('unknown');
+  if (hasOther) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Other';
+    btn.onclick = () => { setActive(btn); rebuildForProject('_other'); };
+    container.appendChild(btn);
+  }
+
+  // Restore project from URL
+  const initialProject = params.get('project');
+  if (initialProject) {
+    currentProject = initialProject;
+    const label = initialProject === '_other' ? 'Other' : initialProject;
+    for (const b of container.querySelectorAll('button')) {
+      b.classList.toggle('active', b.textContent === label);
+    }
+  }
+
+  // Sort header clicks
   for (const th of document.querySelectorAll('th.sortable')) {
     th.addEventListener('click', () => {
       const key = th.dataset.sort;
@@ -864,7 +1007,6 @@ function setupControls() {
         currentSort.desc = !currentSort.desc;
       } else {
         currentSort.key = key;
-        // Default descending for numbers, ascending for name
         currentSort.desc = key !== 'name';
       }
       updateSortIndicators();
@@ -897,49 +1039,23 @@ async function processCSVText(text) {
     row._resolvedMs = Number(row.resolved);
   }
 
-  // Global time range (visible = started or resolved)
-  let globalStart = Infinity, globalEnd = -Infinity;
+  // Global time range (visible = started or resolved) — fixed across project filters
+  globalTimeStart = Infinity;
+  globalTimeEnd = -Infinity;
   for (const row of rows) {
     const visible = row._startedMs || row._resolvedMs;
-    if (visible < globalStart) globalStart = visible;
-    if (row._resolvedMs > globalEnd) globalEnd = row._resolvedMs;
+    if (visible < globalTimeStart) globalTimeStart = visible;
+    if (row._resolvedMs > globalTimeEnd) globalTimeEnd = row._resolvedMs;
   }
 
-  // Group by task_queue_id
-  const byPool = new Map();
-  for (const row of rows) {
-    const pool = row.task_queue_id || 'unknown';
-    if (!byPool.has(pool)) byPool.set(pool, []);
-    byPool.get(pool).push(row);
-  }
-
-  // Build pool objects with stats and time series
-  const pools = [];
-  for (const [name, tasks] of byPool) {
-    pools.push({
-      name,
-      tasks,
-      stats: computeStats(tasks),
-      timeSeries: buildTimeSeries(tasks),
-    });
-  }
-  pools.sort((a, b) => b.tasks.length - a.tasks.length);
-
-  const allPool = {
-    name: 'All Tasks',
-    tasks: rows,
-    stats: computeStats(rows),
-    timeSeries: buildTimeSeries(rows),
-  };
+  allParsedRows = rows;
 
   // Render
   loadingEl.style.display = 'none';
   contentEl.style.display = '';
 
-  renderContext = { allPool, pools, globalStart, globalEnd };
-  renderSummary(rows, pools, globalStart, globalEnd);
-  renderAllRows();
   setupControls();
+  rebuildForProject(currentProject);
 }
 
 async function main() {
