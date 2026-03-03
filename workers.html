@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worker Pool Activity</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+.summary {
+  background: white;
+  padding: 15px 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  margin-bottom: 15px;
+  display: flex;
+  gap: 30px;
+  flex-wrap: wrap;
+}
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+}
+.summary-stat .value {
+  font-size: 22px;
+  font-weight: bold;
+  color: #333;
+}
+.summary-stat .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #888;
+  margin-top: 2px;
+}
+#filter {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 300px;
+}
+.pool-table-wrapper {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  overflow-x: auto;
+}
+.pool-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.pool-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border-bottom: 2px solid #ddd;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #666;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.pool-table th.num {
+  text-align: right;
+}
+.pool-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.pool-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pool-table td.pool-name {
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 12px;
+}
+.pool-table tr:hover {
+  background: #fafafa;
+}
+.pool-table tr.all-tasks-row {
+  font-weight: bold;
+  background: #f0f4ff;
+}
+.pool-table tr.all-tasks-row:hover {
+  background: #e8eeff;
+}
+.pool-table tr.all-tasks-row td {
+  border-bottom: 2px solid #ddd;
+}
+.track-cell {
+  padding: 4px 8px !important;
+  min-width: 400px;
+}
+.track-container {
+  position: relative;
+}
+.track-canvas {
+  display: block;
+  width: 100%;
+  height: 36px;
+  border-radius: 3px;
+  cursor: crosshair;
+}
+.track-tooltip {
+  position: absolute;
+  top: -28px;
+  padding: 2px 6px;
+  background: rgba(0,0,0,.8);
+  color: white;
+  font-size: 11px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  display: none;
+  z-index: 10;
+}
+.profiler-btn {
+  padding: 5px 10px;
+  background: #0060df;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.profiler-btn:hover {
+  background: #003eaa;
+}
+.profiler-btn:disabled {
+  background: #ccc;
+  cursor: wait;
+}
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+th.sortable:hover {
+  background: #eef;
+}
+th.sortable::after {
+  content: ' \2195';
+  opacity: 0.3;
+}
+th.sortable.sort-asc::after {
+  content: ' \2191';
+  opacity: 1;
+}
+th.sortable.sort-desc::after {
+  content: ' \2193';
+  opacity: 1;
+}
+.qt-grey { color: #999; }
+.qt-yellow { color: #a68a00; }
+.qt-orange { color: #d96c00; font-weight: bold; }
+.qt-red { color: #d00; font-weight: bold; }
+.file-fallback {
+  margin-top: 10px;
+}
+.file-fallback input[type="file"] {
+  margin-top: 5px;
+}
+</style>
+</head>
+<body>
+<h1>Worker Pool Activity</h1>
+<div id="loading" class="loading">Loading task data...</div>
+<div id="error" class="error" style="display:none"></div>
+<div id="content" style="display:none">
+  <div id="summary" class="summary"></div>
+  <div class="controls">
+    <input type="text" id="filter" placeholder="Filter worker pools...">
+  </div>
+  <div class="pool-table-wrapper">
+    <table class="pool-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-sort="name">Worker Pool</th>
+          <th class="num sortable" data-sort="totalJobs">Jobs</th>
+          <th class="num sortable" data-sort="maxRunning">Peak<br>Running</th>
+          <th class="num sortable" data-sort="maxQueued">Peak<br>Queued</th>
+          <th class="num sortable" data-sort="minQueueTime">Queue Time<br>Min</th>
+          <th class="num sortable" data-sort="medianQueueTime">Queue Time<br>Median</th>
+          <th class="num sortable" data-sort="maxQueueTime">Queue Time<br>Max</th>
+          <th>Activity</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+
+const CSV_URL = 'https://sql.telemetry.mozilla.org/api/queries/112377/results.csv?api_key=l9PzG0DxDTNPhLWSRtZm9DdUtjjW7XN5i0T85Twy';
+
+// ==================== CSV Parsing ====================
+
+function parseCSVLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      values.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
+function parseCSV(text) {
+  const lines = text.split('\n');
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
+    if (!line) continue;
+    const values = parseCSVLine(line);
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j].trim()] = values[j] || '';
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// ==================== Formatting ====================
+
+function formatDuration(ms) {
+  if (ms == null) return '\u2014';
+  if (ms < 0) ms = 0;
+
+  const totalSeconds = ms / 1000;
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+
+  const pad = (n) => String(n).padStart(2, '0');
+
+  if (h > 0) {
+    // H:mm:ss
+    return h + ':' + pad(m) + ':' + pad(Math.floor(s));
+  }
+  if (m > 0) {
+    // m:ss
+    return m + ':' + pad(Math.floor(s));
+  }
+  // s.fs
+  return s.toFixed(1) + 's';
+}
+
+function durationColorClass(ms) {
+  if (ms == null) return '';
+  if (ms >= 10 * 3600000) return 'qt-red';      // >= 10 hours
+  if (ms >= 3600000)       return 'qt-orange';   // >= 1 hour
+  if (ms >= 300000)        return 'qt-yellow';   // >= 5 minutes
+  if (ms < 60000)          return 'qt-grey';     // < 1 minute
+  return '';
+}
+
+function formatNumber(n) {
+  return n.toLocaleString();
+}
+
+// ==================== Stats Computation ====================
+
+function computeStats(tasks) {
+  const events = [];
+  const queueTimes = [];
+
+  for (const t of tasks) {
+    events.push({ time: t._scheduledMs, type: 0 }); // schedule
+    if (t._startedMs) {
+      events.push({ time: t._startedMs, type: 1 }); // start
+      events.push({ time: t._resolvedMs, type: 3 }); // resolve (started)
+      queueTimes.push(t._startedMs - t._scheduledMs);
+    } else {
+      events.push({ time: t._resolvedMs, type: 2 }); // resolve (unstarted)
+    }
+  }
+
+  events.sort((a, b) => a.time - b.time || a.type - b.type);
+
+  let queued = 0, running = 0, maxQueued = 0, maxRunning = 0;
+  for (const e of events) {
+    switch (e.type) {
+      case 0: queued++; break;
+      case 1: queued--; running++; break;
+      case 2: queued--; break;
+      case 3: running--; break;
+    }
+    if (queued > maxQueued) maxQueued = queued;
+    if (running > maxRunning) maxRunning = running;
+  }
+
+  queueTimes.sort((a, b) => a - b);
+  const n = queueTimes.length;
+
+  return {
+    totalJobs: tasks.length,
+    maxRunning,
+    maxQueued,
+    minQueueTime: n ? queueTimes[0] : null,
+    maxQueueTime: n ? queueTimes[n - 1] : null,
+    medianQueueTime: n ? queueTimes[Math.floor(n / 2)] : null,
+  };
+}
+
+// ==================== Time Series for Track Drawing ====================
+
+function buildTimeSeries(tasks) {
+  const events = [];
+  for (const t of tasks) {
+    events.push({ time: t._scheduledMs, dTotal: 1, dRunning: 0 });
+    if (t._startedMs) {
+      events.push({ time: t._startedMs, dTotal: 0, dRunning: 1 });
+      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: -1 });
+    } else {
+      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: 0 });
+    }
+  }
+  events.sort((a, b) => a.time - b.time);
+
+  const series = [];
+  let total = 0, running = 0;
+  for (const e of events) {
+    total += e.dTotal;
+    running += e.dRunning;
+    series.push({ time: e.time, total, running });
+  }
+  return series;
+}
+
+// ==================== Track Drawing ====================
+
+function drawTrack(canvas, timeSeries, globalStart, globalEnd) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const cssW = Math.round(rect.width);
+  const cssH = Math.round(rect.height);
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const duration = globalEnd - globalStart;
+  if (duration <= 0 || timeSeries.length === 0) {
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect(0, 0, cssW, cssH);
+    return;
+  }
+
+  // Sample per CSS pixel — track max values within each pixel bucket
+  const totalByPx = new Float32Array(cssW);
+  const runningByPx = new Float32Array(cssW);
+
+  let curTotal = 0, curRunning = 0, idx = 0;
+
+  // Consume events before the visible range to get initial counts
+  while (idx < timeSeries.length && timeSeries[idx].time < globalStart) {
+    curTotal = timeSeries[idx].total;
+    curRunning = timeSeries[idx].running;
+    idx++;
+  }
+
+  for (let px = 0; px < cssW; px++) {
+    const pxEndTime = globalStart + ((px + 1) / cssW) * duration;
+    let maxTotal = curTotal, maxRunning = curRunning;
+    while (idx < timeSeries.length && timeSeries[idx].time <= pxEndTime) {
+      curTotal = timeSeries[idx].total;
+      curRunning = timeSeries[idx].running;
+      if (curTotal > maxTotal) maxTotal = curTotal;
+      if (curRunning > maxRunning) maxRunning = curRunning;
+      idx++;
+    }
+    totalByPx[px] = maxTotal;
+    runningByPx[px] = maxRunning;
+  }
+
+  // Find max for Y scaling
+  let maxVal = 1;
+  for (let px = 0; px < cssW; px++) {
+    if (totalByPx[px] > maxVal) maxVal = totalByPx[px];
+  }
+
+  // Background
+  ctx.fillStyle = '#f8f9fa';
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  // Total area (light grey-blue = queued + running)
+  ctx.fillStyle = 'rgba(180, 180, 180, 0.3)';
+  for (let px = 0; px < cssW; px++) {
+    const h = (totalByPx[px] / maxVal) * (cssH - 1);
+    if (h > 0) ctx.fillRect(px, cssH - h, 1, h);
+  }
+
+  // Running area (blue)
+  ctx.fillStyle = 'rgba(0, 96, 223, 0.6)';
+  for (let px = 0; px < cssW; px++) {
+    const h = (runningByPx[px] / maxVal) * (cssH - 1);
+    if (h > 0) ctx.fillRect(px, cssH - h, 1, h);
+  }
+
+  // Border
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(0, 0, cssW, cssH);
+}
+
+// ==================== Profile Generation ====================
+
+function generateProfile(tasks, threadName) {
+  const stringArray = ['(root)'];
+  const stringIndexMap = new Map([['(root)', 0]]);
+  function getStringIndex(str) {
+    if (!str) str = '';
+    if (stringIndexMap.has(str)) return stringIndexMap.get(str);
+    const idx = stringArray.length;
+    stringArray.push(str);
+    stringIndexMap.set(str, idx);
+    return idx;
+  }
+
+  let earliestTime = Infinity, latestTime = -Infinity;
+  for (const t of tasks) {
+    const visible = t._startedMs || t._resolvedMs;
+    if (visible < earliestTime) earliestTime = visible;
+    if (t._resolvedMs > latestTime) latestTime = t._resolvedMs;
+  }
+
+  const markerSchema = [
+    {
+      name: 'Task',
+      tooltipLabel: '{marker.data.label}',
+      tableLabel: '{marker.data.state} \u2014 {marker.data.label} \u2014 {marker.data.id}',
+      chartLabel: '{marker.data.label}',
+      display: ['marker-chart', 'marker-table'],
+      colorField: 'color',
+      fields: [
+        { key: 'id', label: 'Task ID', format: 'unique-string' },
+        { key: 'run', label: 'Run ID', format: 'integer' },
+        { key: 'label', label: 'Label', format: 'unique-string' },
+        { key: 'state', label: 'State', format: 'unique-string' },
+        { key: 'reason', label: 'Reason Resolved', format: 'unique-string' },
+        { key: 'group', label: 'Task Group ID', format: 'unique-string' },
+        { key: 'proj', label: 'Project', format: 'unique-string' },
+        { key: 'user', label: 'User', format: 'unique-string' },
+        { key: 'wgrp', label: 'Worker Group', format: 'unique-string' },
+        { key: 'wid', label: 'Worker ID', format: 'unique-string' },
+        { key: 'qtime', label: 'Queue Time', format: 'duration' },
+        { key: 'rtime', label: 'Run Time', format: 'duration' },
+        { key: 'cost', label: 'Run Cost', format: 'decimal' },
+        { key: 'color', format: 'string', hidden: true },
+      ]
+    },
+    {
+      name: 'TaskCount',
+      tooltipLabel: '{marker.name}',
+      display: [],
+      fields: [
+        { key: 'total', label: 'Total Tasks', format: 'integer' },
+        { key: 'running', label: 'Running Tasks', format: 'integer' },
+        { key: 'queued', label: 'Queued Tasks', format: 'integer' },
+      ],
+      graphs: [
+        { key: 'total', color: 'grey', type: 'bar' },
+        { key: 'running', color: 'blue', type: 'bar' },
+      ]
+    }
+  ];
+
+  function createMarkers(taskList) {
+    const markers = {
+      data: [], name: [], startTime: [], endTime: [],
+      phase: [], category: [], length: 0
+    };
+
+    // TaskCount markers
+    const events = [];
+    for (const t of taskList) {
+      events.push({ time: t._scheduledMs, type: 'scheduled', hasStarted: !!t._startedMs });
+      if (t._startedMs) events.push({ time: t._startedMs, type: 'started' });
+      events.push({ time: t._resolvedMs, type: 'resolved', hasStarted: !!t._startedMs });
+    }
+    events.sort((a, b) => a.time - b.time);
+
+    let total = 0, running = 0, prevTotal = -1, prevRunning = -1;
+    const countMarkers = [];
+    for (const e of events) {
+      if (e.type === 'scheduled') total++;
+      else if (e.type === 'started') running++;
+      else { total--; if (e.hasStarted) running--; }
+
+      if (e.time >= earliestTime && (total !== prevTotal || running !== prevRunning)) {
+        countMarkers.push({ time: e.time, total, running, queued: total - running });
+        prevTotal = total;
+        prevRunning = running;
+      }
+    }
+
+    const countNameIdx = getStringIndex('TaskCount');
+    for (let i = 0; i < countMarkers.length; i++) {
+      const m = countMarkers[i];
+      const next = countMarkers[i + 1];
+      markers.name.push(countNameIdx);
+      markers.startTime.push(m.time - earliestTime);
+      markers.endTime.push(next ? next.time - earliestTime : latestTime - earliestTime);
+      markers.phase.push(1);
+      markers.category.push(0);
+      markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued: m.queued });
+      markers.length++;
+    }
+
+    // Task markers
+    const taskNameIdx = getStringIndex('Task');
+    for (const t of taskList) {
+      const d = { type: 'Task' };
+      d.id = getStringIndex(t.task_id);
+      d.run = parseInt(t.run_id) || 0;
+      d.label = getStringIndex(t.label || 'unknown');
+      d.state = getStringIndex(t.state);
+      if (t.reason_resolved && t.reason_resolved !== t.state)
+        d.reason = getStringIndex(t.reason_resolved);
+      if (t.task_group_id) d.group = getStringIndex(t.task_group_id);
+      if (t.project) d.proj = getStringIndex(t.project);
+      if (t.created_for_user) d.user = getStringIndex(t.created_for_user);
+      if (t.worker_group) d.wgrp = getStringIndex(t.worker_group);
+      if (t.worker_id) d.wid = getStringIndex(t.worker_id);
+      if (t.run_cost) d.cost = parseFloat(t.run_cost);
+
+      if (t.state === 'completed') d.color = 'green';
+      else if (t.state === 'failed') d.color = 'red';
+      else if (t.state === 'exception' && t.reason_resolved === 'canceled') d.color = 'purple';
+
+      if (t._startedMs) {
+        d.qtime = t._startedMs - t._scheduledMs;
+        d.rtime = t._resolvedMs - t._startedMs;
+      }
+
+      markers.name.push(taskNameIdx);
+      if (t._startedMs) {
+        markers.startTime.push(t._startedMs - earliestTime);
+        markers.endTime.push(t._resolvedMs - earliestTime);
+        markers.phase.push(1);
+      } else {
+        markers.startTime.push(t._resolvedMs - earliestTime);
+        markers.endTime.push(null);
+        markers.phase.push(0);
+      }
+      markers.category.push(0);
+      markers.data.push(d);
+      markers.length++;
+    }
+
+    return markers;
+  }
+
+  const emptyTable = (len) => ({
+    frame: Array.from({length: len}, () => 0),
+    prefix: Array.from({length: len}, () => null),
+    category: Array.from({length: len}, () => 0),
+    subcategory: Array.from({length: len}, () => 0),
+    length: len
+  });
+
+  function makeThread(name, pid, tid, taskList) {
+    return {
+      processType: 'default',
+      processName: name,
+      processStartupTime: 0,
+      processShutdownTime: null,
+      registerTime: 0,
+      unregisterTime: null,
+      pausedRanges: [],
+      showMarkersInTimeline: true,
+      name,
+      isMainThread: false,
+      pid: String(pid),
+      tid,
+      samples: { weightType: 'samples', weight: null, stack: [], time: [], length: 0 },
+      markers: createMarkers(taskList),
+      stackTable: emptyTable(1),
+      frameTable: {
+        address: [-1], inlineDepth: [0], category: [null], subcategory: [0],
+        func: [0], nativeSymbol: [null], innerWindowID: [0],
+        implementation: [null], line: [null], column: [null], length: 1
+      },
+      funcTable: {
+        isJS: [false], relevantForJS: [false], name: [0], resource: [-1],
+        fileName: [null], lineNumber: [null], columnNumber: [null], length: 1
+      },
+      resourceTable: { lib: [], name: [], host: [], type: [], length: 0 },
+      nativeSymbols: { libIndex: [], address: [], name: [], functionSize: [], length: 0 },
+    };
+  }
+
+  const threads = [makeThread(threadName || 'All Tasks', '0', 0, tasks)];
+
+  return {
+    meta: {
+      processType: 0,
+      product: 'Taskcluster tasks',
+      stackwalk: 0,
+      version: 32,
+      preprocessedProfileVersion: 56,
+      symbolicationNotSupported: true,
+      interval: 1,
+      startTime: earliestTime,
+      profilingStartTime: 0,
+      profilingEndTime: latestTime - earliestTime,
+      categories: [{ name: 'Other', color: 'grey', subcategories: ['Other'] }],
+      markerSchema,
+      usesOnlyOneStackType: true,
+    },
+    libs: [],
+    threads,
+    counters: [],
+    shared: { stringArray },
+  };
+}
+
+// ==================== Profiler Integration ====================
+
+async function openInProfiler(tasks, name) {
+  const profile = generateProfile(tasks, name);
+
+  const origin = 'https://profiler.firefox.com';
+  const profilerWindow = window.open(origin + '/from-post-message/', '_blank');
+
+  if (!profilerWindow) {
+    alert('Popup blocked \u2014 please allow popups for this site.');
+    return;
+  }
+
+  // Wait for the profiler to signal it's ready, polling with "ready:request".
+  let isReady = false;
+  window.addEventListener('message', (e) => {
+    if (e.source === profilerWindow) {
+      isReady = true;
+      profilerWindow.postMessage({ name: 'inject-profile', profile }, origin);
+    }
+  });
+
+  while (!isReady) {
+    await new Promise(r => setTimeout(r, 100));
+    profilerWindow.postMessage({ name: 'ready:request' }, origin);
+  }
+}
+
+// ==================== Rendering ====================
+
+let allRows = []; // { tr, name } for filtering
+let currentSort = { key: 'totalJobs', desc: true };
+let renderContext = null; // { allPool, pools, globalStart, globalEnd }
+
+function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
+  const tr = document.createElement('tr');
+  if (isAllTasks) tr.className = 'all-tasks-row';
+
+  const stats = pool.stats;
+
+  // Pool name
+  const nameTd = document.createElement('td');
+  nameTd.className = 'pool-name';
+  nameTd.textContent = pool.name;
+  nameTd.title = pool.name;
+  tr.appendChild(nameTd);
+
+  // Stat columns
+  const cells = [
+    { text: formatNumber(stats.totalJobs) },
+    { text: formatNumber(stats.maxRunning) },
+    { text: formatNumber(stats.maxQueued) },
+    { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
+    { text: formatDuration(stats.medianQueueTime), color: durationColorClass(stats.medianQueueTime) },
+    { text: formatDuration(stats.maxQueueTime),    color: durationColorClass(stats.maxQueueTime) },
+  ];
+  for (const cell of cells) {
+    const td = document.createElement('td');
+    td.className = 'num' + (cell.color ? ' ' + cell.color : '');
+    td.textContent = cell.text;
+    tr.appendChild(td);
+  }
+
+  // Track canvas
+  const trackTd = document.createElement('td');
+  trackTd.className = 'track-cell';
+  const container = document.createElement('div');
+  container.className = 'track-container';
+  const canvas = document.createElement('canvas');
+  canvas.className = 'track-canvas';
+  const tooltip = document.createElement('div');
+  tooltip.className = 'track-tooltip';
+  container.appendChild(canvas);
+  container.appendChild(tooltip);
+  trackTd.appendChild(container);
+  tr.appendChild(trackTd);
+
+  // Profiler button
+  const btnTd = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.className = 'profiler-btn';
+  btn.textContent = 'Profiler';
+  btn.title = 'Open in Firefox Profiler';
+  btn.onclick = () => {
+    btn.disabled = true;
+    btn.textContent = 'Generating\u2026';
+    // Yield so the button updates visually before heavy work
+    setTimeout(() => {
+      try {
+        openInProfiler(pool.tasks, pool.name);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Profiler';
+      }
+    }, 0);
+  };
+  btnTd.appendChild(btn);
+  tr.appendChild(btnTd);
+
+  tbody.appendChild(tr);
+
+  // Draw the track after the element is laid out
+  const timeSeries = pool.timeSeries;
+  requestAnimationFrame(() => {
+    drawTrack(canvas, timeSeries, globalStart, globalEnd);
+
+    // Tooltip on hover
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const frac = x / rect.width;
+      const time = globalStart + frac * (globalEnd - globalStart);
+
+      // Binary search for the last event at or before this time
+      let lo = 0, hi = timeSeries.length - 1;
+      let running = 0, total = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (timeSeries[mid].time <= time) {
+          running = timeSeries[mid].running;
+          total = timeSeries[mid].total;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+
+      const queued = total - running;
+      const d = new Date(time);
+      const timeStr = d.toLocaleTimeString(undefined, { timeZone: 'UTC' });
+      tooltip.textContent = `${timeStr} \u2014 ${running} running, ${queued} queued`;
+      tooltip.style.display = 'block';
+      tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
+  });
+
+  allRows.push({ tr, name: pool.name.toLowerCase(), isAllTasks });
+}
+
+function renderSummary(allTasks, pools, globalStart, globalEnd) {
+  const summary = document.getElementById('summary');
+  const utc = { timeZone: 'UTC' };
+  const date = new Date(globalStart).toLocaleDateString(undefined, {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+  });
+  const timeRange =
+    new Date(globalStart).toLocaleTimeString(undefined, utc) + ' \u2014 ' +
+    new Date(globalEnd).toLocaleTimeString(undefined, utc) + ' UTC';
+
+  summary.innerHTML =
+    '<div class="summary-stat"><span class="value">' + formatNumber(allTasks.length) + '</span><span class="label">Total Jobs</span></div>' +
+    '<div class="summary-stat"><span class="value">' + formatNumber(pools.length) + '</span><span class="label">Worker Pools</span></div>' +
+    '<div class="summary-stat"><span class="value">' + date + '</span><span class="label">' + timeRange + '</span></div>';
+}
+
+function sortPools(pools, key, desc) {
+  const getter = key === 'name'
+    ? (p) => p.name.toLowerCase()
+    : (p) => p.stats[key] ?? -Infinity;
+
+  pools.sort((a, b) => {
+    const va = getter(a), vb = getter(b);
+    if (va < vb) return desc ? 1 : -1;
+    if (va > vb) return desc ? -1 : 1;
+    return 0;
+  });
+}
+
+function renderAllRows() {
+  const { allPool, pools, globalStart, globalEnd } = renderContext;
+  const tbody = document.getElementById('table-body');
+  tbody.innerHTML = '';
+  allRows = [];
+
+  sortPools(pools, currentSort.key, currentSort.desc);
+
+  renderRow(tbody, allPool, globalStart, globalEnd, true);
+  for (const pool of pools) {
+    renderRow(tbody, pool, globalStart, globalEnd, false);
+  }
+
+  // Re-apply filter
+  applyFilter();
+}
+
+function applyFilter() {
+  const query = document.getElementById('filter').value.toLowerCase().trim();
+  for (const row of allRows) {
+    if (row.isAllTasks) continue;
+    row.tr.style.display = (!query || row.name.includes(query)) ? '' : 'none';
+  }
+}
+
+function updateSortIndicators() {
+  for (const th of document.querySelectorAll('th.sortable')) {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sort === currentSort.key) {
+      th.classList.add(currentSort.desc ? 'sort-desc' : 'sort-asc');
+    }
+  }
+}
+
+function setupControls() {
+  document.getElementById('filter').addEventListener('input', applyFilter);
+
+  for (const th of document.querySelectorAll('th.sortable')) {
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (currentSort.key === key) {
+        currentSort.desc = !currentSort.desc;
+      } else {
+        currentSort.key = key;
+        // Default descending for numbers, ascending for name
+        currentSort.desc = key !== 'name';
+      }
+      updateSortIndicators();
+      renderAllRows();
+    });
+  }
+
+  updateSortIndicators();
+}
+
+// ==================== Main ====================
+
+async function processCSVText(text) {
+  const loadingEl = document.getElementById('loading');
+  const contentEl = document.getElementById('content');
+
+  loadingEl.textContent = 'Parsing CSV data...';
+  await new Promise(r => setTimeout(r, 0));
+
+  const rows = parseCSV(text);
+  if (rows.length === 0) throw new Error('No data rows found in CSV');
+
+  loadingEl.textContent = 'Processing ' + formatNumber(rows.length) + ' tasks...';
+  await new Promise(r => setTimeout(r, 0));
+
+  // Pre-parse timestamps
+  for (const row of rows) {
+    row._scheduledMs = Number(row.scheduled);
+    row._startedMs = row.started ? Number(row.started) : null;
+    row._resolvedMs = Number(row.resolved);
+  }
+
+  // Global time range (visible = started or resolved)
+  let globalStart = Infinity, globalEnd = -Infinity;
+  for (const row of rows) {
+    const visible = row._startedMs || row._resolvedMs;
+    if (visible < globalStart) globalStart = visible;
+    if (row._resolvedMs > globalEnd) globalEnd = row._resolvedMs;
+  }
+
+  // Group by task_queue_id
+  const byPool = new Map();
+  for (const row of rows) {
+    const pool = row.task_queue_id || 'unknown';
+    if (!byPool.has(pool)) byPool.set(pool, []);
+    byPool.get(pool).push(row);
+  }
+
+  // Build pool objects with stats and time series
+  const pools = [];
+  for (const [name, tasks] of byPool) {
+    pools.push({
+      name,
+      tasks,
+      stats: computeStats(tasks),
+      timeSeries: buildTimeSeries(tasks),
+    });
+  }
+  pools.sort((a, b) => b.tasks.length - a.tasks.length);
+
+  const allPool = {
+    name: 'All Tasks',
+    tasks: rows,
+    stats: computeStats(rows),
+    timeSeries: buildTimeSeries(rows),
+  };
+
+  // Render
+  loadingEl.style.display = 'none';
+  contentEl.style.display = '';
+
+  renderContext = { allPool, pools, globalStart, globalEnd };
+  renderSummary(rows, pools, globalStart, globalEnd);
+  renderAllRows();
+  setupControls();
+}
+
+async function main() {
+  const loadingEl = document.getElementById('loading');
+  const errorEl = document.getElementById('error');
+
+  try {
+    loadingEl.textContent = 'Fetching task data from STMO...';
+    const response = await fetch(CSV_URL);
+    if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+
+    const text = await response.text();
+    await processCSVText(text);
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    errorEl.style.display = '';
+    errorEl.innerHTML =
+      'Error: ' + err.message +
+      '<div class="file-fallback">' +
+      'You can <a href="' + CSV_URL + '" target="_blank">download the CSV</a> and load it manually:' +
+      '<br><input type="file" accept=".csv" onchange="loadLocalFile(this)">' +
+      '</div>';
+    console.error(err);
+  }
+}
+
+function loadLocalFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const errorEl = document.getElementById('error');
+  const loadingEl = document.getElementById('loading');
+  errorEl.style.display = 'none';
+  loadingEl.style.display = '';
+  loadingEl.textContent = 'Reading file...';
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      await processCSVText(reader.result);
+    } catch (err) {
+      loadingEl.style.display = 'none';
+      errorEl.style.display = '';
+      errorEl.textContent = 'Error processing file: ' + err.message;
+      console.error(err);
+    }
+  };
+  reader.readAsText(file);
+}
+
+main();
+</script>
+</body>
+</html>
