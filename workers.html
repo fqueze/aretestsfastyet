@@ -37,12 +37,32 @@
   gap: 15px;
   flex-wrap: wrap;
 }
+.filter-wrap {
+  position: relative;
+  display: inline-block;
+}
 #filter {
-  padding: 8px 12px;
+  padding: 8px 28px 8px 12px;
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 14px;
   width: 300px;
+}
+.filter-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: #999;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.filter-clear:hover {
+  color: #333;
 }
 #project-filters button {
   padding: 5px 12px;
@@ -187,7 +207,10 @@ th.sortable.sort-desc::after {
 <div id="content" style="display:none">
   <div id="summary" class="summary"></div>
   <div class="controls">
-    <input type="text" id="filter" placeholder="Filter worker pools...">
+    <span class="filter-wrap">
+      <input type="text" id="filter" placeholder="Filter worker pools...">
+      <button type="button" id="filter-clear" class="filter-clear" hidden>&times;</button>
+    </span>
     <span id="project-filters" class="btn-group"></span>
   </div>
   <div class="pool-table-wrapper">
@@ -779,46 +802,41 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
   tbody.appendChild(tr);
 
-  // Draw the track after the element is laid out
   const timeSeries = pool.timeSeries;
-  requestAnimationFrame(() => {
-    drawTrack(canvas, timeSeries, globalStart, globalEnd);
 
-    // Tooltip on hover
-    canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const frac = x / rect.width;
-      const time = globalStart + frac * (globalEnd - globalStart);
+  // Tooltip on hover
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const frac = x / rect.width;
+    const time = globalStart + frac * (globalEnd - globalStart);
 
-      // Binary search for the last event at or before this time
-      let lo = 0, hi = timeSeries.length - 1;
-      let running = 0, total = 0;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (timeSeries[mid].time <= time) {
-          running = timeSeries[mid].running;
-          total = timeSeries[mid].total;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
+    let lo = 0, hi = timeSeries.length - 1;
+    let running = 0, total = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (timeSeries[mid].time <= time) {
+        running = timeSeries[mid].running;
+        total = timeSeries[mid].total;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
       }
+    }
 
-      const queued = total - running;
-      const d = new Date(time);
-      const timeStr = d.toLocaleTimeString(undefined, { timeZone: 'UTC' });
-      tooltip.textContent = `${timeStr} \u2014 ${running} running, ${queued} queued`;
-      tooltip.style.display = 'block';
-      tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-      tooltip.style.display = 'none';
-    });
+    const queued = total - running;
+    const d = new Date(time);
+    const timeStr = d.toLocaleTimeString(undefined, { timeZone: 'UTC' });
+    tooltip.textContent = `${timeStr} \u2014 ${running} running, ${queued} queued`;
+    tooltip.style.display = 'block';
+    tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
   });
 
-  allRows.push({ tr, name: pool.name.toLowerCase(), isAllTasks });
+  canvas.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+  });
+
+  allRows.push({ tr, name: pool.name.toLowerCase(), isAllTasks, canvas, timeSeries, globalStart, globalEnd, drawn: false });
 }
 
 function renderSummary(allTasks, pools, globalStart, globalEnd) {
@@ -869,9 +887,15 @@ function renderAllRows() {
 
 function applyFilter() {
   const query = document.getElementById('filter').value.toLowerCase().trim();
+  let needDraw = false;
   for (const row of allRows) {
     if (row.isAllTasks) continue;
-    row.tr.style.display = (!query || row.name.includes(query)) ? '' : 'none';
+    const visible = !query || row.name.includes(query);
+    row.tr.style.display = visible ? '' : 'none';
+    if (visible && !row.drawn) needDraw = true;
+  }
+  if (needDraw) {
+    requestAnimationFrame(drawPendingTracks);
   }
   // Sync filter to URL
   const url = new URL(location);
@@ -881,6 +905,15 @@ function applyFilter() {
     url.searchParams.delete('filter');
   }
   history.replaceState(null, '', url);
+}
+
+function drawPendingTracks() {
+  for (const row of allRows) {
+    if (!row.drawn && row.tr.style.display !== 'none') {
+      drawTrack(row.canvas, row.timeSeries, row.globalStart, row.globalEnd);
+      row.drawn = true;
+    }
+  }
 }
 
 let topProjectSet = new Set(); // populated in setupControls
@@ -946,11 +979,22 @@ function updateSortIndicators() {
 function setupControls() {
   const input = document.getElementById('filter');
   const params = new URLSearchParams(location.search);
+  const clearBtn = document.getElementById('filter-clear');
   const initialFilter = params.get('filter');
   if (initialFilter) {
     input.value = initialFilter;
+    clearBtn.hidden = false;
   }
-  input.addEventListener('input', applyFilter);
+  input.addEventListener('input', () => {
+    clearBtn.hidden = !input.value;
+    applyFilter();
+  });
+  clearBtn.addEventListener('click', () => {
+    input.value = '';
+    clearBtn.hidden = true;
+    applyFilter();
+    input.focus();
+  });
 
   // Project filter buttons — top 9 named projects + "Other"
   const projects = new Map();
