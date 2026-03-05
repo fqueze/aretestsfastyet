@@ -749,8 +749,8 @@
                 for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                     if (matchFn(i)) {
                         const bucket = statusGroup.taskIdIds[i];
-                        for (const taskIdIndex of bucket) {
-                            callback(taskIdIndex, i);
+                        for (let j = 0; j < bucket.length; j++) {
+                            callback(bucket[j], i, j);
                         }
                     }
                 }
@@ -3187,8 +3187,9 @@
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
                             return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
-                        }, (taskIdIndex, i) => {
-                            const minidump = statusGroup.minidumps?.[i];
+                        }, (taskIdIndex, i, j) => {
+                            const minidumpData = statusGroup.minidumps?.[i];
+                            const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
                             runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
                         });
                     }
