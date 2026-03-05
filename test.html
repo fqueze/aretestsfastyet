@@ -595,8 +595,8 @@
                 for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
                     if (matchFn(i)) {
                         const bucket = statusGroup.taskIdIds[i];
-                        for (const taskIdIndex of bucket) {
-                            callback(taskIdIndex, i);
+                        for (let j = 0; j < bucket.length; j++) {
+                            callback(bucket[j], i, j);
                         }
                     }
                 }
@@ -830,7 +830,9 @@
         // Create run info for issue detail expansion
         function createRunInfo(taskIdIndex, issueType, testPath, minidump) {
             const taskIdString = currentData.tables.taskIds[taskIdIndex];
-            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            const baseJobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            const chunk = currentData.taskInfo.chunks?.[taskIdIndex];
+            const jobName = chunk != null ? `${baseJobName}-${chunk}` : baseJobName;
             const [taskId, retryId] = taskIdString.split('.');
 
             const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
@@ -896,8 +898,9 @@
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
                             return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
-                        }, (taskIdIndex, i) => {
-                            const minidump = statusGroup.minidumps?.[i];
+                        }, (taskIdIndex, i, j) => {
+                            const minidumpData = statusGroup.minidumps?.[i];
+                            const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
                             runs.push(createRunInfo(taskIdIndex, issueType, testPath, minidump));
                         });
                     }
