@@ -1924,8 +1924,18 @@
             const testPath = urlParams.get('test');
 
             if (!testPath) {
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = 'No test specified. Use ?test=path/to/test.js in the URL.';
+                const contentEl = document.getElementById('content');
+                contentEl.innerHTML = `<div class="test-header">` +
+                    `<h1>Test Info</h1>` +
+                    `<form action="test.html" method="get" style="margin-top: 12px;">` +
+                    `<label for="test-input" style="font-size: 14px; color: #555;">Enter test path:</label>` +
+                    `<div style="display: flex; gap: 8px; margin-top: 6px;">` +
+                    `<input id="test-input" name="test" type="text" placeholder="e.g. browser/components/.../browser_foo.js" ` +
+                    `style="flex: 1; padding: 8px 10px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;">` +
+                    `<button type="submit" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">Go</button>` +
+                    `</div></form></div>`;
+                contentEl.style.display = 'block';
+                document.getElementById('test-input').focus();
                 return;
             }
 
