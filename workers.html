@@ -36,13 +36,14 @@
   align-items: center;
   gap: 15px;
   flex-wrap: wrap;
+  min-height: 34px;
 }
 .filter-wrap {
   position: relative;
   display: inline-block;
 }
 #filter {
-  padding: 8px 28px 8px 12px;
+  padding: 4px 28px 4px 12px;
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 14px;
@@ -72,7 +73,7 @@
   background: white;
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0,0,0,.1);
-  overflow-x: auto;
+  overflow-x: clip;
 }
 .pool-table {
   width: 100%;
@@ -126,17 +127,22 @@
   border-bottom: 2px solid #ddd;
 }
 .track-cell {
-  padding: 4px 8px !important;
+  padding: 0 0 0 8px !important;
+  width: 100%;
   min-width: 400px;
 }
 .track-container {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .track-canvas {
   display: block;
-  width: 100%;
+  flex: 1;
+  width: 0;
+  min-width: 0;
   height: 36px;
-  border-radius: 3px;
   cursor: crosshair;
 }
 .track-tooltip {
@@ -153,21 +159,25 @@
   z-index: 10;
 }
 .profiler-btn {
-  padding: 5px 10px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  padding: 3px 8px;
   background: #0060df;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 3px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .profiler-btn:hover {
   background: #003eaa;
 }
 .profiler-btn:disabled {
-  background: #ccc;
   cursor: wait;
+}
+.profiler-btn:hover {
+  background: #003eaa;
 }
 th.sortable {
   cursor: pointer;
@@ -196,19 +206,23 @@ th.sortable.sort-desc::after {
 </head>
 <body>
 <h1>Worker Pool Activity</h1>
-<div id="loading" class="loading">Loading task data...</div>
 <div id="error" class="error" style="display:none"></div>
-<div id="content" style="display:none">
-  <div id="summary" class="summary"></div>
+<div id="content">
+  <div id="summary" class="summary">
+    <div class="summary-stat"><span id="summary-date" class="value">&mdash;</span><span class="label">UTC</span></div>
+    <div class="summary-stat"><span class="value">&mdash;</span><span class="label">Worker Pools</span></div>
+    <div class="summary-stat"><span class="value">&mdash;</span><span class="label">Total Jobs</span></div>
+  </div>
   <div class="controls">
-    <select id="date-select"></select>
-    <span class="filter-wrap">
+    <span id="loading" class="loading" style="font-size:13px;padding:0;color:#888">Loading task data...</span>
+    <select id="date-select" style="display:none"></select>
+    <span class="filter-wrap" style="display:none">
       <input type="text" id="filter" placeholder="Filter worker pools...">
       <button type="button" id="filter-clear" class="filter-clear" hidden>&times;</button>
     </span>
-    <span id="project-filters" class="btn-group"></span>
+    <span id="project-filters" class="btn-group" style="display:none"></span>
   </div>
-  <div class="pool-table-wrapper">
+  <div class="pool-table-wrapper" style="display:none">
     <table class="pool-table">
       <thead>
         <tr>
@@ -221,7 +235,6 @@ th.sortable.sort-desc::after {
           <th class="num sortable" data-sort="p90QueueTime">Queue Time<br>p90</th>
           <th class="num sortable" data-sort="maxQueueTime">Queue Time<br>Max</th>
           <th>Activity</th>
-          <th></th>
         </tr>
       </thead>
       <tbody id="table-body"></tbody>
@@ -833,8 +846,9 @@ async function getProfilerTasks(pool) {
 
 async function switchDate(date) {
   const loadingEl = document.getElementById('loading');
-  const contentEl = document.getElementById('content');
-  contentEl.style.display = 'none';
+  document.querySelector('.pool-table-wrapper').style.display = 'none';
+  document.querySelector('.filter-wrap').style.display = 'none';
+  document.getElementById('project-filters').style.display = 'none';
   loadingEl.style.display = '';
   loadingEl.textContent = 'Fetching data for ' + date + '...';
   try {
@@ -884,25 +898,17 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   container.className = 'track-container';
   const canvas = document.createElement('canvas');
   canvas.className = 'track-canvas';
+  canvas.width = 0;
   const tooltip = document.createElement('div');
   tooltip.className = 'track-tooltip';
-  container.appendChild(canvas);
-  container.appendChild(tooltip);
-  trackTd.appendChild(container);
-  tr.appendChild(trackTd);
-
-  // Profiler button
-  const btnTd = document.createElement('td');
   const btn = document.createElement('button');
   btn.className = 'profiler-btn';
   btn.textContent = 'Profiler';
   btn.title = 'Open in Firefox Profiler';
   btn.onclick = async () => {
     btn.disabled = true;
-    btn.textContent = 'Loading\u2026';
     try {
       const tasks = await getProfilerTasks(pool);
-      btn.textContent = 'Generating\u2026';
       await new Promise(r => setTimeout(r, 0));
       await openInProfiler(tasks, pool.name, pool.timeSeries);
     } catch (err) {
@@ -910,11 +916,13 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
       alert('Failed to load task data: ' + err.message);
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Profiler';
     }
   };
-  btnTd.appendChild(btn);
-  tr.appendChild(btnTd);
+  container.appendChild(canvas);
+  container.appendChild(tooltip);
+  container.appendChild(btn);
+  trackTd.appendChild(container);
+  tr.appendChild(trackTd);
 
   tbody.appendChild(tr);
 
@@ -987,18 +995,22 @@ function materializeRow(row, trackW, trackH) {
   });
 }
 
-function renderSummary(allTasks, pools, globalStart, globalEnd) {
-  const summary = document.getElementById('summary');
-  const date = new Date(globalStart).toLocaleDateString(undefined, {
+function formatDateUTC(ms) {
+  return new Date(ms).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
   });
+}
+
+function renderSummary(allTasks, pools, globalStart, globalEnd) {
+  const summary = document.getElementById('summary');
+  const date = formatDateUTC(globalStart);
   const expiredCount = allTasks.filter(t => t._expired).length;
 
   summary.innerHTML =
-    '<div class="summary-stat"><span class="value">' + formatNumber(allTasks.length) + '</span><span class="label">Total Jobs</span></div>' +
-    (expiredCount ? '<div class="summary-stat"><span class="value">' + formatNumber(expiredCount) + '</span><span class="label">Expired</span></div>' : '') +
+    '<div class="summary-stat"><span class="value">' + date + '</span><span class="label">UTC</span></div>' +
     '<div class="summary-stat"><span class="value">' + formatNumber(pools.length) + '</span><span class="label">Worker Pools</span></div>' +
-    '<div class="summary-stat"><span class="value">' + date + '</span><span class="label">UTC</span></div>';
+    '<div class="summary-stat"><span class="value">' + formatNumber(allTasks.length) + '</span><span class="label">Total Jobs</span></div>' +
+    (expiredCount ? '<div class="summary-stat"><span class="value">' + formatNumber(expiredCount) + '</span><span class="label">Expired</span></div>' : '');
 }
 
 function sortPools(pools, key, desc) {
@@ -1021,7 +1033,7 @@ let rowObserver = null;
 function observeRows() {
   if (rowObserver) rowObserver.disconnect();
 
-  // Read track canvas dimensions once before materializing anything
+  // Read track canvas dimensions once (single reflow) before materializing anything
   const firstCanvas = allRows.length ? allRows[0].canvas : null;
   const trackW = firstCanvas ? firstCanvas.clientWidth : 400;
   const trackH = firstCanvas ? firstCanvas.clientHeight : 36;
@@ -1256,7 +1268,6 @@ function setupControls() {
 
 function processData(rows, dayStartMs) {
   const loadingEl = document.getElementById('loading');
-  const contentEl = document.getElementById('content');
 
   loadingEl.textContent = 'Processing ' + formatNumber(rows.length) + ' tasks...';
 
@@ -1285,7 +1296,10 @@ function processData(rows, dayStartMs) {
 
   // Render
   loadingEl.style.display = 'none';
-  contentEl.style.display = '';
+  document.getElementById('date-select').style.display = '';
+  document.querySelector('.filter-wrap').style.display = '';
+  document.getElementById('project-filters').style.display = '';
+  document.querySelector('.pool-table-wrapper').style.display = '';
 
   setupControls();
   rebuildForProject(currentProject);
@@ -1309,6 +1323,8 @@ async function main() {
     const requestedDate = params.get('date');
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     const guessDate = requestedDate || yesterday;
+    document.getElementById('summary-date').textContent =
+      formatDateUTC(Date.parse(guessDate + 'T00:00:00Z'));
     const speculativeFetch = fetchFromCI('worker-data', 'workers-' + guessDate + '.json');
 
     loadingEl.textContent = 'Fetching worker data...';
