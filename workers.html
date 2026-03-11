@@ -192,12 +192,6 @@ th.sortable.sort-desc::after {
 .qt-yellow { color: #a68a00; }
 .qt-orange { color: #d96c00; font-weight: bold; }
 .qt-red { color: #d00; font-weight: bold; }
-.file-fallback {
-  margin-top: 10px;
-}
-.file-fallback input[type="file"] {
-  margin-top: 5px;
-}
 </style>
 </head>
 <body>
@@ -207,6 +201,7 @@ th.sortable.sort-desc::after {
 <div id="content" style="display:none">
   <div id="summary" class="summary"></div>
   <div class="controls">
+    <select id="date-select"></select>
     <span class="filter-wrap">
       <input type="text" id="filter" placeholder="Filter worker pools...">
       <button type="button" id="filter-clear" class="filter-clear" hidden>&times;</button>
@@ -233,59 +228,8 @@ th.sortable.sort-desc::after {
     </table>
   </div>
 </div>
+<script src="fetch-utils.js"></script>
 <script>
-
-const CSV_URL = 'https://sql.telemetry.mozilla.org/api/queries/112377/results.csv?api_key=l9PzG0DxDTNPhLWSRtZm9DdUtjjW7XN5i0T85Twy';
-
-// ==================== CSV Parsing ====================
-
-function parseCSVLine(line) {
-  const values = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      values.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  values.push(current);
-  return values;
-}
-
-function parseCSV(text) {
-  const lines = text.split('\n');
-  if (lines.length < 2) return [];
-  const headers = parseCSVLine(lines[0]);
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trimEnd();
-    if (!line) continue;
-    const values = parseCSVLine(line);
-    const row = {};
-    for (let j = 0; j < headers.length; j++) {
-      row[headers[j].trim()] = values[j] || '';
-    }
-    rows.push(row);
-  }
-  return rows;
-}
 
 // ==================== Formatting ====================
 
@@ -337,6 +281,92 @@ function jobsByProject(tasks) {
     .join('\n');
 }
 
+// ==================== Data Decoding ====================
+
+function decompressScheduled(scheduled, n) {
+  const abs = new Array(n);
+  if (n > 0) {
+    abs[0] = scheduled[0];
+    for (let i = 1; i < n; i++) {
+      abs[i] = abs[i - 1] + scheduled[i];
+    }
+  }
+  return abs;
+}
+
+function parseResolution(resolution) {
+  const dashIdx = resolution.indexOf(' - ');
+  if (dashIdx >= 0) {
+    return { state: resolution.substring(0, dashIdx), reason: resolution.substring(dashIdx + 3) };
+  }
+  return { state: resolution, reason: resolution };
+}
+
+function decodeSummaryData(data) {
+  const { tables, tasks, metadata } = data;
+  const n = metadata.taskCount;
+  const absScheduled = decompressScheduled(tasks.scheduled, n);
+  const rows = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = absScheduled[i];
+    const { state, reason } = parseResolution(tables.resolutions[tasks.resolutionIds[i]] || '');
+    rows[i] = {
+      scheduled: s,
+      started: tasks.started[i] !== null ? s + tasks.started[i] : null,
+      resolved: s + tasks.resolved[i],
+      task_queue_id: tables.taskQueueIds[tasks.taskQueueIdIds[i]] || 'unknown',
+      project: tasks.projectIds[i] !== null ? tables.projects[tasks.projectIds[i]] : 'unknown',
+      state,
+      reason_resolved: reason,
+    };
+  }
+  return rows;
+}
+
+function decodeTaskData(data) {
+  const { tables, tasks, workerInfo, taskGroupInfo, metadata } = data;
+  const n = metadata.taskCount;
+  const absScheduled = decompressScheduled(tasks.scheduled, n);
+  const rows = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = absScheduled[i];
+    const { state, reason } = parseResolution(tables.resolutions[tasks.resolutionIds[i]] || '');
+    const taskIdStr = tasks.taskIds[i] || '';
+    const dotIdx = taskIdStr.lastIndexOf('.');
+    let task_id = taskIdStr, run_id = '0';
+    if (dotIdx > 0) {
+      const suffix = taskIdStr.substring(dotIdx + 1);
+      if (/^\d+$/.test(suffix)) {
+        task_id = taskIdStr.substring(0, dotIdx);
+        run_id = suffix;
+      }
+    }
+    const wIdx = tasks.workerIdIds[i];
+    const tgIdx = tasks.taskGroupIdIds[i];
+    const projIdx = tgIdx !== null ? taskGroupInfo.projectIds[tgIdx] : null;
+    rows[i] = {
+      scheduled: s,
+      started: tasks.started[i] !== null ? s + tasks.started[i] : null,
+      resolved: s + tasks.resolved[i],
+      task_queue_id: tables.taskQueueIds[tasks.taskQueueIdIds[i]] || 'unknown',
+      project: projIdx !== null ? tables.projects[projIdx] : 'unknown',
+      state,
+      reason_resolved: reason,
+      task_id,
+      run_id,
+      label: tasks.labelIds[i] !== null ? tables.labels[tasks.labelIds[i]] : '',
+      priority: tasks.priorityIds[i] !== null ? tables.priorities[tasks.priorityIds[i]] : '',
+      task_group_id: tgIdx !== null ? tables.taskGroupIds[tgIdx] : '',
+      created_for_user: tasks.userIds[i] !== null ? tables.users[tasks.userIds[i]] : '',
+      worker_group: wIdx !== null && workerInfo.workerGroupIds[wIdx] !== null
+        ? tables.workerGroups[workerInfo.workerGroupIds[wIdx]] : '',
+      worker_id: wIdx !== null ? tables.workerIds[wIdx] : '',
+      run_cost: tasks.runCosts[i] || 0,
+    };
+  }
+  return rows;
+}
+
 // ==================== Stats Computation ====================
 
 function computeStats(tasks) {
@@ -371,8 +401,11 @@ function computeStats(tasks) {
   queueTimes.sort((a, b) => a - b);
   const n = queueTimes.length;
 
+  const expiredCount = tasks.filter(t => t._expired).length;
+
   return {
     totalJobs: tasks.length,
+    expiredCount,
     maxRunning,
     maxQueued,
     minQueueTime: n ? queueTimes[0] : null,
@@ -387,22 +420,23 @@ function computeStats(tasks) {
 function buildTimeSeries(tasks) {
   const events = [];
   for (const t of tasks) {
-    events.push({ time: t._scheduledMs, dTotal: 1, dRunning: 0 });
+    events.push({ time: t._scheduledMs, dTotal: 1, dRunning: 0, dExpired: t._expired ? 1 : 0 });
     if (t._startedMs) {
-      events.push({ time: t._startedMs, dTotal: 0, dRunning: 1 });
-      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: -1 });
+      events.push({ time: t._startedMs, dTotal: 0, dRunning: 1, dExpired: 0 });
+      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: -1, dExpired: 0 });
     } else {
-      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: 0 });
+      events.push({ time: t._resolvedMs, dTotal: -1, dRunning: 0, dExpired: t._expired ? -1 : 0 });
     }
   }
   events.sort((a, b) => a.time - b.time);
 
   const series = [];
-  let total = 0, running = 0;
+  let total = 0, running = 0, expired = 0;
   for (const e of events) {
     total += e.dTotal;
     running += e.dRunning;
-    series.push({ time: e.time, total, running });
+    expired += e.dExpired;
+    series.push({ time: e.time, total, running, expired });
   }
   return series;
 }
@@ -430,28 +464,33 @@ function drawTrack(canvas, timeSeries, globalStart, globalEnd) {
   // Sample per CSS pixel — track max values within each pixel bucket
   const totalByPx = new Float32Array(cssW);
   const runningByPx = new Float32Array(cssW);
+  const expiredByPx = new Float32Array(cssW);
 
-  let curTotal = 0, curRunning = 0, idx = 0;
+  let curTotal = 0, curRunning = 0, curExpired = 0, idx = 0;
 
   // Consume events before the visible range to get initial counts
   while (idx < timeSeries.length && timeSeries[idx].time < globalStart) {
     curTotal = timeSeries[idx].total;
     curRunning = timeSeries[idx].running;
+    curExpired = timeSeries[idx].expired;
     idx++;
   }
 
   for (let px = 0; px < cssW; px++) {
     const pxEndTime = globalStart + ((px + 1) / cssW) * duration;
-    let maxTotal = curTotal, maxRunning = curRunning;
+    let maxTotal = curTotal, maxRunning = curRunning, maxExpired = curExpired;
     while (idx < timeSeries.length && timeSeries[idx].time <= pxEndTime) {
       curTotal = timeSeries[idx].total;
       curRunning = timeSeries[idx].running;
+      curExpired = timeSeries[idx].expired;
       if (curTotal > maxTotal) maxTotal = curTotal;
       if (curRunning > maxRunning) maxRunning = curRunning;
+      if (curExpired > maxExpired) maxExpired = curExpired;
       idx++;
     }
     totalByPx[px] = maxTotal;
     runningByPx[px] = maxRunning;
+    expiredByPx[px] = maxExpired;
   }
 
   // Find max for Y scaling
@@ -478,6 +517,14 @@ function drawTrack(canvas, timeSeries, globalStart, globalEnd) {
     if (h > 0) ctx.fillRect(px, cssH - h, 1, h);
   }
 
+  // Expired area (purple) — top portion of the grey (queued) area
+  ctx.fillStyle = 'rgba(128, 0, 128, 0.5)';
+  for (let px = 0; px < cssW; px++) {
+    const totalH = (totalByPx[px] / maxVal) * (cssH - 1);
+    const expH = (expiredByPx[px] / maxVal) * (cssH - 1);
+    if (expH > 0) ctx.fillRect(px, cssH - totalH, 1, expH);
+  }
+
   // Border
   ctx.strokeStyle = '#ddd';
   ctx.lineWidth = 0.5;
@@ -498,12 +545,9 @@ function generateProfile(tasks, threadName) {
     return idx;
   }
 
-  let earliestTime = Infinity, latestTime = -Infinity;
-  for (const t of tasks) {
-    const visible = t._startedMs || t._resolvedMs;
-    if (visible < earliestTime) earliestTime = visible;
-    if (t._resolvedMs > latestTime) latestTime = t._resolvedMs;
-  }
+  // Use the fixed 24h window
+  const earliestTime = globalTimeStart;
+  const latestTime = globalTimeEnd;
 
   const markerSchema = [
     {
@@ -517,6 +561,7 @@ function generateProfile(tasks, threadName) {
         { key: 'id', label: 'Task ID', format: 'unique-string' },
         { key: 'run', label: 'Run ID', format: 'integer' },
         { key: 'label', label: 'Label', format: 'unique-string' },
+        { key: 'priority', label: 'Priority', format: 'unique-string' },
         { key: 'state', label: 'State', format: 'unique-string' },
         { key: 'reason', label: 'Reason Resolved', format: 'unique-string' },
         { key: 'group', label: 'Task Group ID', format: 'unique-string' },
@@ -538,9 +583,13 @@ function generateProfile(tasks, threadName) {
         { key: 'total', label: 'Total Tasks', format: 'integer' },
         { key: 'running', label: 'Running Tasks', format: 'integer' },
         { key: 'queued', label: 'Queued Tasks', format: 'integer' },
+        { key: 'expired', label: 'Queued Until Expiration', format: 'integer' },
       ],
       graphs: [
-        { key: 'total', color: 'grey', type: 'bar' },
+        // Drawn back-to-front: purple (total), grey (total-expired), blue (running)
+        // Visible bands: blue at bottom, grey in middle, purple at top
+        { key: 'total', color: 'purple', type: 'bar' },
+        { key: 'nonExpired', color: 'grey', type: 'bar' },
         { key: 'running', color: 'blue', type: 'bar' },
       ]
     }
@@ -555,23 +604,25 @@ function generateProfile(tasks, threadName) {
     // TaskCount markers
     const events = [];
     for (const t of taskList) {
-      events.push({ time: t._scheduledMs, type: 'scheduled', hasStarted: !!t._startedMs });
-      if (t._startedMs) events.push({ time: t._startedMs, type: 'started' });
-      events.push({ time: t._resolvedMs, type: 'resolved', hasStarted: !!t._startedMs });
+      events.push({ time: t._scheduledMs, type: 'scheduled', hasStarted: !!t._startedMs, dExpired: t._expired ? 1 : 0 });
+      if (t._startedMs) events.push({ time: t._startedMs, type: 'started', dExpired: 0 });
+      events.push({ time: t._resolvedMs, type: 'resolved', hasStarted: !!t._startedMs, dExpired: t._expired ? -1 : 0 });
     }
     events.sort((a, b) => a.time - b.time);
 
-    let total = 0, running = 0, prevTotal = -1, prevRunning = -1;
+    let total = 0, running = 0, expired = 0, prevTotal = -1, prevRunning = -1, prevExpired = -1;
     const countMarkers = [];
     for (const e of events) {
       if (e.type === 'scheduled') total++;
       else if (e.type === 'started') running++;
       else { total--; if (e.hasStarted) running--; }
+      expired += e.dExpired;
 
-      if (e.time >= earliestTime && (total !== prevTotal || running !== prevRunning)) {
-        countMarkers.push({ time: e.time, total, running, queued: total - running });
+      if (e.time >= earliestTime && (total !== prevTotal || running !== prevRunning || expired !== prevExpired)) {
+        countMarkers.push({ time: e.time, total, running, queued: total - running, expired });
         prevTotal = total;
         prevRunning = running;
+        prevExpired = expired;
       }
     }
 
@@ -584,17 +635,33 @@ function generateProfile(tasks, threadName) {
       markers.endTime.push(next ? next.time - earliestTime : latestTime - earliestTime);
       markers.phase.push(1);
       markers.category.push(0);
-      markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued: m.queued });
+      markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued: m.queued, expired: m.expired, nonExpired: m.total - m.expired });
       markers.length++;
     }
 
-    // Task markers
+    // Task markers — skip tasks entirely outside the 24h window
     const taskNameIdx = getStringIndex('Task');
     for (const t of taskList) {
+      // Determine the visible range of this task
+      let markerStart, markerEnd;
+      if (t._startedMs) {
+        markerStart = t._startedMs;
+        markerEnd = t._resolvedMs;
+      } else if (t._expired) {
+        markerStart = t._scheduledMs;
+        markerEnd = t._resolvedMs;
+      } else {
+        markerStart = t._resolvedMs;
+        markerEnd = t._resolvedMs;
+      }
+      // Skip if entirely outside the 24h window
+      if (markerEnd < earliestTime || markerStart > latestTime) continue;
+
       const d = { type: 'Task' };
       d.id = getStringIndex(t.task_id);
       d.run = parseInt(t.run_id) || 0;
       d.label = getStringIndex(t.label || 'unknown');
+      if (t.priority) d.priority = getStringIndex(t.priority);
       d.state = getStringIndex(t.state);
       if (t.reason_resolved && t.reason_resolved !== t.state)
         d.reason = getStringIndex(t.reason_resolved);
@@ -607,16 +674,22 @@ function generateProfile(tasks, threadName) {
 
       if (t.state === 'completed') d.color = 'green';
       else if (t.state === 'failed') d.color = 'red';
-      else if (t.state === 'exception' && t.reason_resolved === 'canceled') d.color = 'purple';
+      else if (t.state === 'exception' && (t.reason_resolved === 'canceled' || t.reason_resolved === 'deadline-exceeded')) d.color = 'purple';
 
       if (t._startedMs) {
         d.qtime = t._startedMs - t._scheduledMs;
         d.rtime = t._resolvedMs - t._startedMs;
+      } else if (t._expired) {
+        d.qtime = t._resolvedMs - t._scheduledMs;
       }
 
       markers.name.push(taskNameIdx);
       if (t._startedMs) {
         markers.startTime.push(t._startedMs - earliestTime);
+        markers.endTime.push(t._resolvedMs - earliestTime);
+        markers.phase.push(1);
+      } else if (t._expired) {
+        markers.startTime.push(t._scheduledMs - earliestTime);
         markers.endTime.push(t._resolvedMs - earliestTime);
         markers.phase.push(1);
       } else {
@@ -732,6 +805,80 @@ let currentProject = ''; // '' = all projects
 let allParsedRows = null; // all rows after timestamp parsing
 let globalTimeStart = 0, globalTimeEnd = 0;
 let renderContext = null; // { allPool, pools, globalStart, globalEnd }
+let availableDates = [];
+let currentDate = '';
+let fullTaskDataPromise = null;
+let controlsInitialized = false;
+
+function ensureFullTaskData() {
+  if (!fullTaskDataPromise) {
+    fullTaskDataPromise = (async () => {
+      const r = await fetchFromCI('worker-data', 'workers-' + currentDate + '-tasks.json');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const rows = decodeTaskData(data);
+      for (const row of rows) {
+        row._scheduledMs = Number(row.scheduled);
+        row._startedMs = row.started ? Number(row.started) : null;
+        row._resolvedMs = Number(row.resolved);
+        row._expired = row.state === 'exception' && row.reason_resolved === 'deadline-exceeded';
+      }
+      return rows.filter(r => {
+        if (r._startedMs) return true;
+        if (r._expired) return r._scheduledMs !== r._resolvedMs;
+        if (r.reason_resolved === 'canceled') return false;
+        return true;
+      });
+    })();
+  }
+  return fullTaskDataPromise;
+}
+
+async function getProfilerTasks(pool) {
+  // If pool tasks already have full data (from local file or tasks file), use directly
+  if (pool.tasks.length && pool.tasks[0].task_id !== undefined) {
+    return pool.tasks;
+  }
+  // Lazy-load full task data from CI
+  const allFullRows = await ensureFullTaskData();
+  let rows;
+  if (!currentProject) {
+    rows = allFullRows;
+  } else if (currentProject === '_other') {
+    rows = allFullRows.filter(r => !topProjectSet.has(r.project || 'unknown'));
+  } else {
+    rows = allFullRows.filter(r => r.project === currentProject);
+  }
+  if (pool.name === 'All Tasks') return rows;
+  return rows.filter(r => (r.task_queue_id || 'unknown') === pool.name);
+}
+
+async function switchDate(date) {
+  const loadingEl = document.getElementById('loading');
+  const contentEl = document.getElementById('content');
+  contentEl.style.display = 'none';
+  loadingEl.style.display = '';
+  loadingEl.textContent = 'Fetching data for ' + date + '...';
+  try {
+    const response = await fetchFromCI('worker-data', 'workers-' + date + '.json');
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    const rows = decodeSummaryData(data);
+    currentDate = date;
+    fullTaskDataPromise = null;
+    const url = new URL(location);
+    url.searchParams.set('date', date);
+    history.replaceState(null, '', url);
+    const dayStartMs = Date.parse(date + 'T00:00:00Z');
+    processData(rows, dayStartMs);
+    ensureFullTaskData();
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    document.getElementById('error').style.display = '';
+    document.getElementById('error').textContent = 'Error loading data: ' + err.message;
+    console.error(err);
+  }
+}
 
 function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   const tr = document.createElement('tr');
@@ -754,7 +901,9 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
     { text: formatDuration(stats.medianQueueTime), color: durationColorClass(stats.medianQueueTime) },
     { text: formatDuration(stats.p90QueueTime),    color: durationColorClass(stats.p90QueueTime) },
-    { text: formatDuration(stats.maxQueueTime),    color: durationColorClass(stats.maxQueueTime) },
+    stats.expiredCount
+      ? { text: stats.expiredCount + ' expired', color: 'qt-red' }
+      : { text: formatDuration(stats.maxQueueTime), color: durationColorClass(stats.maxQueueTime) },
   ];
   for (const cell of cells) {
     const td = document.createElement('td');
@@ -784,18 +933,21 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   btn.className = 'profiler-btn';
   btn.textContent = 'Profiler';
   btn.title = 'Open in Firefox Profiler';
-  btn.onclick = () => {
+  btn.onclick = async () => {
     btn.disabled = true;
-    btn.textContent = 'Generating\u2026';
-    // Yield so the button updates visually before heavy work
-    setTimeout(() => {
-      try {
-        openInProfiler(pool.tasks, pool.name);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Profiler';
-      }
-    }, 0);
+    btn.textContent = 'Loading\u2026';
+    try {
+      const tasks = await getProfilerTasks(pool);
+      btn.textContent = 'Generating\u2026';
+      await new Promise(r => setTimeout(r, 0));
+      await openInProfiler(tasks, pool.name);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to load task data: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Profiler';
+    }
   };
   btnTd.appendChild(btn);
   tr.appendChild(btnTd);
@@ -812,12 +964,13 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     const time = globalStart + frac * (globalEnd - globalStart);
 
     let lo = 0, hi = timeSeries.length - 1;
-    let running = 0, total = 0;
+    let running = 0, total = 0, expired = 0;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       if (timeSeries[mid].time <= time) {
         running = timeSeries[mid].running;
         total = timeSeries[mid].total;
+        expired = timeSeries[mid].expired;
         lo = mid + 1;
       } else {
         hi = mid - 1;
@@ -827,7 +980,9 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     const queued = total - running;
     const d = new Date(time);
     const timeStr = d.toLocaleTimeString(undefined, { timeZone: 'UTC' });
-    tooltip.textContent = `${timeStr} \u2014 ${running} running, ${queued} queued`;
+    let tip = `${timeStr} \u2014 ${running} running, ${queued} queued`;
+    if (expired > 0) tip += `, ${expired} queued until expiration`;
+    tooltip.textContent = tip;
     tooltip.style.display = 'block';
     tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
   });
@@ -841,18 +996,16 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
 function renderSummary(allTasks, pools, globalStart, globalEnd) {
   const summary = document.getElementById('summary');
-  const utc = { timeZone: 'UTC' };
   const date = new Date(globalStart).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
   });
-  const timeRange =
-    new Date(globalStart).toLocaleTimeString(undefined, utc) + ' \u2014 ' +
-    new Date(globalEnd).toLocaleTimeString(undefined, utc) + ' UTC';
+  const expiredCount = allTasks.filter(t => t._expired).length;
 
   summary.innerHTML =
     '<div class="summary-stat"><span class="value">' + formatNumber(allTasks.length) + '</span><span class="label">Total Jobs</span></div>' +
+    (expiredCount ? '<div class="summary-stat"><span class="value">' + formatNumber(expiredCount) + '</span><span class="label">Expired</span></div>' : '') +
     '<div class="summary-stat"><span class="value">' + formatNumber(pools.length) + '</span><span class="label">Worker Pools</span></div>' +
-    '<div class="summary-stat"><span class="value">' + date + '</span><span class="label">' + timeRange + '</span></div>';
+    '<div class="summary-stat"><span class="value">' + date + '</span><span class="label">UTC</span></div>';
 }
 
 function sortPools(pools, key, desc) {
@@ -977,26 +1130,66 @@ function updateSortIndicators() {
 }
 
 function setupControls() {
-  const input = document.getElementById('filter');
-  const params = new URLSearchParams(location.search);
-  const clearBtn = document.getElementById('filter-clear');
-  const initialFilter = params.get('filter');
-  if (initialFilter) {
-    input.value = initialFilter;
-    clearBtn.hidden = false;
-  }
-  input.addEventListener('input', () => {
-    clearBtn.hidden = !input.value;
-    applyFilter();
-  });
-  clearBtn.addEventListener('click', () => {
-    input.value = '';
-    clearBtn.hidden = true;
-    applyFilter();
-    input.focus();
-  });
+  if (!controlsInitialized) {
+    const input = document.getElementById('filter');
+    const clearBtn = document.getElementById('filter-clear');
+    const params = new URLSearchParams(location.search);
+    const initialFilter = params.get('filter');
+    if (initialFilter) {
+      input.value = initialFilter;
+      clearBtn.hidden = false;
+    }
+    input.addEventListener('input', () => {
+      clearBtn.hidden = !input.value;
+      applyFilter();
+    });
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      clearBtn.hidden = true;
+      applyFilter();
+      input.focus();
+    });
 
-  // Project filter buttons — top 9 named projects + "Other"
+    // Date selector
+    const dateSelect = document.getElementById('date-select');
+    if (availableDates.length > 0) {
+      for (const d of availableDates) {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = d;
+        if (d === currentDate) opt.selected = true;
+        dateSelect.appendChild(opt);
+      }
+      dateSelect.addEventListener('change', () => switchDate(dateSelect.value));
+    } else {
+      dateSelect.hidden = true;
+    }
+
+    // Sort header clicks
+    for (const th of document.querySelectorAll('th.sortable')) {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (currentSort.key === key) {
+          currentSort.desc = !currentSort.desc;
+        } else {
+          currentSort.key = key;
+          currentSort.desc = key !== 'name';
+        }
+        updateSortIndicators();
+        renderAllRows();
+      });
+    }
+
+    // Restore project from URL
+    const initialProject = params.get('project');
+    if (initialProject) {
+      currentProject = initialProject;
+    }
+
+    controlsInitialized = true;
+  }
+
+  // Project filter buttons — rebuilt when data changes (date switch)
   const projects = new Map();
   for (const row of allParsedRows) {
     const proj = row.project || 'unknown';
@@ -1009,6 +1202,7 @@ function setupControls() {
   topProjectSet = new Set(topProjects);
 
   const container = document.getElementById('project-filters');
+  container.innerHTML = '';
   const setActive = (activeBtn) => {
     for (const b of container.querySelectorAll('button')) b.classList.remove('active');
     activeBtn.classList.add('active');
@@ -1016,49 +1210,25 @@ function setupControls() {
 
   const allBtn = document.createElement('button');
   allBtn.textContent = 'All';
-  allBtn.className = 'active';
+  allBtn.className = currentProject ? '' : 'active';
   allBtn.onclick = () => { setActive(allBtn); rebuildForProject(''); };
   container.appendChild(allBtn);
 
   for (const proj of topProjects) {
     const btn = document.createElement('button');
     btn.textContent = proj;
+    if (proj === currentProject) btn.className = 'active';
     btn.onclick = () => { setActive(btn); rebuildForProject(proj); };
     container.appendChild(btn);
   }
 
-  // "Other" button for remaining projects + unknown
   const hasOther = sorted.length > 9 || projects.has('unknown');
   if (hasOther) {
     const btn = document.createElement('button');
     btn.textContent = 'Other';
+    if (currentProject === '_other') btn.className = 'active';
     btn.onclick = () => { setActive(btn); rebuildForProject('_other'); };
     container.appendChild(btn);
-  }
-
-  // Restore project from URL
-  const initialProject = params.get('project');
-  if (initialProject) {
-    currentProject = initialProject;
-    const label = initialProject === '_other' ? 'Other' : initialProject;
-    for (const b of container.querySelectorAll('button')) {
-      b.classList.toggle('active', b.textContent === label);
-    }
-  }
-
-  // Sort header clicks
-  for (const th of document.querySelectorAll('th.sortable')) {
-    th.addEventListener('click', () => {
-      const key = th.dataset.sort;
-      if (currentSort.key === key) {
-        currentSort.desc = !currentSort.desc;
-      } else {
-        currentSort.key = key;
-        currentSort.desc = key !== 'name';
-      }
-      updateSortIndicators();
-      renderAllRows();
-    });
   }
 
   updateSortIndicators();
@@ -1066,36 +1236,34 @@ function setupControls() {
 
 // ==================== Main ====================
 
-async function processCSVText(text) {
+function processData(rows, dayStartMs) {
   const loadingEl = document.getElementById('loading');
   const contentEl = document.getElementById('content');
 
-  loadingEl.textContent = 'Parsing CSV data...';
-  await new Promise(r => setTimeout(r, 0));
-
-  const rows = parseCSV(text);
-  if (rows.length === 0) throw new Error('No data rows found in CSV');
-
   loadingEl.textContent = 'Processing ' + formatNumber(rows.length) + ' tasks...';
-  await new Promise(r => setTimeout(r, 0));
 
-  // Pre-parse timestamps
+  // Pre-parse timestamps and filter out dependency-blocked expired tasks
   for (const row of rows) {
     row._scheduledMs = Number(row.scheduled);
     row._startedMs = row.started ? Number(row.started) : null;
     row._resolvedMs = Number(row.resolved);
+    row._expired = row.state === 'exception' && row.reason_resolved === 'deadline-exceeded';
   }
+  // Remove tasks that never ran:
+  // - dependency-blocked expired tasks (scheduled === resolved)
+  // - canceled tasks that never started
+  const filtered = rows.filter(r => {
+    if (r._startedMs) return true;
+    if (r._expired) return r._scheduledMs !== r._resolvedMs;
+    if (r.reason_resolved === 'canceled') return false;
+    return true;
+  });
 
-  // Global time range (visible = started or resolved) — fixed across project filters
-  globalTimeStart = Infinity;
-  globalTimeEnd = -Infinity;
-  for (const row of rows) {
-    const visible = row._startedMs || row._resolvedMs;
-    if (visible < globalTimeStart) globalTimeStart = visible;
-    if (row._resolvedMs > globalTimeEnd) globalTimeEnd = row._resolvedMs;
-  }
+  // Fixed 24h time range
+  globalTimeStart = dayStartMs;
+  globalTimeEnd = dayStartMs + 24 * 3600 * 1000;
 
-  allParsedRows = rows;
+  allParsedRows = filtered;
 
   // Render
   loadingEl.style.display = 'none';
@@ -1110,46 +1278,36 @@ async function main() {
   const errorEl = document.getElementById('error');
 
   try {
-    loadingEl.textContent = 'Fetching task data from STMO...';
-    const response = await fetch(CSV_URL);
-    if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+    loadingEl.textContent = 'Fetching worker data index...';
+    const indexResponse = await fetchFromCI('worker-data', 'index.json');
+    if (!indexResponse.ok) throw new Error('Failed to fetch index: HTTP ' + indexResponse.status);
+    const index = await indexResponse.json();
+    const dates = index.dates;
+    if (!dates || !dates.length) throw new Error('No data dates available');
 
-    const text = await response.text();
-    await processCSVText(text);
+    const params = new URLSearchParams(location.search);
+    const requestedDate = params.get('date');
+    const date = dates.includes(requestedDate) ? requestedDate : dates[0];
+    availableDates = dates;
+    currentDate = date;
+
+    loadingEl.textContent = 'Fetching data for ' + date + '...';
+    const summaryResponse = await fetchFromCI('worker-data', 'workers-' + date + '.json');
+    if (!summaryResponse.ok) throw new Error('Failed to fetch data: HTTP ' + summaryResponse.status);
+    const summaryData = await summaryResponse.json();
+    const rows = decodeSummaryData(summaryData);
+
+    const dayStartMs = Date.parse(date + 'T00:00:00Z');
+    processData(rows, dayStartMs);
+
+    // Prefetch full task data for profiler in background
+    ensureFullTaskData();
   } catch (err) {
     loadingEl.style.display = 'none';
     errorEl.style.display = '';
-    errorEl.innerHTML =
-      'Error: ' + err.message +
-      '<div class="file-fallback">' +
-      'You can <a href="' + CSV_URL + '" target="_blank">download the CSV</a> and load it manually:' +
-      '<br><input type="file" accept=".csv" onchange="loadLocalFile(this)">' +
-      '</div>';
+    errorEl.textContent = 'Error: ' + err.message;
     console.error(err);
   }
-}
-
-function loadLocalFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const errorEl = document.getElementById('error');
-  const loadingEl = document.getElementById('loading');
-  errorEl.style.display = 'none';
-  loadingEl.style.display = '';
-  loadingEl.textContent = 'Reading file...';
-
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      await processCSVText(reader.result);
-    } catch (err) {
-      loadingEl.style.display = 'none';
-      errorEl.style.display = '';
-      errorEl.textContent = 'Error processing file: ' + err.message;
-      console.error(err);
-    }
-  };
-  reader.readAsText(file);
 }
 
 main();
