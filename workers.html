@@ -443,11 +443,8 @@ function buildTimeSeries(tasks) {
 
 // ==================== Track Drawing ====================
 
-function drawTrack(canvas, timeSeries, globalStart, globalEnd) {
+function drawTrack(canvas, timeSeries, globalStart, globalEnd, cssW, cssH) {
   const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  const cssW = Math.round(rect.width);
-  const cssH = Math.round(rect.height);
   canvas.width = cssW * dpr;
   canvas.height = cssH * dpr;
 
@@ -533,7 +530,7 @@ function drawTrack(canvas, timeSeries, globalStart, globalEnd) {
 
 // ==================== Profile Generation ====================
 
-function generateProfile(tasks, threadName) {
+function generateProfile(tasks, threadName, timeSeries) {
   const stringArray = ['(root)'];
   const stringIndexMap = new Map([['(root)', 0]]);
   function getStringIndex(str) {
@@ -601,41 +598,19 @@ function generateProfile(tasks, threadName) {
       phase: [], category: [], length: 0
     };
 
-    // TaskCount markers
-    const events = [];
-    for (const t of taskList) {
-      events.push({ time: t._scheduledMs, type: 'scheduled', hasStarted: !!t._startedMs, dExpired: t._expired ? 1 : 0 });
-      if (t._startedMs) events.push({ time: t._startedMs, type: 'started', dExpired: 0 });
-      events.push({ time: t._resolvedMs, type: 'resolved', hasStarted: !!t._startedMs, dExpired: t._expired ? -1 : 0 });
-    }
-    events.sort((a, b) => a.time - b.time);
-
-    let total = 0, running = 0, expired = 0, prevTotal = -1, prevRunning = -1, prevExpired = -1;
-    const countMarkers = [];
-    for (const e of events) {
-      if (e.type === 'scheduled') total++;
-      else if (e.type === 'started') running++;
-      else { total--; if (e.hasStarted) running--; }
-      expired += e.dExpired;
-
-      if (e.time >= earliestTime && (total !== prevTotal || running !== prevRunning || expired !== prevExpired)) {
-        countMarkers.push({ time: e.time, total, running, queued: total - running, expired });
-        prevTotal = total;
-        prevRunning = running;
-        prevExpired = expired;
-      }
-    }
-
+    // TaskCount markers — reuse the already-sorted timeSeries from the dashboard
     const countNameIdx = getStringIndex('TaskCount');
-    for (let i = 0; i < countMarkers.length; i++) {
-      const m = countMarkers[i];
-      const next = countMarkers[i + 1];
+    for (let i = 0; i < timeSeries.length; i++) {
+      const m = timeSeries[i];
+      if (m.time < earliestTime) continue;
+      const next = timeSeries[i + 1];
       markers.name.push(countNameIdx);
       markers.startTime.push(m.time - earliestTime);
       markers.endTime.push(next ? next.time - earliestTime : latestTime - earliestTime);
       markers.phase.push(1);
       markers.category.push(0);
-      markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued: m.queued, expired: m.expired, nonExpired: m.total - m.expired });
+      const queued = m.total - m.running;
+      markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued, expired: m.expired, nonExpired: m.total - m.expired });
       markers.length++;
     }
 
@@ -771,8 +746,8 @@ function generateProfile(tasks, threadName) {
 
 // ==================== Profiler Integration ====================
 
-async function openInProfiler(tasks, name) {
-  const profile = generateProfile(tasks, name);
+async function openInProfiler(tasks, name, timeSeries) {
+  const profile = generateProfile(tasks, name, timeSeries);
 
   const origin = 'https://profiler.firefox.com';
   const profilerWindow = window.open(origin + '/from-post-message/', '_blank');
@@ -783,18 +758,21 @@ async function openInProfiler(tasks, name) {
   }
 
   // Wait for the profiler to signal it's ready, polling with "ready:request".
-  let isReady = false;
-  window.addEventListener('message', (e) => {
-    if (e.source === profilerWindow) {
-      isReady = true;
-      profilerWindow.postMessage({ name: 'inject-profile', profile }, origin);
+  await new Promise((resolve) => {
+    function onMessage(e) {
+      if (e.source === profilerWindow && e.data && e.data.name === 'ready:response') {
+        window.removeEventListener('message', onMessage);
+        profilerWindow.postMessage({ name: 'inject-profile', profile }, origin);
+        resolve();
+      }
     }
+    window.addEventListener('message', onMessage);
+    const poll = setInterval(() => {
+      profilerWindow.postMessage({ name: 'ready:request' }, origin);
+    }, 100);
+    // Stop polling once resolved
+    resolve = ((orig) => () => { clearInterval(poll); orig(); })(resolve);
   });
-
-  while (!isReady) {
-    await new Promise(r => setTimeout(r, 100));
-    profilerWindow.postMessage({ name: 'ready:request' }, origin);
-  }
 }
 
 // ==================== Rendering ====================
@@ -871,7 +849,6 @@ async function switchDate(date) {
     history.replaceState(null, '', url);
     const dayStartMs = Date.parse(date + 'T00:00:00Z');
     processData(rows, dayStartMs);
-    ensureFullTaskData();
   } catch (err) {
     loadingEl.style.display = 'none';
     document.getElementById('error').style.display = '';
@@ -884,8 +861,6 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   const tr = document.createElement('tr');
   if (isAllTasks) tr.className = 'all-tasks-row';
 
-  const stats = pool.stats;
-
   // Pool name
   const nameTd = document.createElement('td');
   nameTd.className = 'pool-name';
@@ -893,24 +868,13 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   nameTd.title = pool.name;
   tr.appendChild(nameTd);
 
-  // Stat columns
-  const cells = [
-    { text: formatNumber(stats.totalJobs), tip: jobsByProject(pool.tasks) },
-    { text: formatNumber(stats.maxRunning) },
-    { text: formatNumber(stats.maxQueued) },
-    { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
-    { text: formatDuration(stats.medianQueueTime), color: durationColorClass(stats.medianQueueTime) },
-    { text: formatDuration(stats.p90QueueTime),    color: durationColorClass(stats.p90QueueTime) },
-    stats.expiredCount
-      ? { text: stats.expiredCount + ' expired', color: 'qt-red' }
-      : { text: formatDuration(stats.maxQueueTime), color: durationColorClass(stats.maxQueueTime) },
-  ];
-  for (const cell of cells) {
+  // Placeholder stat cells (filled by materializeRow)
+  const statCells = [];
+  for (let i = 0; i < 7; i++) {
     const td = document.createElement('td');
-    td.className = 'num' + (cell.color ? ' ' + cell.color : '');
-    td.textContent = cell.text;
-    if (cell.tip) td.title = cell.tip;
+    td.className = 'num';
     tr.appendChild(td);
+    statCells.push(td);
   }
 
   // Track canvas
@@ -940,7 +904,7 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
       const tasks = await getProfilerTasks(pool);
       btn.textContent = 'Generating\u2026';
       await new Promise(r => setTimeout(r, 0));
-      await openInProfiler(tasks, pool.name);
+      await openInProfiler(tasks, pool.name, pool.timeSeries);
     } catch (err) {
       console.error(err);
       alert('Failed to load task data: ' + err.message);
@@ -954,9 +918,40 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
   tbody.appendChild(tr);
 
-  const timeSeries = pool.timeSeries;
+  const row = { tr, pool, name: pool.name.toLowerCase(), isAllTasks, canvas, tooltip, statCells, globalStart, globalEnd, materialized: false };
+  allRows.push(row);
+  return row;
+}
 
-  // Tooltip on hover
+function materializeRow(row, trackW, trackH) {
+  if (row.materialized) return;
+  row.materialized = true;
+
+  const { pool, statCells, canvas, tooltip, globalStart, globalEnd } = row;
+  const stats = pool.stats;
+
+  const cells = [
+    { text: formatNumber(stats.totalJobs), tip: jobsByProject(pool.tasks) },
+    { text: formatNumber(stats.maxRunning) },
+    { text: formatNumber(stats.maxQueued) },
+    { text: formatDuration(stats.minQueueTime),    color: durationColorClass(stats.minQueueTime) },
+    { text: formatDuration(stats.medianQueueTime), color: durationColorClass(stats.medianQueueTime) },
+    { text: formatDuration(stats.p90QueueTime),    color: durationColorClass(stats.p90QueueTime) },
+    stats.expiredCount
+      ? { text: stats.expiredCount + ' expired', color: 'qt-red' }
+      : { text: formatDuration(stats.maxQueueTime), color: durationColorClass(stats.maxQueueTime) },
+  ];
+  for (let i = 0; i < cells.length; i++) {
+    const td = statCells[i];
+    const cell = cells[i];
+    td.textContent = cell.text;
+    if (cell.color) td.className = 'num ' + cell.color;
+    if (cell.tip) td.title = cell.tip;
+  }
+
+  const timeSeries = pool.timeSeries;
+  drawTrack(canvas, timeSeries, globalStart, globalEnd, trackW, trackH);
+
   canvas.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -990,8 +985,6 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   canvas.addEventListener('mouseleave', () => {
     tooltip.style.display = 'none';
   });
-
-  allRows.push({ tr, name: pool.name.toLowerCase(), isAllTasks, canvas, timeSeries, globalStart, globalEnd, drawn: false });
 }
 
 function renderSummary(allTasks, pools, globalStart, globalEnd) {
@@ -1011,6 +1004,8 @@ function renderSummary(allTasks, pools, globalStart, globalEnd) {
 function sortPools(pools, key, desc) {
   const getter = key === 'name'
     ? (p) => p.name.toLowerCase()
+    : key === 'totalJobs'
+    ? (p) => p.tasks.length
     : (p) => p.stats[key] ?? -Infinity;
 
   pools.sort((a, b) => {
@@ -1019,6 +1014,43 @@ function sortPools(pools, key, desc) {
     if (va > vb) return desc ? -1 : 1;
     return 0;
   });
+}
+
+let rowObserver = null;
+
+function observeRows() {
+  if (rowObserver) rowObserver.disconnect();
+
+  // Read track canvas dimensions once before materializing anything
+  const firstCanvas = allRows.length ? allRows[0].canvas : null;
+  const trackW = firstCanvas ? firstCanvas.clientWidth : 400;
+  const trackH = firstCanvas ? firstCanvas.clientHeight : 36;
+
+  // Materialize the first visible rows synchronously to avoid flicker.
+  // Each row is ~50px tall; 30 rows covers most viewports.
+  let count = 0;
+  for (const row of allRows) {
+    if (row.materialized || row.tr.style.display === 'none') continue;
+    materializeRow(row, trackW, trackH);
+    if (++count >= 30) break;
+  }
+
+  // Observe remaining rows for lazy materialization on scroll
+  rowObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const row = entry.target._poolRow;
+        if (row) materializeRow(row, trackW, trackH);
+        rowObserver.unobserve(entry.target);
+      }
+    }
+  });
+  for (const row of allRows) {
+    if (!row.materialized) {
+      row.tr._poolRow = row;
+      rowObserver.observe(row.tr);
+    }
+  }
 }
 
 function renderAllRows() {
@@ -1034,21 +1066,16 @@ function renderAllRows() {
     renderRow(tbody, pool, globalStart, globalEnd, false);
   }
 
-  // Re-apply filter
+  // Re-apply filter then observe visible rows
   applyFilter();
+  observeRows();
 }
 
 function applyFilter() {
   const query = document.getElementById('filter').value.toLowerCase().trim();
-  let needDraw = false;
   for (const row of allRows) {
     if (row.isAllTasks) continue;
-    const visible = !query || row.name.includes(query);
-    row.tr.style.display = visible ? '' : 'none';
-    if (visible && !row.drawn) needDraw = true;
-  }
-  if (needDraw) {
-    requestAnimationFrame(drawPendingTracks);
+    row.tr.style.display = (!query || row.name.includes(query)) ? '' : 'none';
   }
   // Sync filter to URL
   const url = new URL(location);
@@ -1058,15 +1085,6 @@ function applyFilter() {
     url.searchParams.delete('filter');
   }
   history.replaceState(null, '', url);
-}
-
-function drawPendingTracks() {
-  for (const row of allRows) {
-    if (!row.drawn && row.tr.style.display !== 'none') {
-      drawTrack(row.canvas, row.timeSeries, row.globalStart, row.globalEnd);
-      row.drawn = true;
-    }
-  }
 }
 
 let topProjectSet = new Set(); // populated in setupControls
@@ -1089,22 +1107,22 @@ function rebuildForProject(project) {
     byPool.get(pool).push(row);
   }
 
-  const pools = [];
-  for (const [name, tasks] of byPool) {
-    pools.push({
-      name,
-      tasks,
-      stats: computeStats(tasks),
-      timeSeries: buildTimeSeries(tasks),
+  function lazyPool(name, tasks) {
+    const pool = { name, tasks };
+    let _stats, _timeSeries;
+    Object.defineProperties(pool, {
+      stats: { get() { return _stats || (_stats = computeStats(tasks)); } },
+      timeSeries: { get() { return _timeSeries || (_timeSeries = buildTimeSeries(tasks)); } },
     });
+    return pool;
   }
 
-  const allPool = {
-    name: 'All Tasks',
-    tasks: rows,
-    stats: computeStats(rows),
-    timeSeries: buildTimeSeries(rows),
-  };
+  const pools = [];
+  for (const [name, tasks] of byPool) {
+    pools.push(lazyPool(name, tasks));
+  }
+
+  const allPool = lazyPool('All Tasks', rows);
 
   renderContext = { allPool, pools, globalStart: globalTimeStart, globalEnd: globalTimeEnd };
   renderSummary(rows, pools, globalTimeStart, globalTimeEnd);
@@ -1271,6 +1289,13 @@ function processData(rows, dayStartMs) {
 
   setupControls();
   rebuildForProject(currentProject);
+
+  // Prefetch full task data on first hover of any Profiler button
+  document.querySelector('.pool-table-wrapper').addEventListener('mouseover', function prefetch(e) {
+    if (!e.target.closest('.profiler-btn')) return;
+    this.removeEventListener('mouseover', prefetch);
+    ensureFullTaskData();
+  });
 }
 
 async function main() {
@@ -1278,30 +1303,37 @@ async function main() {
   const errorEl = document.getElementById('error');
 
   try {
-    loadingEl.textContent = 'Fetching worker data index...';
+    // Speculatively fetch yesterday's summary in parallel with the index,
+    // since it's almost always the most recent date available.
+    const params = new URLSearchParams(location.search);
+    const requestedDate = params.get('date');
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const guessDate = requestedDate || yesterday;
+    const speculativeFetch = fetchFromCI('worker-data', 'workers-' + guessDate + '.json');
+
+    loadingEl.textContent = 'Fetching worker data...';
     const indexResponse = await fetchFromCI('worker-data', 'index.json');
     if (!indexResponse.ok) throw new Error('Failed to fetch index: HTTP ' + indexResponse.status);
     const index = await indexResponse.json();
     const dates = index.dates;
     if (!dates || !dates.length) throw new Error('No data dates available');
 
-    const params = new URLSearchParams(location.search);
-    const requestedDate = params.get('date');
     const date = dates.includes(requestedDate) ? requestedDate : dates[0];
     availableDates = dates;
     currentDate = date;
 
-    loadingEl.textContent = 'Fetching data for ' + date + '...';
-    const summaryResponse = await fetchFromCI('worker-data', 'workers-' + date + '.json');
+    let summaryResponse;
+    if (date === guessDate) {
+      summaryResponse = await speculativeFetch;
+    } else {
+      summaryResponse = await fetchFromCI('worker-data', 'workers-' + date + '.json');
+    }
     if (!summaryResponse.ok) throw new Error('Failed to fetch data: HTTP ' + summaryResponse.status);
     const summaryData = await summaryResponse.json();
     const rows = decodeSummaryData(summaryData);
 
     const dayStartMs = Date.parse(date + 'T00:00:00Z');
     processData(rows, dayStartMs);
-
-    // Prefetch full task data for profiler in background
-    ensureFullTaskData();
   } catch (err) {
     loadingEl.style.display = 'none';
     errorEl.style.display = '';
