@@ -355,7 +355,7 @@
         let currentSortDirection = 'desc';
 
         async function fetchManifestData() {
-            const response = await fetchFromCI('manifest', 'manifests.json');
+            const response = await fetchFromCI('manifest-timings', 'manifests.json');
             if (!response.ok) {
                 throw new Error(`Failed to fetch manifest data: ${response.status}`);
             }
