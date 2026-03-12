@@ -48,6 +48,7 @@
   border-radius: 4px;
   font-size: 14px;
   width: 300px;
+  max-width: calc(100vw - 40px);
 }
 .filter-clear {
   position: absolute;
@@ -65,6 +66,9 @@
 .filter-clear:hover {
   color: #333;
 }
+#project-filters {
+  flex-wrap: wrap;
+}
 #project-filters button {
   padding: 5px 12px;
   font-size: 12px;
@@ -74,6 +78,12 @@
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0,0,0,.1);
   overflow-x: clip;
+}
+@media (max-width: 1024px) {
+  .pool-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 .pool-table {
   width: 100%;

@@ -105,6 +105,12 @@ button.active {
 }
 
 
+@media (max-width: 600px) {
+    body {
+        padding: 10px 6px;
+    }
+}
+
 /* Style Plotly tooltips */
 .hoverlayer .hovertext {
     pointer-events: none !important;
