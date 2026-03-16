@@ -1,0 +1,1925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Try Push Results</title>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .revision-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .revision-input input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 380px;
+            font-family: monospace;
+        }
+        .revision-input input:focus {
+            outline: none;
+            border-color: #0060df;
+            box-shadow: 0 0 0 2px rgba(0, 96, 223, 0.2);
+        }
+
+        #status {
+            margin-top: 10px;
+            color: #666;
+        }
+        #status.error-text {
+            color: #c00;
+        }
+
+        .progress-bar {
+            background: #eee;
+            border-radius: 4px;
+            height: 6px;
+            margin-top: 8px;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar .fill {
+            background: #0060df;
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        #results {
+            margin-top: 20px;
+        }
+
+        .summary-cards {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .summary-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-width: 120px;
+        }
+        .summary-card .label {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+        .summary-card .value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+        }
+        .summary-card .value.red { color: #d00; }
+        .summary-card .value.orange { color: #f60; }
+
+        .search-container {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+        .search-container input {
+            padding: 8px 30px 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 300px;
+        }
+        .search-container input:focus {
+            outline: none;
+            border-color: #0060df;
+        }
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #999;
+            display: none;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .failure-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            table-layout: fixed;
+        }
+        .failure-table th {
+            background: #f8f8f8;
+            padding: 8px 6px;
+            text-align: left;
+            font-weight: 600;
+            color: #555;
+            border-bottom: 2px solid #eee;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .failure-table th:hover {
+            background: #f0f0f0;
+        }
+        .failure-table th.active {
+            color: #0060df;
+        }
+        .failure-table th.no-sort {
+            cursor: default;
+        }
+        .failure-table th.no-sort:hover {
+            background: #f8f8f8;
+        }
+        .failure-table td {
+            padding: 5px 6px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: top;
+        }
+        .failure-table tr:hover {
+            background: #fafafa;
+        }
+        .failure-table tr.expanded {
+            background: #f0f8ff;
+        }
+        .failure-table tr.expanded:hover {
+            background: #f0f8ff;
+        }
+
+        .count-cell {
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .count-cell.high { color: #d00; }
+        .count-cell.medium { color: #f60; }
+        .count-cell.low { color: #888; }
+
+        .test-info {
+            min-width: 0;
+        }
+        .test-path {
+            font-family: monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .test-path a {
+            color: #0060df;
+            text-decoration: none;
+        }
+        .test-path a:hover {
+            text-decoration: underline;
+        }
+
+        .inline-message {
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            vertical-align: middle;
+            margin: 1px 0;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .status-FAIL, .status-FAIL-SEQUENTIAL, .status-FAIL-PARALLEL { background: #fee; color: #c00; }
+        .status-TIMEOUT { background: #fff3e0; color: #e65100; }
+        .status-CRASH { background: #fce4ec; color: #b71c1c; }
+        .status-ERROR { background: #fff3e0; color: #e65100; }
+        .status-UNEXPECTED-PASS { background: #e8f5e9; color: #2e7d32; }
+
+        .badges-cell {
+            line-height: 1.6;
+        }
+        .all-configs {
+            color: #bbb;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .platform-linux { background: #e3f2fd; color: #1565c0; }
+        .platform-windows { background: #e8f5e9; color: #2e7d32; }
+        .platform-mac { background: #f3e5f5; color: #7b1fa2; }
+        .platform-android { background: #fff3e0; color: #e65100; }
+        .platform-unknown { background: #f5f5f5; color: #666; }
+
+        .build-debug { background: #fff8e1; color: #f57f17; }
+        .build-asan { background: #fce4ec; color: #c62828; }
+        .build-tsan { background: #f3e5f5; color: #6a1b9a; }
+        .build-ccov { background: #e0f2f1; color: #00695c; }
+        .build-opt { background: #f5f5f5; color: #666; }
+
+        .detail-row {
+            display: none;
+        }
+        .detail-row.visible {
+            display: table-row;
+        }
+        .detail-row td {
+            background: #fafcff;
+            padding: 4px 6px;
+        }
+        .detail-row:hover td {
+            background: #fafcff;
+        }
+
+        .job-header {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .job-name {
+            font-family: monospace;
+            font-size: 12px;
+            color: #555;
+            word-break: break-all;
+        }
+        .job-links a {
+            color: #0060df;
+            text-decoration: none;
+            font-size: 12px;
+            margin-right: 8px;
+        }
+        .job-links a:hover {
+            text-decoration: underline;
+        }
+
+        .assertion-list {
+            margin: 4px 0 0 0;
+            padding: 0;
+            list-style: none;
+        }
+        .assertion-list li {
+            font-family: monospace;
+            font-size: 11px;
+            color: #666;
+            padding: 2px 0;
+            border-bottom: none;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .assertion-list li .status-badge {
+            font-size: 10px;
+            margin-right: 4px;
+        }
+        .show-more-link {
+            font-size: 11px;
+            color: #0060df;
+            cursor: pointer;
+            margin-left: 0;
+        }
+        .show-more-link:hover {
+            text-decoration: underline;
+        }
+        .crash-sig {
+            color: #b71c1c;
+        }
+
+        .clickable-row {
+            cursor: pointer;
+        }
+
+        .treeherder-link {
+            display: inline-block;
+            margin-top: 8px;
+        }
+        .treeherder-link a {
+            color: #0060df;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .treeherder-link a:hover {
+            text-decoration: underline;
+        }
+
+        .history-link {
+            font-size: 11px;
+            color: #0060df;
+            text-decoration: none;
+            opacity: 0.6;
+        }
+        .history-link:hover {
+            text-decoration: underline;
+            opacity: 1;
+        }
+
+        #reproduce-btn {
+            margin-left: 10px;
+        }
+        #reproduce-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .repro-cell {
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        .copy-cmd {
+            cursor: pointer;
+            opacity: 0.4;
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            font-size: 14px;
+            vertical-align: middle;
+            margin-left: 2px;
+        }
+        .copy-cmd:hover {
+            opacity: 1;
+        }
+        .copy-cmd.copied {
+            opacity: 1;
+        }
+        .repro-icon {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            border-radius: 50%;
+            font-size: 11px;
+            font-weight: 700;
+            vertical-align: middle;
+        }
+        .repro-pending {
+            color: #999;
+        }
+        .repro-reproduced {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .repro-not-reproduced {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .repro-no-match {
+            background: #fff8e1;
+            color: #f57f17;
+        }
+        .repro-error {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .repro-summary {
+            font-size: 11px;
+            color: #888;
+        }
+
+        .repro-detail {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .repro-detail-header {
+            font-weight: 600;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .repro-detail.reproduced {
+            background: #e8f5e9;
+            border: 1px solid #c8e6c9;
+        }
+        .repro-detail.not-reproduced {
+            background: #fff3e0;
+            border: 1px solid #ffe0b2;
+        }
+        .repro-detail.error {
+            background: #ffebee;
+            border: 1px solid #ffcdd2;
+        }
+        .repro-detail.pending {
+            background: #f5f5f5;
+            border: 1px solid #eee;
+        }
+        .repro-detail.no-match {
+            background: #fff8e1;
+            border: 1px solid #fff0c0;
+        }
+        .repro-detail-meta {
+            color: #666;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .repro-links {
+            font-size: 11px;
+            margin-top: 4px;
+            display: flex;
+            gap: 8px;
+        }
+        .repro-links a {
+            color: #0060df;
+            cursor: pointer;
+        }
+        .repro-log-viewer {
+            margin-top: 6px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            background: rgba(0,0,0,0.04);
+            border-radius: 3px;
+            padding: 6px 8px;
+        }
+        .repro-log-viewer .log-line {
+            white-space: pre-wrap;
+            word-break: break-all;
+            padding: 1px 0;
+        }
+        .repro-log-viewer .log-fail {
+            color: #c00;
+            font-weight: 600;
+        }
+        .repro-log-viewer .log-pass {
+            color: #2e7d32;
+        }
+        .repro-log-viewer .log-warn {
+            color: #e65100;
+        }
+        .repro-log-viewer .log-info {
+            color: #555;
+        }
+        .repro-log-viewer .log-test-header {
+            color: #0060df;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+        .repro-log-viewer .log-error {
+            color: #c00;
+        }
+        .repro-log-viewer .log-stack {
+            color: #888;
+            font-size: 10px;
+            margin-left: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Try Push Results</h1>
+
+        <div class="controls" id="input-section">
+            <div class="revision-input">
+                <label for="revision-input">Try revision:</label>
+                <input type="text" id="revision-input" placeholder="Enter a try revision (40-char hex or Treeherder URL)" autofocus>
+                <button id="load-btn" onclick="loadRevision()">Load</button>
+                <button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>
+                <button id="repro-reset-btn" style="display:none; font-size: 12px; padding: 6px 10px;" onclick="clearCachedReproResults()" title="Clear cached reproduction results and re-test all failures">Reset</button>
+            </div>
+            <div id="status"></div>
+            <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script defer src="shared.js"></script>
+    <script>
+    'use strict';
+
+    const TC_BASE = 'https://firefox-ci-tc.services.mozilla.com';
+    const TH_BASE = 'https://treeherder.mozilla.org';
+    const SUPPORTED_HARNESSES = ['mochitest', 'xpcshell'];
+    const isLocal = window.location.protocol === 'file:' || window.location.hostname === 'localhost';
+
+    // Fixed ordering for consistent badge display
+    const PLATFORM_ORDER = ['linux', 'windows', 'mac', 'android', 'unknown'];
+    const BUILD_TYPE_ORDER = ['opt', 'debug', 'asan', 'tsan', 'ccov'];
+
+    let currentFailures = null;
+    let currentSort = { column: 'count', ascending: false };
+    let currentSearch = '';
+    let expandedTests = new Set();
+    let currentRevision = null;
+
+    // ===== Treeherder API =====
+
+    async function fetchPushId(revision) {
+        const url = `${TH_BASE}/api/project/try/push/?full=true&count=10&revision=${revision}`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Failed to look up revision on Treeherder (HTTP ${resp.status})`);
+        const data = await resp.json();
+        if (!data.results || data.results.length === 0) {
+            throw new Error(`No push found for revision ${revision} on try`);
+        }
+        return data.results[0].id;
+    }
+
+    async function fetchAllJobs(pushId) {
+        let allJobs = [];
+        let propertyNames = [];
+        let url = `${TH_BASE}/api/jobs/?push_id=${pushId}`;
+
+        while (url) {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`Failed to fetch jobs (HTTP ${resp.status})`);
+            const data = await resp.json();
+            allJobs = allJobs.concat(data.results || []);
+            if (!propertyNames.length) {
+                propertyNames = data.job_property_names || [];
+            }
+            url = data.next;
+        }
+
+        return { allJobs, propertyNames };
+    }
+
+    function parseJobs(allJobs, propertyNames) {
+        const idx = name => propertyNames.indexOf(name);
+        const jobTypeNameIdx = idx('job_type_name');
+        const taskIdIdx = idx('task_id');
+        const retryIdIdx = idx('retry_id');
+        const stateIdx = idx('state');
+        const resultIdx = idx('result');
+
+        const jobs = [];
+        for (const job of allJobs) {
+            const jobName = job[jobTypeNameIdx];
+            const taskId = job[taskIdIdx];
+            const retryId = job[retryIdIdx] || 0;
+            const state = job[stateIdx];
+            const result = job[resultIdx];
+
+            if (!jobName || !taskId) continue;
+
+            jobs.push({ jobName, taskId, retryId, state, result });
+        }
+        return jobs;
+    }
+
+    function isTestJob(jobName) {
+        return SUPPORTED_HARNESSES.some(h => jobName.includes(h));
+    }
+
+    function getHarnessFromJobName(jobName) {
+        for (const h of SUPPORTED_HARNESSES) {
+            if (jobName.includes(h)) return h;
+        }
+        return null;
+    }
+
+    // ===== Badge extraction =====
+
+    function extractBuildTypes(jobName) {
+        const types = [];
+        if (/[-/]asan/.test(jobName)) types.push('asan');
+        if (/[-/]tsan/.test(jobName)) types.push('tsan');
+        if (/[-/]ccov/.test(jobName)) types.push('ccov');
+        if (/[-/]debug/.test(jobName)) types.push('debug');
+        else if (types.length === 0) types.push('opt');
+        return types;
+    }
+
+    function sortedPlatforms(platformSet) {
+        return PLATFORM_ORDER.filter(p => platformSet.has(p));
+    }
+
+    function sortedBuildTypes(buildSet) {
+        return BUILD_TYPE_ORDER.filter(b => buildSet.has(b));
+    }
+
+    function platformBadgesHtml(platforms) {
+        return platforms.map(p => `<span class="badge platform-${p}">${p}</span>`).join('');
+    }
+
+    function buildBadgesHtml(builds) {
+        return builds.map(b => `<span class="badge build-${b}">${b}</span>`).join('');
+    }
+
+    // Get unique sorted platforms for a set of instances
+    function getUniquePlatforms(instances) {
+        const set = new Set();
+        for (const inst of instances) set.add(extractPlatform(inst.jobName));
+        return sortedPlatforms(set);
+    }
+
+    // Get unique sorted build types for a set of instances
+    function getUniqueBuildTypes(instances) {
+        const set = new Set();
+        for (const inst of instances) {
+            for (const bt of extractBuildTypes(inst.jobName)) set.add(bt);
+        }
+        return sortedBuildTypes(set);
+    }
+
+    // ===== Profile worker pool =====
+    // Workers handle fetch + JSON.parse + extractTestTimings off the main thread.
+
+    const WORKER_CODE = `
+'use strict';
+
+const TC_BASE = 'https://firefox-ci-tc.services.mozilla.com';
+
+function normalizeMessage(message) {
+    return message
+        ?.replace(/task_\\d+/g, 'task_id')
+        .replace(/\\nRejection date: [^\\n]+/g, '')
+        .replace(/Test ran for \\d+s/g, 'Test ran for Xs');
+}
+
+function extractParallelRanges(markers) {
+    const ranges = [];
+    for (let i = 0; i < markers.length; i++) {
+        const data = markers.data[i];
+        if (data?.type === 'Text' && data.text === 'parallel') {
+            ranges.push({ start: markers.startTime[i], end: markers.endTime[i] });
+        }
+    }
+    return ranges;
+}
+
+function isInParallelRange(testStart, testEnd, ranges) {
+    for (const r of ranges) {
+        if (testStart < r.end && testEnd > r.start) return true;
+    }
+    return false;
+}
+
+function extractTestTimings(profile) {
+    if (!profile?.threads?.[0]) return [];
+    const { markers, stringArray } = profile.threads[0];
+    if (!markers?.data || !markers?.name || !stringArray) return [];
+
+    const parallelRanges = extractParallelRanges(markers);
+
+    const crashMarkers = [];
+    for (let i = 0; i < markers.length; i++) {
+        const data = markers.data[i];
+        if (data?.type === 'Crash' && data.test) {
+            crashMarkers.push({
+                testPath: data.test,
+                startTime: markers.startTime[i],
+                signature: data.signature || null,
+                minidump: data.minidump || null,
+            });
+        }
+    }
+
+    const failStringId = stringArray.indexOf('FAIL');
+    const errorStringId = stringArray.indexOf('ERROR');
+    const testStatusMarkers = [];
+    for (let i = 0; i < markers.length; i++) {
+        const nameId = markers.name[i];
+        if (nameId !== failStringId && nameId !== errorStringId) continue;
+        const data = markers.data[i];
+        if (!data || data.type !== 'TestStatus' || !data.test) continue;
+        testStatusMarkers.push({
+            test: data.test,
+            nameId,
+            time: markers.startTime[i],
+            message: normalizeMessage(data.message),
+            statusName: stringArray[nameId],
+        });
+    }
+    testStatusMarkers.sort((a, b) => a.test.localeCompare(b.test) || a.time - b.time);
+
+    const testStringId = stringArray.indexOf('test');
+    const timings = [];
+
+    for (let i = 0; i < markers.length; i++) {
+        if (markers.name[i] !== testStringId) continue;
+        const data = markers.data[i];
+        if (!data) continue;
+
+        let testPath = null;
+        let fullTestId = null;
+        let status = 'UNKNOWN';
+        let message = null;
+        let allMessages = [];
+
+        if (data.type === 'Test') {
+            fullTestId = data.test || data.name;
+            testPath = fullTestId;
+            status = data.status || 'UNKNOWN';
+            message = normalizeMessage(data.message ? data.message.replace(/\\r\\n/g, '\\n') : null);
+
+            if (status === 'FAIL' && data.color === 'green') {
+                status = 'EXPECTED-FAIL';
+            } else if (status === 'PASS' && data.expected && data.expected !== 'PASS') {
+                status = 'UNEXPECTED-PASS';
+            } else if (['TIMEOUT', 'FAIL', 'PASS'].includes(status) && parallelRanges.length) {
+                status += isInParallelRange(markers.startTime[i], markers.endTime[i], parallelRanges)
+                    ? '-PARALLEL' : '-SEQUENTIAL';
+            }
+
+            if (status.startsWith('FAIL') || status === 'TIMEOUT' || status === 'ERROR') {
+                const testStartTime = markers.startTime[i];
+                const testEndTime = markers.endTime[i];
+                for (const m of testStatusMarkers) {
+                    if (m.test === fullTestId && m.time >= testStartTime && m.time <= testEndTime) {
+                        if (m.message) {
+                            allMessages.push({ message: m.message, status: m.statusName });
+                        }
+                    }
+                }
+                if (allMessages.length > 0) {
+                    message = allMessages[0].message;
+                }
+            }
+
+            if (testPath?.includes(':')) {
+                testPath = testPath.split(':')[1];
+            }
+        } else if (data.type === 'Text') {
+            testPath = data.text;
+            if (testPath?.startsWith('replaying full log for ')) continue;
+            status = 'UNKNOWN';
+        } else {
+            continue;
+        }
+
+        if (!testPath || !/\\.(js|html|xhtml)$/.test(testPath)) continue;
+
+        const timing = {
+            path: testPath,
+            duration: markers.endTime[i] - markers.startTime[i],
+            status,
+            timestamp: profile.meta.startTime + markers.startTime[i],
+            allMessages,
+        };
+        if (message) timing.message = message;
+
+        if (status === 'CRASH') {
+            const matchingCrash = crashMarkers.find(
+                c => c.testPath === fullTestId &&
+                     c.startTime >= markers.startTime[i] &&
+                     c.startTime <= markers.endTime[i]
+            );
+            if (matchingCrash) {
+                if (matchingCrash.signature) timing.crashSignature = matchingCrash.signature;
+                if (matchingCrash.minidump) timing.minidump = matchingCrash.minidump;
+            }
+        }
+
+        timings.push(timing);
+    }
+    return timings;
+}
+
+self.onmessage = async function(e) {
+    const { id, taskId, retryId, jobName } = e.data;
+    try {
+        const url = TC_BASE + '/api/queue/v1/task/' + taskId + '/runs/' + retryId +
+                    '/artifacts/public/test_info/profile_resource-usage.json';
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            self.postMessage({ id, timings: [] });
+            return;
+        }
+        const profile = await resp.json();
+        const timings = extractTestTimings(profile);
+        for (const t of timings) {
+            t.jobName = jobName;
+            t.taskId = taskId;
+            t.retryId = retryId;
+        }
+        self.postMessage({ id, timings });
+    } catch (err) {
+        self.postMessage({ id, timings: [], error: err.message });
+    }
+};
+`;
+
+    const workerBlob = new Blob([WORKER_CODE], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+
+    const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 32);
+
+    function createWorkerPool() {
+        const workers = [];
+        for (let i = 0; i < NUM_WORKERS; i++) {
+            workers.push(new Worker(workerUrl));
+        }
+        return workers;
+    }
+
+    // Process all jobs through the worker pool.
+    // Returns a promise that resolves with all timings.
+    // onProgress(completed, total) is called as jobs complete.
+    function processJobsWithWorkers(failedTestJobs, onProgress) {
+        return new Promise((resolve) => {
+            const allTimings = [];
+            const workers = createWorkerPool();
+            const queue = [...failedTestJobs];
+            let completed = 0;
+            const total = failedTestJobs.length;
+            let nextId = 0;
+
+            function assignJob(worker) {
+                if (queue.length === 0) return false;
+                const job = queue.shift();
+                worker.postMessage({
+                    id: nextId++,
+                    taskId: job.taskId,
+                    retryId: job.retryId,
+                    jobName: job.jobName,
+                });
+                return true;
+            }
+
+            function onWorkerMessage(worker, e) {
+                const { timings } = e.data;
+                if (timings && timings.length > 0) {
+                    allTimings.push(...timings);
+                }
+                completed++;
+                onProgress(completed, total);
+
+                if (!assignJob(worker)) {
+                    // No more work for this worker
+                    worker._idle = true;
+                    // Check if all workers are idle
+                    if (workers.every(w => w._idle)) {
+                        for (const w of workers) w.terminate();
+                        resolve(allTimings);
+                    }
+                }
+            }
+
+            for (const worker of workers) {
+                worker._idle = false;
+                worker.onmessage = (e) => onWorkerMessage(worker, e);
+                // Seed each worker with a job
+                if (!assignJob(worker)) {
+                    worker._idle = true;
+                }
+            }
+
+            // Edge case: no jobs at all
+            if (workers.every(w => w._idle)) {
+                for (const w of workers) w.terminate();
+                resolve(allTimings);
+            }
+        });
+    }
+
+    // ===== Main loading logic =====
+
+    function setStatus(text, isError = false) {
+        const el = document.getElementById('status');
+        el.textContent = text;
+        el.className = isError ? 'error-text' : '';
+    }
+
+    function setProgress(fraction) {
+        const bar = document.getElementById('progress-bar');
+        const fill = document.getElementById('progress-fill');
+        if (fraction < 0) {
+            bar.style.display = 'none';
+        } else {
+            bar.style.display = 'block';
+            fill.style.width = Math.round(fraction * 100) + '%';
+        }
+    }
+
+    function extractRevision(input) {
+        input = input.trim();
+        if (/^[a-f0-9]{40}$/i.test(input)) return input;
+        if (/^[a-f0-9]{12}$/i.test(input)) return input;
+        try {
+            const url = new URL(input);
+            const rev = url.searchParams.get('revision');
+            if (rev) return rev;
+        } catch {}
+        const hgMatch = input.match(/\/rev\/([a-f0-9]+)$/i);
+        if (hgMatch) return hgMatch[1];
+        return input;
+    }
+
+    async function loadRevision() {
+        const input = document.getElementById('revision-input').value;
+        const revision = extractRevision(input);
+        if (!revision) {
+            setStatus('Please enter a revision.', true);
+            return;
+        }
+
+        currentRevision = revision;
+
+        const url = new URL(window.location);
+        url.searchParams.set('rev', revision);
+        window.history.replaceState(null, '', url);
+
+        document.getElementById('load-btn').disabled = true;
+        document.getElementById('results').innerHTML = '';
+        expandedTests.clear();
+
+        try {
+            setStatus('Looking up push on Treeherder...');
+            setProgress(-1);
+            const pushId = await fetchPushId(revision);
+
+            setStatus('Fetching jobs...');
+            const { allJobs, propertyNames } = await fetchAllJobs(pushId);
+            const jobs = parseJobs(allJobs, propertyNames);
+
+            const totalJobs = jobs.length;
+            const failedTestJobs = jobs.filter(j =>
+                j.state === 'completed' &&
+                j.result === 'testfailed' &&
+                isTestJob(j.jobName)
+            );
+
+            if (failedTestJobs.length === 0) {
+                const completedTestJobs = jobs.filter(j =>
+                    j.state === 'completed' && isTestJob(j.jobName)
+                );
+                setStatus(`No failed test jobs found. ${completedTestJobs.length} test jobs completed successfully out of ${totalJobs} total jobs.`);
+                setProgress(-1);
+                document.getElementById('load-btn').disabled = false;
+                return;
+            }
+
+            setStatus(`Found ${failedTestJobs.length} failed test jobs. Fetching profiles using ${NUM_WORKERS} workers...`);
+            setProgress(0);
+
+            const allTimings = await processJobsWithWorkers(failedTestJobs, (done, total) => {
+                setStatus(`Fetching & parsing profiles... (${done}/${total})`);
+                setProgress(done / total);
+            });
+
+            // Compute global platform/build sets from ALL failed test jobs we processed
+            const globalPlatforms = new Set();
+            const globalBuildTypes = new Set();
+            for (const job of failedTestJobs) {
+                globalPlatforms.add(extractPlatform(job.jobName));
+                for (const bt of extractBuildTypes(job.jobName)) globalBuildTypes.add(bt);
+            }
+
+            const failures = aggregateFailures(allTimings, globalPlatforms, globalBuildTypes);
+            currentFailures = failures;
+            setProgress(-1);
+
+            const treeherderUrl = `${TH_BASE}/jobs?repo=try&revision=${revision}`;
+            setStatus('');
+            renderResults(failures, totalJobs, failedTestJobs.length, treeherderUrl);
+        } catch (e) {
+            setStatus(e.message, true);
+            setProgress(-1);
+            console.error(e);
+        } finally {
+            document.getElementById('load-btn').disabled = false;
+        }
+    }
+
+    function isFailureStatus(status) {
+        return status === 'FAIL' || status === 'FAIL-SEQUENTIAL' || status === 'FAIL-PARALLEL' ||
+               status === 'TIMEOUT' || status === 'CRASH' || status === 'ERROR' ||
+               status === 'UNEXPECTED-PASS';
+    }
+
+    function aggregateFailures(allTimings, globalPlatforms, globalBuildTypes) {
+        const testMap = new Map();
+
+        for (const t of allTimings) {
+            if (!isFailureStatus(t.status)) continue;
+
+            if (!testMap.has(t.path)) {
+                testMap.set(t.path, {
+                    path: t.path,
+                    instances: [],
+                    statuses: new Set(),
+                    jobs: new Set(),
+                });
+            }
+
+            const entry = testMap.get(t.path);
+            entry.instances.push(t);
+            entry.statuses.add(t.status.replace(/-PARALLEL|-SEQUENTIAL/, ''));
+            entry.jobs.add(t.jobName);
+        }
+
+        for (const [, entry] of testMap) {
+            const messages = entry.instances
+                .map(i => i.message)
+                .filter(Boolean);
+            if (messages.length > 0 && messages.every(m => m === messages[0])) {
+                entry.commonMessage = messages[0];
+            }
+        }
+
+        const tests = Array.from(testMap.values());
+        tests.sort((a, b) => b.instances.length - a.instances.length);
+
+        return { tests, globalPlatforms, globalBuildTypes };
+    }
+
+    // ===== Rendering =====
+
+    // Returns badge HTML, or "N/N" in grey when the test failed on all configs.
+    function summaryPlatformBadges(instances) {
+        const platforms = getUniquePlatforms(instances);
+        const global = currentFailures.globalPlatforms;
+        const tooltip = escapeAttr(platforms.join(', '));
+        if (platforms.length === global.size && platforms.every(p => global.has(p))) {
+            return `<span class="all-configs" title="${tooltip}">${platforms.length}/${global.size}</span>`;
+        }
+        return `<span title="${tooltip}">${platformBadgesHtml(platforms)}</span>`;
+    }
+
+    function summaryBuildBadges(instances) {
+        const builds = getUniqueBuildTypes(instances);
+        const global = currentFailures.globalBuildTypes;
+        const tooltip = escapeAttr(builds.join(', '));
+        if (builds.length === global.size && builds.every(b => global.has(b))) {
+            return `<span class="all-configs" title="${tooltip}">${builds.length}/${global.size}</span>`;
+        }
+        return `<span title="${tooltip}">${buildBadgesHtml(builds)}</span>`;
+    }
+
+    function renderResults(failures, totalJobs, failedJobCount, treeherderUrl) {
+        const container = document.getElementById('results');
+        const totalFailures = failures.tests.reduce((s, t) => s + t.instances.length, 0);
+
+        let html = '';
+
+        html += '<div class="summary-cards">';
+        html += `<div class="summary-card"><div class="label">Total Jobs</div><div class="value">${totalJobs}</div></div>`;
+        html += `<div class="summary-card"><div class="label">Failed Test Jobs</div><div class="value red">${failedJobCount}</div></div>`;
+        html += `<div class="summary-card"><div class="label">Unique Failing Tests</div><div class="value orange">${failures.tests.length}</div></div>`;
+        html += `<div class="summary-card"><div class="label">Total Failures</div><div class="value red">${totalFailures}</div></div>`;
+        html += '</div>';
+
+        html += `<div class="treeherder-link"><a href="${escapeAttr(treeherderUrl)}" target="_blank">View on Treeherder</a></div>`;
+
+        html += '<div style="margin: 15px 0;">';
+        html += '<div class="search-container">';
+        html += '<input type="text" id="search-box" placeholder="Filter tests...">';
+        html += '<span class="search-clear" id="search-clear">&times;</span>';
+        html += '</div>';
+        html += '</div>';
+
+        html += '<div id="failure-table-container"></div>';
+
+        container.innerHTML = html;
+
+        initSearchBox({
+            searchBoxId: 'search-box',
+            searchClearId: 'search-clear',
+            onSearch: () => { currentSearch = document.getElementById('search-box').value.toLowerCase(); renderTable(); },
+            updateUrlHash: () => {},
+        });
+
+        reproState.clear();
+        updateReproduceButton();
+        renderTable();
+
+        // Fetch cached reproduction history in the background
+        if (isLocal) fetchReproHistory();
+    }
+
+    function getFilteredTests() {
+        let tests = currentFailures.tests;
+        if (currentSearch) {
+            tests = tests.filter(t =>
+                t.path.toLowerCase().includes(currentSearch) ||
+                t.instances.some(i => i.message?.toLowerCase().includes(currentSearch)) ||
+                t.instances.some(i => i.jobName.toLowerCase().includes(currentSearch))
+            );
+        }
+        return tests;
+    }
+
+    function renderTable() {
+        const container = document.getElementById('failure-table-container');
+        if (!currentFailures) return;
+
+        let tests = getFilteredTests();
+
+        const col = currentSort.column;
+        const asc = currentSort.ascending;
+        tests = [...tests].sort((a, b) => {
+            let va, vb;
+            if (col === 'count') { va = a.instances.length; vb = b.instances.length; }
+            else if (col === 'test') { va = a.path; vb = b.path; }
+            else if (col === 'status') {
+                va = Array.from(a.statuses).sort().join(',');
+                vb = Array.from(b.statuses).sort().join(',');
+            }
+            if (typeof va === 'string') return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            return asc ? va - vb : vb - va;
+        });
+
+        const arrow = c => currentSort.column === c ? (currentSort.ascending ? ' &#9650;' : ' &#9660;') : '';
+        const cls = c => currentSort.column === c ? ' class="active"' : '';
+
+        let html = '<table class="failure-table">';
+        html += '<thead><tr>';
+        html += `<th${cls('count')} onclick="sortTable('count')" style="width: 24px">#${arrow('count')}</th>`;
+        html += `<th${cls('status')} onclick="sortTable('status')" style="width: 65px">Status${arrow('status')}</th>`;
+        html += `<th class="no-sort" style="width: 55px">OS</th>`;
+        html += `<th class="no-sort" style="width: 55px">Build</th>`;
+        html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
+        const hasRepro = reproState.size > 0;
+        if (hasRepro) {
+            html += `<th class="no-sort" style="width: 38px"></th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (const test of tests) {
+            const isExpanded = expandedTests.has(test.path);
+            const countClass = test.instances.length >= 5 ? 'high' : test.instances.length >= 2 ? 'medium' : 'low';
+
+            html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleTest('${escapeAttr(test.path)}')" title="Click to expand">`;
+            html += `<td class="count-cell ${countClass}">${test.instances.length}</td>`;
+            html += '<td>';
+            for (const s of test.statuses) {
+                html += `<span class="status-badge status-${s}">${s}</span> `;
+            }
+            html += '</td>';
+            html += `<td class="badges-cell">${summaryPlatformBadges(test.instances)}</td>`;
+            html += `<td class="badges-cell">${summaryBuildBadges(test.instances)}</td>`;
+            html += '<td class="test-info">';
+            html += `<span class="test-path"><a href="${getSearchfoxUrl(test.path)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(test.path)}</a></span>`;
+            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()" title="Check 21-day history">history</a>`;
+            if (test.commonMessage) {
+                const firstLine = test.commonMessage.split('\n')[0];
+                html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
+            }
+            html += '</td>';
+            if (hasRepro) {
+                html += `<td class="repro-cell" id="repro-icon-${escapeAttr(test.path)}">${reproIconHtml(test.path)}<span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command (Alt+click: copy Claude prompt)">&#x1F4CB;</span></td>`;
+            }
+            html += '</tr>';
+
+            // Detail rows - one per job, using the same column structure
+            if (isExpanded) {
+                html += renderTestDetailRows(test, hasRepro);
+            }
+        }
+
+        if (tests.length === 0) {
+            const cols = hasRepro ? 6 : 5;
+            html += `<tr><td colspan="${cols}" style="text-align: center; color: #666; padding: 20px;">No matching tests found.</td></tr>`;
+        }
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        loadVisibleReproLogs();
+    }
+
+    function renderTestDetailRows(test, hasRepro) {
+        let html = '';
+
+        // Group instances by job
+        const byJob = new Map();
+        for (const inst of test.instances) {
+            const key = `${inst.taskId}.${inst.retryId}`;
+            if (!byJob.has(key)) {
+                byJob.set(key, {
+                    jobName: inst.jobName,
+                    taskId: inst.taskId,
+                    retryId: inst.retryId,
+                    instances: [],
+                });
+            }
+            byJob.get(key).instances.push(inst);
+        }
+
+        for (const [, job] of byJob) {
+            const platform = extractPlatform(job.jobName);
+            const builds = extractBuildTypes(job.jobName);
+            const profilerUrl = getProfilerUrl(
+                { taskId: job.taskId, retryId: job.retryId, jobName: job.jobName },
+                test.path.split('/').pop()
+            );
+            const thJobUrl = `${TH_BASE}/jobs?repo=try&selectedTaskRun=${job.taskId}.${job.retryId}&revision=${currentRevision}`;
+
+            // Collect statuses for this job
+            const jobStatuses = new Set();
+            for (const inst of job.instances) {
+                jobStatuses.add(inst.status.replace(/-PARALLEL|-SEQUENTIAL/, ''));
+            }
+
+            html += '<tr class="detail-row visible">';
+
+            // # column - empty
+            html += '<td></td>';
+
+            // Status column
+            html += '<td>';
+            for (const s of jobStatuses) {
+                html += `<span class="status-badge status-${s}">${s}</span> `;
+            }
+            html += '</td>';
+
+            // OS column
+            html += `<td class="badges-cell">${platformBadgesHtml([platform])}</td>`;
+
+            // Build column
+            html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(new Set(builds)))}</td>`;
+
+            // Test column - job name, links, assertions
+            html += '<td class="test-info">';
+            html += '<div class="job-header">';
+            html += `<span class="job-name">${escapeHtml(job.jobName)}</span>`;
+            html += ' <span class="job-links">';
+            html += `<a href="${escapeAttr(profilerUrl)}" target="_blank">Profile</a>`;
+            html += `<a href="${escapeAttr(thJobUrl)}" target="_blank">Treeherder</a>`;
+            html += '</span>';
+            html += '</div>';
+
+            // All assertions — collect then cap
+            const allItems = [];
+            for (const inst of job.instances) {
+                if (inst.crashSignature) {
+                    allItems.push(`<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>`);
+                }
+                if (inst.allMessages && inst.allMessages.length > 0) {
+                    for (const msg of inst.allMessages) {
+                        allItems.push(escapeHtml(msg.message));
+                    }
+                } else if (inst.message) {
+                    allItems.push(escapeHtml(inst.message));
+                }
+            }
+
+            const MAX_VISIBLE = 10;
+            html += '<ul class="assertion-list">';
+            for (let i = 0; i < Math.min(allItems.length, MAX_VISIBLE); i++) {
+                html += `<li>${allItems[i]}</li>`;
+            }
+            if (allItems.length > MAX_VISIBLE) {
+                const hiddenId = `hidden-${job.taskId}-${job.retryId}`;
+                const remaining = allItems.length - MAX_VISIBLE;
+                for (let i = MAX_VISIBLE; i < allItems.length; i++) {
+                    html += `<li class="assertion-hidden" data-group="${hiddenId}" style="display:none">${allItems[i]}</li>`;
+                }
+                html += `</ul><a class="show-more-link" onclick="toggleAssertions(this, '${hiddenId}')">show ${remaining} more</a>`;
+            } else {
+                html += '</ul>';
+            }
+
+            html += '</td>';
+            if (hasRepro) html += '<td></td>';
+            html += '</tr>';
+        }
+
+        // Reproduction detail section
+        if (hasRepro) {
+            const rs = reproState.get(test.path);
+            if (rs) {
+                html += renderReproDetailRow(rs, hasRepro);
+            }
+        }
+
+        return html;
+    }
+
+    function renderReproDetailRow(rs, hasRepro) {
+        const cols = hasRepro ? 6 : 5;
+        const rowId = `repro-detail-${rs.testPath || ''}`;
+        let cls = 'pending';
+        let icon = '&#x23F3;';
+        let label = 'Reproduction';
+
+        if (rs.state === 'reproduced') {
+            cls = 'reproduced';
+            icon = '&#x2713;';
+            label = 'Reproduced';
+        } else if (rs.state === 'not_reproduced') {
+            cls = 'not-reproduced';
+            icon = '&#x2717;';
+            label = 'Not reproduced';
+        } else if (rs.state === 'error') {
+            cls = 'error';
+            icon = '!';
+            label = 'Reproduction error';
+        } else if (rs.state === 'no_match') {
+            cls = 'no-match';
+            icon = '&#x26A0;';
+            label = 'No matching local config';
+        } else if (rs.state === 'queued') {
+            label = 'Queued for reproduction';
+        } else if (rs.state === 'running') {
+            label = 'Reproducing...';
+        }
+
+        let html = `<tr class="detail-row visible" id="${escapeAttr(rowId)}">`;
+        html += `<td colspan="${cols}">`;
+        html += `<div class="repro-detail ${cls}">`;
+        html += `<div class="repro-detail-header"><span class="repro-icon repro-${cls}">${icon}</span> ${escapeHtml(label)}</div>`;
+
+        if (rs.config) {
+            let meta = `Config: ${rs.config}`;
+            if (rs.duration != null) meta += ` &middot; ${rs.duration}s`;
+            if (rs.summary) meta += ` &middot; ${escapeHtml(rs.summary)}`;
+            if (rs.exitCode != null) meta += ` &middot; exit ${rs.exitCode}`;
+            html += `<div class="repro-detail-meta">${meta}</div>`;
+        }
+
+        if (rs.error) {
+            html += `<div class="repro-detail-meta" style="color: #c00">${escapeHtml(rs.error)}</div>`;
+        }
+
+        const finished = rs.runId && rs.state !== 'queued' && rs.state !== 'running';
+        if (finished) {
+            const profileUrl = `http://localhost:3000/api/runs/${encodeURIComponent(rs.runId)}/profile`;
+            const profileName = encodeURIComponent(`mach test ${rs.testPath || ''} (${rs.config || 'unknown'})`);
+            const profilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${profileName}`;
+
+            const logUrl = `http://localhost:3000/api/runs/${encodeURIComponent(rs.runId)}/log?format=text`;
+            html += '<div class="repro-links">';
+            html += `<a href="${logUrl}" target="_blank">View log</a>`;
+            html += `<a href="${profilerUrl}" target="_blank">Profile</a>`;
+            html += '</div>';
+            html += `<div class="repro-log-viewer" id="repro-log-${escapeAttr(rs.runId)}"></div>`;
+        }
+
+        html += '</div></td></tr>';
+        return html;
+    }
+
+    const reproLogCache = new Map();
+    function loadVisibleReproLogs() {
+        for (const viewer of document.querySelectorAll('.repro-log-viewer')) {
+            const runId = viewer.id.replace('repro-log-', '');
+            if (!runId || viewer.dataset.loaded) continue;
+            viewer.dataset.loaded = '1';
+
+            if (reproLogCache.has(runId)) {
+                viewer.innerHTML = reproLogCache.get(runId);
+                continue;
+            }
+
+            viewer.textContent = 'Loading log...';
+            fetch(`http://localhost:3000/api/runs/${encodeURIComponent(runId)}/log`)
+                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+                .then(text => {
+                    const html = formatStructuredLog(text);
+                    reproLogCache.set(runId, html);
+                    viewer.innerHTML = html;
+                })
+                .catch(e => { viewer.textContent = `Failed to load log: ${e.message}`; });
+        }
+    }
+
+    function formatStructuredLog(text) {
+        const lines = text.trim().split('\n');
+        let html = '';
+        for (const line of lines) {
+            let entry;
+            try { entry = JSON.parse(line); } catch { continue; }
+
+            const action = entry.action;
+            if (action === 'suite_start') {
+                html += `<div class="log-line log-test-header">Suite: ${escapeHtml(entry.name || '')}</div>`;
+            } else if (action === 'test_start') {
+                html += `<div class="log-line log-test-header">TEST-START | ${escapeHtml(entry.test || '')}</div>`;
+            } else if (action === 'test_status') {
+                const cls = entry.status === 'PASS' ? 'log-pass' : 'log-fail';
+                const expected = entry.expected && entry.status !== entry.expected ? ` (expected ${entry.expected})` : '';
+                html += `<div class="log-line ${cls}">${escapeHtml(entry.status)}${escapeHtml(expected)} | ${escapeHtml(entry.subtest || '')}`;
+                if (entry.message) html += ` - ${escapeHtml(entry.message)}`;
+                html += '</div>';
+                if (entry.stack) {
+                    html += `<div class="log-line log-stack">${escapeHtml(entry.stack)}</div>`;
+                }
+            } else if (action === 'test_end') {
+                const cls = entry.status === 'PASS' || entry.status === 'OK' ? 'log-pass' : 'log-fail';
+                const expected = entry.expected && entry.status !== entry.expected ? ` (expected ${entry.expected})` : '';
+                html += `<div class="log-line ${cls}">TEST-END | ${escapeHtml(entry.test || '')} - ${escapeHtml(entry.status)}${escapeHtml(expected)}`;
+                if (entry.message) html += ` - ${escapeHtml(entry.message)}`;
+                html += '</div>';
+            } else if (action === 'log') {
+                const level = (entry.level || '').toUpperCase();
+                let cls = 'log-info';
+                if (level === 'WARNING') cls = 'log-warn';
+                else if (level === 'ERROR' || level === 'CRITICAL') cls = 'log-error';
+                // Skip noisy mozinfo env variables (indented key: value lines from mach-test)
+                if (entry.source === 'mach-test' && entry.message && /^    \w+:/.test(entry.message)) continue;
+                html += `<div class="log-line ${cls}">${escapeHtml(entry.message || '')}</div>`;
+            } else if (action === 'crash') {
+                html += `<div class="log-line log-fail">CRASH | ${escapeHtml(entry.test || '')} - ${escapeHtml(entry.signature || entry.message || '')}</div>`;
+            } else if (action === 'process_output') {
+                // Skip noisy process output unless it has useful content
+                if (entry.data && (entry.data.includes('MEMORY STAT') || entry.data.includes('Exiting due to channel error'))) continue;
+                if (entry.data) html += `<div class="log-line log-info">${escapeHtml(entry.data)}</div>`;
+            }
+            // Skip: suite_end, shutdown, process_start, process_exit, group_start, group_end
+        }
+        return html;
+    }
+
+    function sortTable(column) {
+        if (currentSort.column === column) {
+            currentSort.ascending = !currentSort.ascending;
+        } else {
+            currentSort.column = column;
+            currentSort.ascending = column === 'test';
+        }
+        renderTable();
+    }
+
+    function toggleTest(path) {
+        if (expandedTests.has(path)) {
+            expandedTests.delete(path);
+        } else {
+            expandedTests.add(path);
+        }
+        renderTable();
+    }
+
+    function copyMachCmd(testPath, event) {
+        const el = event.currentTarget;
+        let text;
+        if (event.altKey) {
+            const test = currentFailures?.tests.find(t => t.path === testPath);
+            const msg = test?.commonMessage || test?.instances[0]?.message || '';
+            text = `Follow the instructions in @../DEBUG_STANDALONE_TEST_FAILURES.md to debug this test failure.
+
+\`./mach test ${testPath} --headless\`
+
+Error: ${msg}`;
+        } else {
+            text = `./mach test ${testPath} --headless`;
+        }
+        navigator.clipboard.writeText(text).then(() => {
+            const prev = el.innerHTML;
+            el.innerHTML = '&#x2713;';
+            el.classList.add('copied');
+            setTimeout(() => { el.innerHTML = prev; el.classList.remove('copied'); }, 1000);
+        });
+    }
+
+    function toggleAssertions(link, groupId) {
+        const items = document.querySelectorAll(`[data-group="${groupId}"]`);
+        const hidden = items[0]?.style.display === 'none';
+        for (const el of items) el.style.display = hidden ? '' : 'none';
+        if (hidden) {
+            link.textContent = 'show less';
+        } else {
+            link.textContent = `show ${items.length} more`;
+        }
+    }
+
+    // ===== Reproduce =====
+
+    // State: Map<testPath, { state, config, summary, duration, error, log, exitCode, status }>
+    // state: null | 'queued' | 'running' | 'reproduced' | 'not_reproduced' | 'no_match' | 'error'
+    let reproState = new Map();
+    let reproWs = null;
+    let reproRunning = false;
+    let reproConfigs = null; // array of { name } from server
+    let reproPendingCount = 0;
+
+    // Map our platform/build to the best matching test-runner config name.
+    // Config names look like "linux64-opt", "linux64-debug", "win64-asan", etc.
+    // Returns the config name or null if no match.
+    function findMatchingConfig(platform, buildTypes, configs) {
+        if (!configs || configs.length === 0) return null;
+
+        // Platform keywords to match against config names
+        const platformKeywords = {
+            'linux': 'linux',
+            'windows': 'win',
+            'mac': 'macos',
+            'android': 'android',
+        };
+        const platKey = platformKeywords[platform];
+        if (!platKey) return null;
+
+        // Filter configs that match the platform
+        const platConfigs = configs.filter(c => c.name.includes(platKey));
+        if (platConfigs.length === 0) return null;
+
+        // Try to match build type (prefer faster builds: opt first, then debug, then sanitizers)
+        const buildPriority = ['opt', 'debug', 'ccov', 'asan', 'tsan'];
+        for (const bt of buildPriority) {
+            if (!buildTypes.includes(bt)) continue;
+            const match = platConfigs.find(c => c.name.includes(bt));
+            if (match) return match.name;
+        }
+
+        // Fallback: just return the first platform-matching config
+        return platConfigs[0].name;
+    }
+
+    // For a test entry, find the best config to try reproduction.
+    // Prefers faster builds (opt before debug before sanitizers).
+    function findBestConfigForTest(test) {
+        if (!reproConfigs) return null;
+
+        // Collect unique platform+build combos, sorted by build speed
+        const combos = [];
+        const seen = new Set();
+        for (const inst of test.instances) {
+            const platform = extractPlatform(inst.jobName);
+            const builds = extractBuildTypes(inst.jobName);
+            const key = platform + ':' + builds.join(',');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            combos.push({ platform, builds });
+        }
+
+        // Sort combos: prefer opt, then debug, then sanitizers
+        const buildSpeed = { 'opt': 0, 'debug': 1, 'ccov': 2, 'asan': 3, 'tsan': 4 };
+        combos.sort((a, b) => {
+            const aSpeed = Math.min(...a.builds.map(bt => buildSpeed[bt] ?? 5));
+            const bSpeed = Math.min(...b.builds.map(bt => buildSpeed[bt] ?? 5));
+            return aSpeed - bSpeed;
+        });
+
+        for (const { platform, builds } of combos) {
+            const config = findMatchingConfig(platform, builds, reproConfigs);
+            if (config) return config;
+        }
+        return null;
+    }
+
+    function updateReproduceButton() {
+        const btn = document.getElementById('reproduce-btn');
+        if (!btn || !isLocal) return;
+
+        if (reproRunning) {
+            btn.disabled = true;
+            btn.title = `Reproduction in progress (${reproPendingCount} remaining)`;
+            btn.textContent = `Reproducing... (${reproPendingCount})`;
+        } else if (!currentFailures || currentFailures.tests.length === 0) {
+            btn.disabled = true;
+            btn.title = 'Load failures first';
+            btn.textContent = 'Reproduce Failures';
+        } else {
+            btn.disabled = false;
+            btn.title = 'Connect to local test-runner and attempt to reproduce failures';
+            btn.textContent = 'Reproduce Failures';
+        }
+    }
+
+    function reproduceFailures() {
+        if (!isLocal || reproRunning || !currentFailures || currentFailures.tests.length === 0) return;
+
+        reproState.clear();
+        reproRunning = true;
+        updateReproduceButton();
+        renderTable();
+
+        // Connect to local test-runner
+        try {
+            reproWs = new WebSocket('ws://localhost:3000');
+        } catch (e) {
+            reproRunning = false;
+            updateReproduceButton();
+            setStatus('Failed to connect to test-runner at ws://localhost:3000', true);
+            return;
+        }
+
+        reproWs.onopen = function() {
+            // Wait for configs message
+        };
+
+        reproWs.onerror = function() {
+            reproRunning = false;
+            reproWs = null;
+            reproPendingCount = 0;
+            updateReproduceButton();
+            setStatus('Failed to connect to test-runner at ws://localhost:3000', true);
+        };
+
+        reproWs.onclose = function() {
+            if (reproRunning) {
+                reproRunning = false;
+                reproPendingCount = 0;
+                updateReproduceButton();
+                renderTable();
+            }
+            reproWs = null;
+        };
+
+        reproWs.onmessage = function(event) {
+            const msg = JSON.parse(event.data);
+            handleReproMessage(msg);
+        };
+    }
+
+    function handleReproMessage(msg) {
+        if (msg.type === 'configs') {
+            reproConfigs = msg.configs;
+            // Now send run requests for all failures
+            sendAllRunRequests();
+        } else if (msg.type === 'run_queued') {
+            const testPath = requestIdToTest.get(msg.request_id);
+            if (testPath && reproState.has(testPath)) {
+                const s = reproState.get(testPath);
+                s.state = 'queued';
+                s.runId = msg.run_id;
+                runIdToTest.set(msg.run_id, testPath);
+            }
+            updateReproIcon(testPath);
+        } else if (msg.type === 'run_started') {
+            const testPath = runIdToTest.get(msg.run_id);
+            if (testPath && reproState.has(testPath)) {
+                reproState.get(testPath).state = 'running';
+            }
+            updateReproIcon(testPath);
+        } else if (msg.type === 'run_completed') {
+            const testPath = requestIdToTest.get(msg.request_id);
+            if (testPath && reproState.has(testPath)) {
+                const s = reproState.get(testPath);
+                s.state = msg.reproduced ? 'reproduced' : 'not_reproduced';
+                s.summary = msg.summary;
+                s.duration = msg.duration_seconds;
+                s.exitCode = msg.exit_code;
+                s.status = msg.status;
+
+                // If not reproduced, verify the test actually ran by checking the log
+                if (!msg.reproduced && s.runId) {
+                    verifyTestRan(s.runId, testPath);
+                }
+            }
+            reproPendingCount--;
+            sendNextForConfig(msg.config || requestIdToConfig.get(msg.request_id));
+            updateReproduceButton();
+            checkReproComplete();
+            updateReproIcon(testPath);
+        } else if (msg.type === 'run_error') {
+            const testPath = requestIdToTest.get(msg.request_id);
+            if (testPath && reproState.has(testPath)) {
+                const s = reproState.get(testPath);
+                s.state = 'error';
+                s.error = msg.error;
+            }
+            reproPendingCount--;
+            const config = requestIdToConfig.get(msg.request_id);
+            sendNextForConfig(config);
+            updateReproduceButton();
+            checkReproComplete();
+            updateReproIcon(testPath);
+        }
+    }
+
+    // Maps for correlating request/run IDs back to test paths and configs
+    let requestIdToTest = new Map();
+    let requestIdToConfig = new Map();
+    let runIdToTest = new Map();
+    let nextRequestId = 0;
+    // Per-config queue: Map<configName, Array<{testPath, config}>>
+    let configQueues = new Map();
+
+    function sendAllRunRequests() {
+        requestIdToTest.clear();
+        requestIdToConfig.clear();
+        runIdToTest.clear();
+        configQueues.clear();
+        nextRequestId = 0;
+        reproPendingCount = 0;
+
+        // Build per-config queues
+        for (const test of getFilteredTests()) {
+            // Skip tests that already have a cached result
+            const existing = reproState.get(test.path);
+            if (existing && existing.cached && (existing.state === 'reproduced' || existing.state === 'not_reproduced')) {
+                continue;
+            }
+
+            const config = findBestConfigForTest(test);
+            if (!config) {
+                reproState.set(test.path, { state: 'no_match', config: null, testPath: test.path });
+                continue;
+            }
+
+            reproState.set(test.path, { state: 'queued', config, testPath: test.path });
+            reproPendingCount++;
+
+            if (!configQueues.has(config)) configQueues.set(config, []);
+            configQueues.get(config).push({ testPath: test.path, config });
+        }
+
+        if (reproPendingCount === 0) {
+            reproRunning = false;
+            if (reproWs) { reproWs.close(); reproWs = null; }
+        } else {
+            // Send the first test for each config
+            for (const [config, queue] of configQueues) {
+                if (queue.length > 0) {
+                    sendRunRequest(queue.shift());
+                }
+            }
+        }
+
+        updateReproduceButton();
+        renderTable();
+    }
+
+    function sendRunRequest(item) {
+        const reqId = 'req-' + (nextRequestId++);
+        requestIdToTest.set(reqId, item.testPath);
+        requestIdToConfig.set(reqId, item.config);
+
+        reproWs.send(JSON.stringify({
+            type: 'run',
+            request_id: reqId,
+            test: item.testPath,
+            config: item.config,
+            extra_args: [],
+        }));
+    }
+
+    async function verifyTestRan(runId, testPath) {
+        try {
+            const resp = await fetch(`http://localhost:3000/api/runs/${encodeURIComponent(runId)}/log`);
+            if (!resp.ok) return;
+            const text = await resp.text();
+
+            // Cache formatted log for the viewer
+            reproLogCache.set(runId, formatStructuredLog(text));
+
+            // Check if any test_start line references our test
+            let testRan = false;
+            for (const line of text.split('\n')) {
+                let entry;
+                try { entry = JSON.parse(line); } catch { continue; }
+                if (entry.action === 'test_start' && entry.test === testPath) {
+                    testRan = true;
+                    break;
+                }
+            }
+
+            if (!testRan) {
+                const s = reproState.get(testPath);
+                if (s && s.state === 'not_reproduced') {
+                    s.state = 'error';
+                    s.error = 'Test did not run — check log for infrastructure errors';
+                    updateReproIcon(testPath);
+                }
+            }
+        } catch (e) {
+            // Can't verify, leave as-is
+        }
+    }
+
+    function sendNextForConfig(config) {
+        if (!config || !configQueues.has(config)) return;
+        const queue = configQueues.get(config);
+        if (queue.length > 0) {
+            sendRunRequest(queue.shift());
+        }
+    }
+
+    async function fetchReproHistory() {
+        try {
+            const resp = await fetch('http://localhost:3000/api/history');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!data.runs || !currentFailures) return;
+
+            // Filter non-stale entries, group by test path, keep most recent
+            const bestByTest = new Map();
+            for (const run of data.runs) {
+                if (run.stale) continue;
+                const existing = bestByTest.get(run.test);
+                if (!existing || run.finished_at > existing.finished_at) {
+                    bestByTest.set(run.test, run);
+                }
+            }
+
+            // Match against current failure table
+            for (const test of currentFailures.tests) {
+                if (reproState.has(test.path)) continue; // don't overwrite live repro
+                const run = bestByTest.get(test.path);
+                if (!run) continue;
+                reproState.set(test.path, {
+                    state: run.reproduced ? 'reproduced' : 'not_reproduced',
+                    config: run.config,
+                    testPath: test.path,
+                    runId: run.run_id,
+                    summary: null,
+                    duration: run.duration_seconds,
+                    exitCode: run.exit_code,
+                    status: run.status,
+                    cached: true,
+                });
+            }
+
+            updateResetButton();
+            renderTable();
+        } catch (e) {
+            // Server not running or network error — silently continue
+        }
+    }
+
+    function clearCachedReproResults() {
+        for (const [path, rs] of reproState) {
+            if (rs.cached) reproState.delete(path);
+        }
+        updateResetButton();
+        renderTable();
+    }
+
+    function updateResetButton() {
+        const btn = document.getElementById('repro-reset-btn');
+        if (!btn || !isLocal) return;
+        let hasCached = false;
+        for (const [, rs] of reproState) {
+            if (rs.cached) { hasCached = true; break; }
+        }
+        btn.style.display = hasCached ? '' : 'none';
+    }
+
+    function checkReproComplete() {
+        if (reproPendingCount <= 0) {
+            reproRunning = false;
+            if (reproWs) {
+                reproWs.close();
+                reproWs = null;
+            }
+            updateReproduceButton();
+        }
+    }
+
+    function updateReproIcon(testPath) {
+        const cell = document.getElementById('repro-icon-' + testPath);
+        if (cell) cell.innerHTML = reproIconHtml(testPath);
+
+        // Update expanded detail row if visible
+        const rs = reproState.get(testPath);
+        const detailRow = document.getElementById('repro-detail-' + testPath);
+        if (detailRow && rs) {
+            const hasRepro = reproState.size > 0;
+            const tmp = document.createElement('tbody');
+            tmp.innerHTML = renderReproDetailRow(rs, hasRepro);
+            detailRow.replaceWith(tmp.firstElementChild);
+            loadVisibleReproLogs();
+        }
+    }
+
+    function reproIconHtml(testPath) {
+        const s = reproState.get(testPath);
+        if (!s) return '';
+
+        const cached = s.cached ? ' (cached)' : '';
+        switch (s.state) {
+            case 'queued':
+                return '<span class="repro-icon repro-pending" title="Queued for reproduction">&#x23F3;</span>';
+            case 'running':
+                return '<span class="repro-icon repro-pending" title="Reproducing...">&#x23F3;</span>';
+            case 'reproduced':
+                return `<span class="repro-icon repro-reproduced" title="Reproduced on ${escapeAttr(s.config)}${s.summary ? '\n' + escapeAttr(s.summary) : ''}${cached}">&#x2713;</span>`;
+            case 'not_reproduced':
+                return `<span class="repro-icon repro-not-reproduced" title="Not reproduced on ${escapeAttr(s.config)}${s.summary ? '\n' + escapeAttr(s.summary) : ''}${cached}">&#x2717;</span>`;
+            case 'no_match':
+                return '<span class="repro-icon repro-no-match" title="No matching local config available">&#x26A0;</span>';
+            case 'error':
+                return `<span class="repro-icon repro-error" title="Error: ${escapeAttr(s.error || 'unknown')}">!</span>`;
+            default:
+                return '';
+        }
+    }
+
+    // ===== Init =====
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (isLocal) {
+            document.getElementById('reproduce-btn').style.display = '';
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const rev = params.get('rev');
+        if (rev) {
+            document.getElementById('revision-input').value = rev;
+            loadRevision();
+        }
+
+        document.getElementById('revision-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') loadRevision();
+        });
+    });
+    </script>
+</body>
+</html>
