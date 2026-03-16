@@ -78,11 +78,16 @@
         }
         .summary-card .value.red { color: #d00; }
         .summary-card .value.orange { color: #f60; }
+        .summary-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-left: auto;
+        }
 
         .search-container {
             position: relative;
             display: inline-block;
-            margin-bottom: 15px;
         }
         .search-container input {
             padding: 8px 30px 8px 12px;
@@ -309,7 +314,6 @@
 
         .treeherder-link {
             display: inline-block;
-            margin-top: 8px;
         }
         .treeherder-link a {
             color: #0060df;
@@ -496,8 +500,13 @@
                 <label for="revision-input">Try revision:</label>
                 <input type="text" id="revision-input" placeholder="Enter a try revision (40-char hex or Treeherder URL)" autofocus>
                 <button id="load-btn" onclick="loadRevision()">Load</button>
-                <button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>
-                <button id="repro-reset-btn" style="display:none; font-size: 12px; padding: 6px 10px;" onclick="clearCachedReproResults()" title="Clear cached reproduction results and re-test all failures">Reset</button>
+                <span id="treeherder-link-container"></span>
+                <span id="filter-container" style="display:none; margin-left: auto;">
+                    <span class="search-container">
+                        <input type="text" id="search-box" placeholder="Filter tests...">
+                        <span class="search-clear" id="search-clear">&times;</span>
+                    </span>
+                </span>
             </div>
             <div id="status"></div>
             <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
@@ -1067,6 +1076,11 @@ self.onmessage = async function(e) {
         const container = document.getElementById('results');
         const totalFailures = failures.tests.reduce((s, t) => s + t.instances.length, 0);
 
+        // Populate treeherder link and show filter in the controls bar
+        document.getElementById('treeherder-link-container').innerHTML =
+            `<span class="treeherder-link"><a href="${escapeAttr(treeherderUrl)}" target="_blank">View on Treeherder</a></span>`;
+        document.getElementById('filter-container').style.display = '';
+
         let html = '';
 
         html += '<div class="summary-cards">';
@@ -1074,20 +1088,19 @@ self.onmessage = async function(e) {
         html += `<div class="summary-card"><div class="label">Failed Test Jobs</div><div class="value red">${failedJobCount}</div></div>`;
         html += `<div class="summary-card"><div class="label">Unique Failing Tests</div><div class="value orange">${failures.tests.length}</div></div>`;
         html += `<div class="summary-card"><div class="label">Total Failures</div><div class="value red">${totalFailures}</div></div>`;
-        html += '</div>';
-
-        html += `<div class="treeherder-link"><a href="${escapeAttr(treeherderUrl)}" target="_blank">View on Treeherder</a></div>`;
-
-        html += '<div style="margin: 15px 0;">';
-        html += '<div class="search-container">';
-        html += '<input type="text" id="search-box" placeholder="Filter tests...">';
-        html += '<span class="search-clear" id="search-clear">&times;</span>';
+        html += '<div class="summary-actions">';
+        html += '<button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>';
+        html += '<button id="repro-reset-btn" style="display:none; font-size: 12px; padding: 6px 10px;" onclick="clearCachedReproResults()" title="Clear cached reproduction results and re-test all failures">Reset</button>';
         html += '</div>';
         html += '</div>';
 
         html += '<div id="failure-table-container"></div>';
 
         container.innerHTML = html;
+
+        if (isLocal) {
+            document.getElementById('reproduce-btn').style.display = '';
+        }
 
         initSearchBox({
             searchBoxId: 'search-box',
@@ -1901,10 +1914,6 @@ Error: ${msg}`;
     // ===== Init =====
 
     document.addEventListener('DOMContentLoaded', function() {
-        if (isLocal) {
-            document.getElementById('reproduce-btn').style.display = '';
-        }
-
         const params = new URLSearchParams(window.location.search);
         const rev = params.get('rev');
         if (rev) {
