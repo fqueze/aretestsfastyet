@@ -1147,9 +1147,7 @@ self.onmessage = async function(e) {
         html += `<th class="no-sort" style="width: 55px">Build</th>`;
         html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
         const hasRepro = reproState.size > 0;
-        if (hasRepro) {
-            html += `<th class="no-sort" style="width: 38px"></th>`;
-        }
+        html += `<th class="no-sort" style="width: ${hasRepro ? 38 : 20}px"></th>`;
         html += '</tr></thead><tbody>';
 
         for (const test of tests) {
@@ -1173,9 +1171,7 @@ self.onmessage = async function(e) {
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
             }
             html += '</td>';
-            if (hasRepro) {
-                html += `<td class="repro-cell" id="repro-icon-${escapeAttr(test.path)}">${reproIconHtml(test.path)}<span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command (Alt+click: copy Claude prompt)">&#x1F4CB;</span></td>`;
-            }
+            html += `<td class="repro-cell" id="repro-icon-${escapeAttr(test.path)}">${hasRepro ? reproIconHtml(test.path) : ''}<span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command${isLocal ? ' (Alt+click: copy Claude prompt)' : ''}">&#x1F4CB;</span></td>`;
             html += '</tr>';
 
             // Detail rows - one per job, using the same column structure
@@ -1185,7 +1181,7 @@ self.onmessage = async function(e) {
         }
 
         if (tests.length === 0) {
-            const cols = hasRepro ? 6 : 5;
+            const cols = 6;
             html += `<tr><td colspan="${cols}" style="text-align: center; color: #666; padding: 20px;">No matching tests found.</td></tr>`;
         }
 
@@ -1287,7 +1283,7 @@ self.onmessage = async function(e) {
             }
 
             html += '</td>';
-            if (hasRepro) html += '<td></td>';
+            html += '<td></td>';
             html += '</tr>';
         }
 
@@ -1303,7 +1299,7 @@ self.onmessage = async function(e) {
     }
 
     function renderReproDetailRow(rs, hasRepro) {
-        const cols = hasRepro ? 6 : 5;
+        const cols = 6;
         const rowId = `repro-detail-${rs.testPath || ''}`;
         let cls = 'pending';
         let icon = '&#x23F3;';
@@ -1459,7 +1455,7 @@ self.onmessage = async function(e) {
     function copyMachCmd(testPath, event) {
         const el = event.currentTarget;
         let text;
-        if (event.altKey) {
+        if (isLocal && event.altKey) {
             const test = currentFailures?.tests.find(t => t.path === testPath);
             const msg = test?.commonMessage || test?.instances[0]?.message || '';
             text = `Follow the instructions in @../DEBUG_STANDALONE_TEST_FAILURES.md to debug this test failure.
