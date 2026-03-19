@@ -631,29 +631,13 @@
         return builds.map(b => `<span class="badge build-${b}">${b}</span>`).join('');
     }
 
-    // Get unique sorted platforms for a set of instances
-    function getUniquePlatforms(instances) {
-        const set = new Set();
-        for (const inst of instances) set.add(extractPlatform(inst.jobName));
-        return sortedPlatforms(set);
-    }
-
-    // Get unique sorted build types for a set of instances
-    function getUniqueBuildTypes(instances) {
-        const set = new Set();
-        for (const inst of instances) {
-            for (const bt of extractBuildTypes(inst.jobName)) set.add(bt);
-        }
-        return sortedBuildTypes(set);
-    }
-
     // ===== Profile worker pool =====
-    // Workers handle fetch + JSON.parse + extractTestTimings off the main thread.
+    // Main thread fetches profiles, workers handle JSON parse + extraction.
 
+    // Worker code: receives ArrayBuffer via transfer, decodes + parses JSON,
+    // extracts test timings, and returns the result. No network access needed.
     const WORKER_CODE = `
 'use strict';
-
-const TC_BASE = 'https://firefox-ci-tc.services.mozilla.com';
 
 function normalizeMessage(message) {
     return message
@@ -801,17 +785,11 @@ function extractTestTimings(profile) {
     return timings;
 }
 
-self.onmessage = async function(e) {
-    const { id, taskId, retryId, jobName } = e.data;
+self.onmessage = function(e) {
+    const { id, buffer, jobName, taskId, retryId } = e.data;
     try {
-        const url = TC_BASE + '/api/queue/v1/task/' + taskId + '/runs/' + retryId +
-                    '/artifacts/public/test_info/profile_resource-usage.json';
-        const resp = await fetch(url);
-        if (!resp.ok) {
-            self.postMessage({ id, timings: [] });
-            return;
-        }
-        const profile = await resp.json();
+        const json = new TextDecoder().decode(buffer);
+        const profile = JSON.parse(json);
         const timings = extractTestTimings(profile);
         for (const t of timings) {
             t.jobName = jobName;
@@ -829,37 +807,32 @@ self.onmessage = async function(e) {
     const workerUrl = URL.createObjectURL(workerBlob);
 
     const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 32);
+    const MAX_CONCURRENT_FETCHES = 64;
 
-    function createWorkerPool() {
-        const workers = [];
-        for (let i = 0; i < NUM_WORKERS; i++) {
-            workers.push(new Worker(workerUrl));
-        }
-        return workers;
-    }
-
-    // Process all jobs through the worker pool.
-    // Returns a promise that resolves with all timings.
+    // Process all jobs: fetch profiles on main thread with high concurrency,
+    // then transfer ArrayBuffers to workers for CPU-bound parsing.
     // onProgress(completed, total) is called as jobs complete.
     function processJobsWithWorkers(failedTestJobs, onProgress) {
         return new Promise((resolve) => {
             const allTimings = [];
-            const workers = createWorkerPool();
-            const queue = [...failedTestJobs];
-            let completed = 0;
             const total = failedTestJobs.length;
+            let completed = 0;
             let nextId = 0;
 
-            function assignJob(worker) {
-                if (queue.length === 0) return false;
-                const job = queue.shift();
-                worker.postMessage({
-                    id: nextId++,
-                    taskId: job.taskId,
-                    retryId: job.retryId,
-                    jobName: job.jobName,
-                });
-                return true;
+            // Create worker pool for CPU-bound parsing
+            const workers = [];
+            for (let i = 0; i < NUM_WORKERS; i++) {
+                workers.push(new Worker(workerUrl));
+            }
+            const idleWorkers = [...workers];
+            // Buffers waiting for an idle worker
+            const pendingBuffers = [];
+
+            function sendToWorker(worker, item) {
+                worker.postMessage(
+                    { id: item.id, buffer: item.buffer, jobName: item.jobName, taskId: item.taskId, retryId: item.retryId },
+                    [item.buffer]
+                );
             }
 
             function onWorkerMessage(worker, e) {
@@ -870,31 +843,71 @@ self.onmessage = async function(e) {
                 completed++;
                 onProgress(completed, total);
 
-                if (!assignJob(worker)) {
-                    // No more work for this worker
-                    worker._idle = true;
-                    // Check if all workers are idle
-                    if (workers.every(w => w._idle)) {
-                        for (const w of workers) w.terminate();
-                        resolve(allTimings);
+                if (pendingBuffers.length > 0) {
+                    sendToWorker(worker, pendingBuffers.shift());
+                } else {
+                    idleWorkers.push(worker);
+                    if (completed >= total) {
+                        resolve({ timings: allTimings, workers });
                     }
                 }
             }
 
             for (const worker of workers) {
-                worker._idle = false;
                 worker.onmessage = (e) => onWorkerMessage(worker, e);
-                // Seed each worker with a job
-                if (!assignJob(worker)) {
-                    worker._idle = true;
+            }
+
+            function enqueueBuffer(item) {
+                if (idleWorkers.length > 0) {
+                    sendToWorker(idleWorkers.pop(), item);
+                } else {
+                    pendingBuffers.push(item);
                 }
             }
 
-            // Edge case: no jobs at all
-            if (workers.every(w => w._idle)) {
-                for (const w of workers) w.terminate();
-                resolve(allTimings);
+            // Fetch all profiles from main thread with bounded concurrency
+            const queue = [...failedTestJobs];
+            let inFlight = 0;
+
+            function fetchNext() {
+                while (inFlight < MAX_CONCURRENT_FETCHES && queue.length > 0) {
+                    const job = queue.shift();
+                    const id = nextId++;
+                    inFlight++;
+                    const url = TC_BASE + '/api/queue/v1/task/' + job.taskId + '/runs/' + job.retryId +
+                                '/artifacts/public/test_info/profile_resource-usage.json';
+                    fetch(url).then(resp => {
+                        if (!resp.ok) return null;
+                        return resp.arrayBuffer();
+                    }).then(buffer => {
+                        if (buffer) {
+                            enqueueBuffer({ id, buffer, jobName: job.jobName, taskId: job.taskId, retryId: job.retryId });
+                        } else {
+                            // No profile available, count as completed
+                            completed++;
+                            onProgress(completed, total);
+                        }
+                    }).catch(() => {
+                        completed++;
+                        onProgress(completed, total);
+                    }).finally(() => {
+                        inFlight--;
+                        fetchNext();
+                        // Check if everything is done (all fetched, nothing pending, all workers idle)
+                        if (completed >= total && idleWorkers.length === workers.length) {
+                            resolve({ timings: allTimings, workers });
+                        }
+                    });
+                }
             }
+
+            if (total === 0) {
+                for (const w of workers) w.terminate();
+                resolve({ timings: [], workers: [] });
+                return;
+            }
+
+            fetchNext();
         });
     }
 
@@ -975,10 +988,10 @@ self.onmessage = async function(e) {
                 return;
             }
 
-            setStatus(`Found ${failedTestJobs.length} failed test jobs. Fetching profiles using ${NUM_WORKERS} workers...`);
+            setStatus(`Found ${failedTestJobs.length} failed test jobs. Fetching profiles...`);
             setProgress(0);
 
-            const allTimings = await processJobsWithWorkers(failedTestJobs, (done, total) => {
+            const result = await processJobsWithWorkers(failedTestJobs, (done, total) => {
                 setStatus(`Fetching & parsing profiles... (${done}/${total})`);
                 setProgress(done / total);
             });
@@ -991,13 +1004,16 @@ self.onmessage = async function(e) {
                 for (const bt of extractBuildTypes(job.jobName)) globalBuildTypes.add(bt);
             }
 
-            const failures = aggregateFailures(allTimings, globalPlatforms, globalBuildTypes);
+            const failures = aggregateFailures(result.timings, globalPlatforms, globalBuildTypes);
             currentFailures = failures;
             setProgress(-1);
 
             const treeherderUrl = `${TH_BASE}/jobs?repo=try&revision=${revision}`;
             setStatus('');
             renderResults(failures, totalJobs, failedTestJobs.length, treeherderUrl);
+
+            // Defer worker termination so it doesn't block the paint.
+            setTimeout(() => { for (const w of result.workers) w.terminate(); }, 0);
         } catch (e) {
             setStatus(e.message, true);
             setProgress(-1);
@@ -1025,13 +1041,19 @@ self.onmessage = async function(e) {
                     instances: [],
                     statuses: new Set(),
                     jobs: new Set(),
+                    platforms: new Set(),
+                    buildTypes: new Set(),
                 });
             }
 
             const entry = testMap.get(t.path);
             entry.instances.push(t);
             entry.statuses.add(t.status.replace(/-PARALLEL|-SEQUENTIAL/, ''));
-            entry.jobs.add(t.jobName);
+            if (!entry.jobs.has(t.jobName)) {
+                entry.jobs.add(t.jobName);
+                entry.platforms.add(extractPlatform(t.jobName));
+                for (const bt of extractBuildTypes(t.jobName)) entry.buildTypes.add(bt);
+            }
         }
 
         for (const [, entry] of testMap) {
@@ -1041,6 +1063,9 @@ self.onmessage = async function(e) {
             if (messages.length > 0 && messages.every(m => m === messages[0])) {
                 entry.commonMessage = messages[0];
             }
+            // Pre-sort for rendering
+            entry.sortedPlatforms = sortedPlatforms(entry.platforms);
+            entry.sortedBuildTypes = sortedBuildTypes(entry.buildTypes);
         }
 
         const tests = Array.from(testMap.values());
@@ -1052,8 +1077,8 @@ self.onmessage = async function(e) {
     // ===== Rendering =====
 
     // Returns badge HTML, or "N/N" in grey when the test failed on all configs.
-    function summaryPlatformBadges(instances) {
-        const platforms = getUniquePlatforms(instances);
+    function summaryPlatformBadges(test) {
+        const platforms = test.sortedPlatforms;
         const global = currentFailures.globalPlatforms;
         const tooltip = escapeAttr(platforms.join(', '));
         if (platforms.length === global.size && platforms.every(p => global.has(p))) {
@@ -1062,8 +1087,8 @@ self.onmessage = async function(e) {
         return `<span title="${tooltip}">${platformBadgesHtml(platforms)}</span>`;
     }
 
-    function summaryBuildBadges(instances) {
-        const builds = getUniqueBuildTypes(instances);
+    function summaryBuildBadges(test) {
+        const builds = test.sortedBuildTypes;
         const global = currentFailures.globalBuildTypes;
         const tooltip = escapeAttr(builds.join(', '));
         if (builds.length === global.size && builds.every(b => global.has(b))) {
@@ -1174,8 +1199,8 @@ self.onmessage = async function(e) {
                 html += `<span class="status-badge status-${s}">${s}</span> `;
             }
             html += '</td>';
-            html += `<td class="badges-cell">${summaryPlatformBadges(test.instances)}</td>`;
-            html += `<td class="badges-cell">${summaryBuildBadges(test.instances)}</td>`;
+            html += `<td class="badges-cell">${summaryPlatformBadges(test)}</td>`;
+            html += `<td class="badges-cell">${summaryBuildBadges(test)}</td>`;
             html += '<td class="test-info">';
             html += `<span class="test-path"><a href="${getSearchfoxUrl(test.path)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(test.path)}</a></span>`;
             html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()" title="Check 21-day history">history</a>`;
