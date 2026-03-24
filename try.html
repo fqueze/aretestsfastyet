@@ -376,6 +376,9 @@
             font-weight: 700;
             vertical-align: middle;
         }
+        .repro-pending-idle {
+            color: #bbb;
+        }
         .repro-pending {
             color: #999;
         }
@@ -1138,8 +1141,8 @@ self.onmessage = function(e) {
         updateReproduceButton();
         renderTable();
 
-        // Fetch cached reproduction history in the background
-        if (isLocal) fetchReproHistory();
+        // Connect to reproduction server for configs and cached history
+        if (isLocal) connectReproServer();
     }
 
     function getFilteredTests() {
@@ -1209,7 +1212,7 @@ self.onmessage = function(e) {
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
             }
             html += '</td>';
-            html += `<td class="repro-cell" id="repro-icon-${escapeAttr(test.path)}">${hasRepro ? reproIconHtml(test.path) : ''}<span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command${isLocal ? ' (Alt+click: copy Claude prompt)' : ''}">&#x1F4CB;</span></td>`;
+            html += `<td class="repro-cell"><span id="repro-icon-${escapeAttr(test.path)}">${hasRepro ? reproIconHtml(test.path) : ''}</span><span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command${isLocal ? ' (Alt+click: copy Claude prompt)' : ''}">&#x1F4CB;</span></td>`;
             html += '</tr>';
 
             // Detail rows - one per job, using the same column structure
@@ -1526,7 +1529,7 @@ Error: ${msg}`;
     // ===== Reproduce =====
 
     // State: Map<testPath, { state, config, summary, duration, error, log, exitCode, status }>
-    // state: null | 'queued' | 'running' | 'reproduced' | 'not_reproduced' | 'no_match' | 'error'
+    // state: null | 'pending' | 'queued' | 'running' | 'reproduced' | 'not_reproduced' | 'no_match' | 'error'
     let reproState = new Map();
     let reproWs = null;
     let reproRunning = false;
@@ -1616,34 +1619,21 @@ Error: ${msg}`;
         }
     }
 
-    function reproduceFailures() {
-        if (!isLocal || reproRunning || !currentFailures || currentFailures.tests.length === 0) return;
-
-        reproState.clear();
-        reproRunning = true;
-        updateReproduceButton();
-        renderTable();
-
-        // Connect to local test-runner
+    function connectReproServer() {
         try {
             reproWs = new WebSocket('ws://localhost:3000');
         } catch (e) {
-            reproRunning = false;
-            updateReproduceButton();
-            setStatus('Failed to connect to test-runner at ws://localhost:3000', true);
             return;
         }
 
-        reproWs.onopen = function() {
-            // Wait for configs message
-        };
-
         reproWs.onerror = function() {
-            reproRunning = false;
+            if (reproRunning) {
+                reproRunning = false;
+                reproPendingCount = 0;
+                updateReproduceButton();
+                setStatus('Failed to connect to test-runner at ws://localhost:3000', true);
+            }
             reproWs = null;
-            reproPendingCount = 0;
-            updateReproduceButton();
-            setStatus('Failed to connect to test-runner at ws://localhost:3000', true);
         };
 
         reproWs.onclose = function() {
@@ -1662,11 +1652,33 @@ Error: ${msg}`;
         };
     }
 
+    function reproduceFailures() {
+        if (!isLocal || reproRunning || !currentFailures || currentFailures.tests.length === 0) return;
+
+        reproRunning = true;
+        updateReproduceButton();
+
+        if (!reproWs || reproWs.readyState !== WebSocket.OPEN) {
+            // Reconnect if needed; sendAllRunRequests will fire on configs message
+            connectReproServer();
+        } else {
+            // Already connected, send immediately
+            sendAllRunRequests();
+        }
+    }
+
     function handleReproMessage(msg) {
         if (msg.type === 'configs') {
             reproConfigs = msg.configs;
-            // Now send run requests for all failures
-            sendAllRunRequests();
+            if (reproRunning && reproPendingCount === 0) {
+                sendAllRunRequests();
+            } else if (reproRunning) {
+                // New peer configs arrived — queue tests that had no_match before.
+                queueNewlyMatchableTests();
+            } else {
+                // Not reproducing — fetch history then mark remaining tests as no_match.
+                fetchReproHistory().then(markNoMatchTests);
+            }
         } else if (msg.type === 'run_queued') {
             const testPath = requestIdToTest.get(msg.request_id);
             if (testPath && reproState.has(testPath)) {
@@ -1769,6 +1781,46 @@ Error: ${msg}`;
 
         updateReproduceButton();
         renderTable();
+    }
+
+    function markNoMatchTests() {
+        if (!currentFailures) return;
+        for (const test of getFilteredTests()) {
+            const existing = reproState.get(test.path);
+            if (existing && existing.state !== 'no_match') continue;
+            const config = findBestConfigForTest(test);
+            if (!config) {
+                reproState.set(test.path, { state: 'no_match', config: null, testPath: test.path });
+            } else {
+                reproState.set(test.path, { state: 'pending', config, testPath: test.path });
+            }
+            updateReproIcon(test.path);
+        }
+    }
+
+    function queueNewlyMatchableTests() {
+        for (const test of getFilteredTests()) {
+            const existing = reproState.get(test.path);
+            if (!existing || existing.state !== 'no_match') continue;
+
+            const config = findBestConfigForTest(test);
+            if (!config) continue;
+
+            reproState.set(test.path, { state: 'queued', config, testPath: test.path });
+            reproPendingCount++;
+
+            if (!configQueues.has(config)) configQueues.set(config, []);
+            const queue = configQueues.get(config);
+            queue.push({ testPath: test.path, config });
+
+            // If this is a new config with nothing in-flight, send immediately
+            if (queue.length === 1) {
+                sendRunRequest(queue.shift());
+            }
+
+            updateReproIcon(test.path);
+        }
+        updateReproduceButton();
     }
 
     function sendRunRequest(item) {
@@ -1919,6 +1971,8 @@ Error: ${msg}`;
 
         const cached = s.cached ? ' (cached)' : '';
         switch (s.state) {
+            case 'pending':
+                return `<span class="repro-icon repro-pending-idle" title="Can reproduce on ${escapeAttr(s.config)}">?</span>`;
             case 'queued':
                 return '<span class="repro-icon repro-pending" title="Queued for reproduction">&#x23F3;</span>';
             case 'running':
