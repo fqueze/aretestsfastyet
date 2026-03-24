@@ -398,6 +398,12 @@
             background: #ffebee;
             color: #c62828;
         }
+        .intermittent-icon {
+            width: 13px;
+            height: 13px;
+            color: #e65100;
+            vertical-align: middle;
+        }
         .repro-summary {
             font-size: 11px;
             color: #888;
@@ -981,6 +987,11 @@ self.onmessage = function(e) {
                 isTestJob(j.jobName)
             );
 
+            const successfulJobNames = new Set(
+                jobs.filter(j => j.state === 'completed' && j.result === 'success' && isTestJob(j.jobName))
+                    .map(j => j.jobName)
+            );
+
             if (failedTestJobs.length === 0) {
                 const completedTestJobs = jobs.filter(j =>
                     j.state === 'completed' && isTestJob(j.jobName)
@@ -998,6 +1009,49 @@ self.onmessage = function(e) {
                 setStatus(`Fetching & parsing profiles... (${done}/${total})`);
                 setProgress(done / total);
             });
+
+            // Tag intermittent failures.
+            // A test failure is intermittent if, for the same jobName, another run
+            // either succeeded entirely (in successfulJobNames) or did not fail
+            // that specific test (failed on different tests instead).
+            //
+            // Build per-jobName, per-run sets of failing test paths.
+            const failsByJobAndRun = new Map(); // jobName -> Map<runKey, Set<testPath>>
+            for (const t of result.timings) {
+                if (!isFailureStatus(t.status)) continue;
+                const runKey = `${t.taskId}.${t.retryId}`;
+                if (!failsByJobAndRun.has(t.jobName)) failsByJobAndRun.set(t.jobName, new Map());
+                const runs = failsByJobAndRun.get(t.jobName);
+                if (!runs.has(runKey)) runs.set(runKey, new Set());
+                runs.get(runKey).add(t.path);
+            }
+
+            for (const t of result.timings) {
+                if (!isFailureStatus(t.status)) { t.intermittent = false; continue; }
+
+                // Case 1: a successful run of the same job exists
+                if (successfulJobNames.has(t.jobName)) {
+                    t.intermittent = true;
+                    continue;
+                }
+
+                // Case 2: another run of the same job failed on different tests
+                const runs = failsByJobAndRun.get(t.jobName);
+                if (runs && runs.size > 1) {
+                    const runKey = `${t.taskId}.${t.retryId}`;
+                    // Check if any other run does NOT fail this test
+                    t.intermittent = false;
+                    for (const [key, failSet] of runs) {
+                        if (key === runKey) continue;
+                        if (!failSet.has(t.path)) {
+                            t.intermittent = true;
+                            break;
+                        }
+                    }
+                } else {
+                    t.intermittent = false;
+                }
+            }
 
             // Compute global platform/build sets from ALL failed test jobs we processed
             const globalPlatforms = new Set();
@@ -1025,6 +1079,8 @@ self.onmessage = function(e) {
             document.getElementById('load-btn').disabled = false;
         }
     }
+
+    const MITTEN_SVG = '<svg class="intermittent-icon" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><title>Intermittent</title><path fill="currentColor" d="M352 384L64 384 5.4 178.9C1.8 166.4 0 153.4 0 140.3C0 62.8 62.8 0 140.3 0l3.4 0c66 0 123.5 44.9 139.5 108.9l31.4 125.8 17.6-20.1C344.8 200.2 362.9 192 382 192l2.8 0c34.9 0 63.3 28.3 63.3 63.3c0 15.9-6 31.2-16.8 42.9L352 384zM32 448c0-17.7 14.3-32 32-32l288 0c17.7 0 32 14.3 32 32l0 32c0 17.7-14.3 32-32 32L64 512c-17.7 0-32-14.3-32-32l0-32z"></path></svg>';
 
     function isFailureStatus(status) {
         return status === 'FAIL' || status === 'FAIL-SEQUENTIAL' || status === 'FAIL-PARALLEL' ||
@@ -1066,6 +1122,7 @@ self.onmessage = function(e) {
             if (messages.length > 0 && messages.every(m => m === messages[0])) {
                 entry.commonMessage = messages[0];
             }
+            entry.intermittentCount = entry.instances.filter(i => i.intermittent).length;
             // Pre-sort for rendering
             entry.sortedPlatforms = sortedPlatforms(entry.platforms);
             entry.sortedBuildTypes = sortedBuildTypes(entry.buildTypes);
@@ -1103,6 +1160,7 @@ self.onmessage = function(e) {
     function renderResults(failures, totalJobs, failedJobCount, treeherderUrl) {
         const container = document.getElementById('results');
         const totalFailures = failures.tests.reduce((s, t) => s + t.instances.length, 0);
+        const intermittentTests = failures.tests.filter(t => t.intermittentCount === t.instances.length).length;
 
         // Populate treeherder link and show filter in the controls bar
         document.getElementById('treeherder-link-container').innerHTML =
@@ -1116,6 +1174,9 @@ self.onmessage = function(e) {
         html += `<div class="summary-card"><div class="label">Failed Test Jobs</div><div class="value red">${failedJobCount}</div></div>`;
         html += `<div class="summary-card"><div class="label">Unique Failing Tests</div><div class="value orange">${failures.tests.length}</div></div>`;
         html += `<div class="summary-card"><div class="label">Total Failures</div><div class="value red">${totalFailures}</div></div>`;
+        if (intermittentTests > 0) {
+            html += `<div class="summary-card"><div class="label">Intermittent ${MITTEN_SVG}</div><div class="value orange">${intermittentTests}</div></div>`;
+        }
         html += '<div class="summary-actions">';
         html += '<button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>';
         html += '<button id="repro-reset-btn" style="display:none; font-size: 12px; padding: 6px 10px;" onclick="clearCachedReproResults()" title="Clear cached reproduction results and re-test all failures">Reset</button>';
@@ -1138,6 +1199,7 @@ self.onmessage = function(e) {
         });
 
         reproState.clear();
+        reproHistoryFetched = false;
         updateReproduceButton();
         renderTable();
 
@@ -1196,7 +1258,8 @@ self.onmessage = function(e) {
             const countClass = test.instances.length >= 5 ? 'high' : test.instances.length >= 2 ? 'medium' : 'low';
 
             html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleTest('${escapeAttr(test.path)}')" title="Click to expand">`;
-            html += `<td class="count-cell ${countClass}">${test.instances.length}</td>`;
+            const intermittentHtml = test.intermittentCount === test.instances.length ? ' ' + MITTEN_SVG : '';
+            html += `<td class="count-cell ${countClass}">${test.instances.length}${intermittentHtml}</td>`;
             html += '<td>';
             for (const s of test.statuses) {
                 html += `<span class="status-badge status-${s}">${s}</span> `;
@@ -1266,8 +1329,10 @@ self.onmessage = function(e) {
 
             html += '<tr class="detail-row visible">';
 
-            // # column - empty
-            html += '<td></td>';
+            const jobIntermittent = job.instances.every(i => i.intermittent);
+
+            // # column - intermittent icon if applicable
+            html += `<td class="count-cell">${jobIntermittent ? MITTEN_SVG : ''}</td>`;
 
             // Status column
             html += '<td>';
@@ -1534,6 +1599,7 @@ Error: ${msg}`;
     let reproWs = null;
     let reproRunning = false;
     let reproConfigs = null; // array of { name } from server
+    let reproHistoryFetched = false;
     let reproPendingCount = 0;
 
     // Map our platform/build to the best matching test-runner config name.
@@ -1677,7 +1743,13 @@ Error: ${msg}`;
                 queueNewlyMatchableTests();
             } else {
                 // Not reproducing — fetch history then mark remaining tests as no_match.
-                fetchReproHistory().then(markNoMatchTests);
+                // Only fetch once; subsequent config broadcasts just update no_match state.
+                if (!reproHistoryFetched) {
+                    reproHistoryFetched = true;
+                    fetchReproHistory().then(markNoMatchTests);
+                } else {
+                    markNoMatchTests();
+                }
             }
         } else if (msg.type === 'run_queued') {
             const testPath = requestIdToTest.get(msg.request_id);
