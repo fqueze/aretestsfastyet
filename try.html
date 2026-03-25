@@ -304,7 +304,17 @@
             color: #555;
             white-space: pre-wrap;
             word-break: break-all;
+            line-height: 1.5;
         }
+        .assertion-stack .stack-func { color: #1a1a1a; font-weight: 600; }
+        .assertion-stack .stack-file { color: #0060df; }
+        .assertion-stack .stack-line { color: #999; }
+        .assertion-stack .stack-sep { color: #999; }
+        .assertion-stack .stack-addr { color: #999; }
+        .assertion-stack .stack-desc { color: #666; }
+        .assertion-stack .stack-prefix { color: #999; }
+        .assertion-stack a { color: inherit; text-decoration: none; }
+        .assertion-stack a:hover { text-decoration: underline; }
         .show-more-link {
             font-size: 11px;
             color: #0060df;
@@ -1409,10 +1419,94 @@ self.onmessage = function(e) {
                 }
             }
 
+            // Known prefix → searchfox source path mapping (prefix is hidden)
+            const SOURCE_PREFIX_MAP = [
+                ['chrome://mochitests/content/browser/', ''],
+                ['chrome://mochikit/content/', 'testing/mochitest/'],
+            ];
+
+            function colorizeJsFile(file, funcName) {
+                // Split "prefix/path:line:col" or "prefix/path:line"
+                const lineMatch = file.match(/^(.+?):(\d+)(:\d+)?$/);
+                const filePart = lineMatch ? lineMatch[1] : file;
+                const lineNum = lineMatch ? lineMatch[2] : null;
+                const lineSuffix = lineMatch ? `:${lineMatch[2]}${lineMatch[3] || ''}` : '';
+                const fileName = filePart.split('/').pop();
+
+                // Check for known prefix → hide it entirely, link to source
+                for (const [prefix, replacement] of SOURCE_PREFIX_MAP) {
+                    if (filePart.startsWith(prefix)) {
+                        const srcPath = replacement + filePart.slice(prefix.length);
+                        const href = escapeAttr('https://searchfox.org/mozilla-central/source/' + srcPath + (lineNum ? '#' + lineNum : ''));
+                        let fileHtml = `<span class="stack-file">${escapeHtml(srcPath)}</span>`;
+                        if (lineSuffix) fileHtml += `<span class="stack-line">${escapeHtml(lineSuffix)}</span>`;
+                        return `<a href="${href}" target="_blank">${fileHtml}</a>`;
+                    }
+                }
+
+                // Unknown scheme (resource://, chrome://browser/, etc.)
+                // Grey out the prefix, link to searchfox search
+                const schemeMatch = filePart.match(/^(.+\/)([^/]+)$/);
+                let prefixHtml = '';
+                let pathPart = filePart;
+                if (schemeMatch) {
+                    prefixHtml = `<span class="stack-prefix">${escapeHtml(schemeMatch[1])}</span>`;
+                    pathPart = schemeMatch[2];
+                }
+
+                let fileHtml = prefixHtml + `<span class="stack-file">${escapeHtml(pathPart)}</span>`;
+                if (lineSuffix) fileHtml += `<span class="stack-line">${escapeHtml(lineSuffix)}</span>`;
+
+                // Link to searchfox search using function name + filename
+                if (fileName) {
+                    const params = new URLSearchParams({ path: fileName, case: 'true', regexp: 'false' });
+                    if (funcName) params.set('q', funcName);
+                    const href = escapeAttr('https://searchfox.org/mozilla-central/search?' + params);
+                    fileHtml = `<a href="${href}" target="_blank">${fileHtml}</a>`;
+                }
+                return fileHtml;
+            }
+
+            function colorizeLeakDesc(desc) {
+                // Function names after "JS Function - " in bold.
+                const funcMatch = desc.match(/^(JS Function - )(.+)$/);
+                if (funcMatch) {
+                    return `<span class="stack-desc">${escapeHtml(funcMatch[1])}</span><span class="stack-func">${escapeHtml(funcMatch[2])}</span>`;
+                }
+                // Split on paths (resource://, chrome://) and colorize them as searchfox links.
+                const parts = desc.split(/((?:chrome|resource):\/\/[^\s]+)/);
+                return parts.map(part =>
+                    /^(?:chrome|resource):\/\//.test(part)
+                        ? colorizeJsFile(part, null)
+                        : `<span class="stack-desc">${escapeHtml(part)}</span>`
+                ).join('');
+            }
+
+            function colorizeStack(stack) {
+                return stack.split('\n').map(line => {
+                    // Leak stack: "name — description @  0xaddr"
+                    const leakMatch = line.match(/^(.+?) — (.+?) @ {2}(0x[0-9a-f]+)$/);
+                    if (leakMatch) {
+                        return `<span class="stack-func">${escapeHtml(leakMatch[1])}</span><span class="stack-sep"> — </span>${colorizeLeakDesc(leakMatch[2])}<span class="stack-sep"> @ </span><span class="stack-addr">${escapeHtml(leakMatch[3])}</span>`;
+                    }
+                    // Leak stack without description: "name @  0xaddr"
+                    const leakSimple = line.match(/^(.+?) @ {2}(0x[0-9a-f]+)$/);
+                    if (leakSimple) {
+                        return `<span class="stack-func">${escapeHtml(leakSimple[1])}</span><span class="stack-sep"> @ </span><span class="stack-addr">${escapeHtml(leakSimple[2])}</span>`;
+                    }
+                    // JS stack: "func @ file:line:col"
+                    const jsMatch = line.match(/^(.+?) @ (.+)$/);
+                    if (jsMatch) {
+                        return `<span class="stack-func">${escapeHtml(jsMatch[1])}</span><span class="stack-sep"> @ </span>${colorizeJsFile(jsMatch[2], jsMatch[1])}`;
+                    }
+                    return escapeHtml(line);
+                }).join('\n');
+            }
+
             function renderItem(item) {
                 let li = item.html;
                 if (item.stack) {
-                    li += `<pre class="assertion-stack">${escapeHtml(item.stack)}</pre>`;
+                    li += `<pre class="assertion-stack">${colorizeStack(item.stack)}</pre>`;
                 }
                 return li;
             }
