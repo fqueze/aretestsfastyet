@@ -295,6 +295,16 @@
             font-size: 10px;
             margin-right: 4px;
         }
+        .assertion-stack {
+            margin: 2px 0 4px 12px;
+            padding: 4px 8px;
+            background: #f5f5f5;
+            border-left: 2px solid #ccc;
+            font-size: 10px;
+            color: #555;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
         .show-more-link {
             font-size: 11px;
             color: #0060df;
@@ -673,9 +683,32 @@ function isInParallelRange(testStart, testEnd, ranges) {
     return false;
 }
 
+function resolveStack(stackIndex, thread) {
+    const { stackTable, frameTable, funcTable, stringArray } = thread;
+    if (!stackTable || !frameTable || !funcTable || stackIndex == null) return null;
+    const frames = [];
+    let idx = stackIndex;
+    while (idx != null && idx >= 0) {
+        const frameIdx = stackTable.frame[idx];
+        const funcIdx = frameTable.func[frameIdx];
+        const name = stringArray[funcTable.name[funcIdx]] || '?';
+        const file = funcTable.fileName != null ? stringArray[funcTable.fileName[funcIdx]] : null;
+        const line = frameTable.line ? frameTable.line[frameIdx] : null;
+        let frame = name;
+        if (file) {
+            frame += ' @ ' + file;
+            if (line != null && line >= 0) frame += ':' + line;
+        }
+        frames.push(frame);
+        idx = stackTable.prefix[idx];
+    }
+    return frames.length ? frames.join('\\n') : null;
+}
+
 function extractTestTimings(profile) {
     if (!profile?.threads?.[0]) return [];
-    const { markers, stringArray } = profile.threads[0];
+    const thread = profile.threads[0];
+    const { markers, stringArray } = thread;
     if (!markers?.data || !markers?.name || !stringArray) return [];
 
     const parallelRanges = extractParallelRanges(markers);
@@ -701,12 +734,14 @@ function extractTestTimings(profile) {
         if (nameId !== failStringId && nameId !== errorStringId) continue;
         const data = markers.data[i];
         if (!data || data.type !== 'TestStatus' || !data.test) continue;
+        const stack = markers.stack ? resolveStack(markers.stack[i], thread) : null;
         testStatusMarkers.push({
             test: data.test,
             nameId,
             time: markers.startTime[i],
             message: normalizeMessage(data.message),
             statusName: stringArray[nameId],
+            stack,
         });
     }
     testStatusMarkers.sort((a, b) => a.test.localeCompare(b.test) || a.time - b.time);
@@ -746,7 +781,9 @@ function extractTestTimings(profile) {
                 for (const m of testStatusMarkers) {
                     if (m.test === fullTestId && m.time >= testStartTime && m.time <= testEndTime) {
                         if (m.message) {
-                            allMessages.push({ message: m.message, status: m.statusName });
+                            const entry = { message: m.message, status: m.statusName };
+                            if (m.stack) entry.stack = m.stack;
+                            allMessages.push(entry);
                         }
                     }
                 }
@@ -1361,27 +1398,35 @@ self.onmessage = function(e) {
             const allItems = [];
             for (const inst of job.instances) {
                 if (inst.crashSignature) {
-                    allItems.push(`<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>`);
+                    allItems.push({ html: `<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>` });
                 }
                 if (inst.allMessages && inst.allMessages.length > 0) {
                     for (const msg of inst.allMessages) {
-                        allItems.push(escapeHtml(msg.message));
+                        allItems.push({ html: escapeHtml(msg.message), stack: msg.stack });
                     }
                 } else if (inst.message) {
-                    allItems.push(escapeHtml(inst.message));
+                    allItems.push({ html: escapeHtml(inst.message) });
                 }
+            }
+
+            function renderItem(item) {
+                let li = item.html;
+                if (item.stack) {
+                    li += `<pre class="assertion-stack">${escapeHtml(item.stack)}</pre>`;
+                }
+                return li;
             }
 
             const MAX_VISIBLE = 10;
             html += '<ul class="assertion-list">';
             for (let i = 0; i < Math.min(allItems.length, MAX_VISIBLE); i++) {
-                html += `<li>${allItems[i]}</li>`;
+                html += `<li>${renderItem(allItems[i])}</li>`;
             }
             if (allItems.length > MAX_VISIBLE) {
                 const hiddenId = `hidden-${job.taskId}-${job.retryId}`;
                 const remaining = allItems.length - MAX_VISIBLE;
                 for (let i = MAX_VISIBLE; i < allItems.length; i++) {
-                    html += `<li class="assertion-hidden" data-group="${hiddenId}" style="display:none">${allItems[i]}</li>`;
+                    html += `<li class="assertion-hidden" data-group="${hiddenId}" style="display:none">${renderItem(allItems[i])}</li>`;
                 }
                 html += `</ul><a class="show-more-link" onclick="toggleAssertions(this, '${hiddenId}')">show ${remaining} more</a>`;
             } else {
