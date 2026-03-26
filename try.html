@@ -862,7 +862,8 @@ self.onmessage = function(e) {
     const workerBlob = new Blob([WORKER_CODE], { type: 'application/javascript' });
     const workerUrl = URL.createObjectURL(workerBlob);
 
-    const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 32);
+    // Cap at 8 to avoid lock contention on the memory allocator.
+    const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
     const MAX_CONCURRENT_FETCHES = 64;
 
     // Process all jobs: fetch profiles on main thread with high concurrency,
@@ -930,8 +931,8 @@ self.onmessage = function(e) {
                     const job = queue.shift();
                     const id = nextId++;
                     inFlight++;
-                    const url = TC_BASE + '/api/queue/v1/task/' + job.taskId + '/runs/' + job.retryId +
-                                '/artifacts/public/test_info/profile_resource-usage.json';
+                    const url = 'https://firefoxci.taskcluster-artifacts.net/' + job.taskId + '/' + job.retryId +
+                                '/public/test_info/profile_resource-usage.json';
                     fetch(url).then(resp => {
                         if (!resp.ok) return null;
                         return resp.arrayBuffer();
