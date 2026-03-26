@@ -147,12 +147,23 @@
   align-items: center;
   gap: 6px;
 }
-.track-canvas {
-  display: block;
+.track-canvas-wrap {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   width: 0;
   min-width: 0;
+}
+.track-canvas {
+  display: block;
+  width: 100%;
   height: 36px;
+  cursor: crosshair;
+}
+.closure-canvas {
+  display: block;
+  width: 100%;
+  height: 14px;
   cursor: crosshair;
 }
 .track-tooltip {
@@ -612,6 +623,18 @@ function generateProfile(tasks, threadName, timeSeries) {
         { key: 'nonExpired', color: 'grey', type: 'bar' },
         { key: 'running', color: 'blue', type: 'bar' },
       ]
+    },
+    {
+      name: 'TreeClosure',
+      tooltipLabel: 'Tree closed',
+      chartLabel: '{marker.data.reason}',
+      tableLabel: 'Tree closed \u2014 {marker.data.reason}',
+      display: ['marker-chart', 'marker-table', 'timeline-overview'],
+      fields: [
+        { key: 'reason', label: 'Reason', format: 'string' },
+        { key: 'who', label: 'Who', format: 'string' },
+        { key: 'duration', label: 'Duration', format: 'duration' },
+      ]
     }
   ];
 
@@ -635,6 +658,26 @@ function generateProfile(tasks, threadName, timeSeries) {
       const queued = m.total - m.running;
       markers.data.push({ type: 'TaskCount', total: m.total, running: m.running, queued, expired: m.expired, nonExpired: m.total - m.expired });
       markers.length++;
+    }
+
+    // TreeClosure markers
+    if (treeClosures.length) {
+      const closureNameIdx = getStringIndex('Closed tree');
+      for (const c of treeClosures) {
+        if (c.end < earliestTime || c.start > latestTime) continue;
+        markers.name.push(closureNameIdx);
+        markers.startTime.push(Math.max(0, c.start - earliestTime));
+        markers.endTime.push(Math.min(latestTime - earliestTime, c.end - earliestTime));
+        markers.phase.push(1);
+        markers.category.push(0);
+        markers.data.push({
+          type: 'TreeClosure',
+          reason: c.reason || '(no reason)',
+          who: c.who,
+          duration: c.end - c.start,
+        });
+        markers.length++;
+      }
     }
 
     // Task markers — skip tasks entirely outside the 24h window
@@ -805,6 +848,7 @@ let currentSort = { key: 'totalJobs', desc: true };
 let currentProject = ''; // '' = all projects
 let allParsedRows = null; // all rows after timestamp parsing
 let globalTimeStart = 0, globalTimeEnd = 0;
+let treeClosures = []; // [{start, end, reason, who}]
 let renderContext = null; // { allPool, pools, globalStart, globalEnd }
 let availableDates = [];
 let currentDate = '';
@@ -928,7 +972,16 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
       btn.disabled = false;
     }
   };
-  container.appendChild(canvas);
+  let closureCanvas = null;
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'track-canvas-wrap';
+  if (isAllTasks && treeClosures.length) {
+    closureCanvas = document.createElement('canvas');
+    closureCanvas.className = 'closure-canvas';
+    canvasWrap.appendChild(closureCanvas);
+  }
+  canvasWrap.appendChild(canvas);
+  container.appendChild(canvasWrap);
   container.appendChild(tooltip);
   container.appendChild(btn);
   trackTd.appendChild(container);
@@ -936,7 +989,7 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
   tbody.appendChild(tr);
 
-  const row = { tr, pool, name: pool.name.toLowerCase(), isAllTasks, canvas, tooltip, statCells, globalStart, globalEnd, materialized: false };
+  const row = { tr, pool, name: pool.name.toLowerCase(), isAllTasks, canvas, closureCanvas, tooltip, statCells, globalStart, globalEnd, materialized: false };
   allRows.push(row);
   return row;
 }
@@ -969,6 +1022,32 @@ function materializeRow(row, trackW, trackH) {
 
   const timeSeries = pool.timeSeries;
   drawTrack(canvas, timeSeries, globalStart, globalEnd, trackW, trackH);
+
+  if (row.closureCanvas) {
+    drawClosures(row.closureCanvas, globalStart, globalEnd, trackW);
+
+    row.closureCanvas.addEventListener('mousemove', (e) => {
+      const rect = row.closureCanvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const frac = x / rect.width;
+      const time = globalStart + frac * (globalEnd - globalStart);
+
+      const closure = treeClosures.find(c => time >= c.start && time <= c.end);
+      if (closure) {
+        const dur = formatDuration(closure.end - closure.start);
+        tooltip.textContent = 'Tree closed: ' + (closure.reason || '(no reason)') + ' \u2014 ' + closure.who + ' \u2014 ' + dur;
+        tooltip.style.display = 'block';
+        tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
+      } else {
+        tooltip.style.display = 'none';
+      }
+      drawClosures(row.closureCanvas, globalStart, globalEnd, trackW, closure);
+    });
+    row.closureCanvas.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+      drawClosures(row.closureCanvas, globalStart, globalEnd, trackW, null);
+    });
+  }
 
   canvas.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
@@ -1274,6 +1353,79 @@ function setupControls() {
   updateSortIndicators();
 }
 
+// ==================== Tree Status ====================
+
+async function fetchTreeStatus() {
+  try {
+    const response = await fetch('https://treestatus.prod.lando.prod.cloudops.mozgcp.net/trees/firefox-autoland/logs_all');
+    if (!response.ok) return [];
+    const json = await response.json();
+    const logs = json.result || json;
+
+    // Logs are newest-first; walk backwards for chronological order.
+    const closures = [];
+    let closureStart = null, closureReason = '', closureWho = '';
+
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const entry = logs[i];
+      if (entry.status === 'closed' && closureStart === null) {
+        closureStart = new Date(entry.when).getTime();
+        closureReason = entry.reason || '';
+        closureWho = (entry.who || '').replace(/^ad\|Mozilla-LDAP\|/, '');
+      } else if (entry.status !== 'closed' && closureStart !== null) {
+        closures.push({
+          start: closureStart,
+          end: new Date(entry.when).getTime(),
+          reason: closureReason,
+          who: closureWho,
+        });
+        closureStart = null;
+      }
+    }
+    // If tree is currently closed
+    if (closureStart !== null) {
+      closures.push({
+        start: closureStart,
+        end: Date.now(),
+        reason: closureReason,
+        who: closureWho,
+      });
+    }
+
+    return closures;
+  } catch (e) {
+    console.warn('Failed to fetch tree status:', e);
+    return [];
+  }
+}
+
+function drawClosures(canvas, globalStart, globalEnd, cssW, highlightClosure) {
+  const cssH = 14;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const duration = globalEnd - globalStart;
+  if (duration <= 0) return;
+
+  ctx.fillStyle = '#f8f9fa';
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  for (const c of treeClosures) {
+    if (c.end < globalStart || c.start > globalEnd) continue;
+    ctx.fillStyle = c === highlightClosure ? 'rgba(220, 0, 0, 0.6)' : 'rgba(220, 0, 0, 0.3)';
+    const startX = Math.max(0, ((c.start - globalStart) / duration) * cssW);
+    const endX = Math.min(cssW, ((c.end - globalStart) / duration) * cssW);
+    if (endX > startX) ctx.fillRect(startX, 0, endX - startX, cssH);
+  }
+
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(0, 0, cssW, cssH);
+}
+
 // ==================== Main ====================
 
 function processData(rows, dayStartMs) {
@@ -1336,6 +1488,7 @@ async function main() {
     document.getElementById('summary-date').textContent =
       formatDateUTC(Date.parse(guessDate + 'T00:00:00Z'));
     const speculativeFetch = fetchFromCI('worker-data', 'workers-' + guessDate + '.json');
+    const treeStatusPromise = fetchTreeStatus();
 
     loadingEl.textContent = 'Fetching worker data...';
     const indexResponse = await fetchFromCI('worker-data', 'index.json');
@@ -1357,6 +1510,7 @@ async function main() {
     if (!summaryResponse.ok) throw new Error('Failed to fetch data: HTTP ' + summaryResponse.status);
     const summaryData = await summaryResponse.json();
     const rows = decodeSummaryData(summaryData);
+    treeClosures = await treeStatusPromise;
 
     const dayStartMs = Date.parse(date + 'T00:00:00Z');
     processData(rows, dayStartMs);
