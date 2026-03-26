@@ -537,9 +537,43 @@
             filterManifests();
         }
 
+        let pushStateTimer = null;
+        let lastCommittedUrl = location.href;
+        function syncFiltersToUrl() {
+            const url = new URL(location);
+            const manifestSearch = document.getElementById('manifestSearch').value;
+            const jobSearch = document.getElementById('jobSearch').value;
+
+            if (manifestSearch) {
+                url.searchParams.set('q', manifestSearch);
+            } else {
+                url.searchParams.delete('q');
+            }
+            if (jobSearch) {
+                url.searchParams.set('job', jobSearch);
+            } else {
+                url.searchParams.delete('job');
+            }
+            const newUrl = url.href;
+            if (!pushStateTimer) {
+                // First change since last commit: push so the previous state is preserved
+                history.pushState(null, '', newUrl);
+            } else {
+                // Still typing: replace the entry we already pushed
+                clearTimeout(pushStateTimer);
+                history.replaceState(null, '', newUrl);
+            }
+            pushStateTimer = setTimeout(() => {
+                lastCommittedUrl = location.href;
+                pushStateTimer = null;
+            }, 500);
+        }
+
         function filterManifests() {
             const manifestSearch = document.getElementById('manifestSearch').value.toLowerCase();
             const jobSearch = document.getElementById('jobSearch').value.toLowerCase();
+
+            syncFiltersToUrl();
 
             filteredData = manifestData.processedData.filter(item => {
                 const manifestMatch = item.manifest.toLowerCase().includes(manifestSearch);
@@ -824,9 +858,21 @@
                 document.getElementById('statRuns').textContent = data.runs.durations.length.toLocaleString();
                 document.getElementById('statDate').textContent = data.metadata.date || 'Unknown';
 
+                // Initialize filters from URL parameters
+                const params = new URLSearchParams(window.location.search);
+                const initialQ = params.get('q');
+                const initialJob = params.get('job');
+                if (initialQ) {
+                    document.getElementById('manifestSearch').value = initialQ;
+                }
+                if (initialJob) {
+                    document.getElementById('jobSearch').value = initialJob;
+                }
+                updateClearButtons();
+
                 filteredData = manifestData.processedData;
                 currentPage = 1;
-                sortBy(currentSortColumn);
+                filterManifests();
                 updateSortIndicators();
 
                 document.getElementById('loadingMessage').style.display = 'none';
@@ -838,6 +884,25 @@
                 document.getElementById('loadingMessage').style.display = 'none';
             }
         }
+
+        window.addEventListener('popstate', () => {
+            if (!manifestData) return;
+            const params = new URLSearchParams(window.location.search);
+            document.getElementById('manifestSearch').value = params.get('q') || '';
+            document.getElementById('jobSearch').value = params.get('job') || '';
+            updateClearButtons();
+            lastCommittedUrl = location.href;
+            // Apply filters without pushing new history
+            const manifestSearch = document.getElementById('manifestSearch').value.toLowerCase();
+            const jobSearch = document.getElementById('jobSearch').value.toLowerCase();
+            filteredData = manifestData.processedData.filter(item => {
+                const manifestMatch = item.manifest.toLowerCase().includes(manifestSearch);
+                const jobMatch = jobSearch === '' || item.jobStats.some(js => js.jobName.toLowerCase().includes(jobSearch));
+                return manifestMatch && jobMatch;
+            });
+            sortBy(currentSortColumn);
+            currentPage = 1;
+        });
 
         setupWindowResize();
         loadData();
