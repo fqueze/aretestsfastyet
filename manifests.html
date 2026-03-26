@@ -201,6 +201,11 @@
             font-weight: 500;
         }
 
+        .skip-label {
+            color: #999;
+            font-style: italic;
+        }
+
         .job-expand-icon {
             display: inline-block;
             width: 0;
@@ -406,37 +411,57 @@
 
                 for (const [jobName, runs] of jobMap.entries()) {
                     const durations = runs.map(r => r.duration);
-                    durations.sort((a, b) => a - b);
-                    const median = durations[Math.floor(durations.length / 2)];
-                    const mean = durations.reduce((sum, val) => sum + val, 0) / durations.length;
+                    // If all durations are 0, this manifest was skipped on this job
+                    const skipped = durations.every(d => d === 0);
 
-                    jobStats.push({
-                        jobName: jobName,
-                        runs: runs,
-                        runCount: runs.length,
-                        median: median,
-                        mean: mean
-                    });
+                    if (skipped) {
+                        jobStats.push({
+                            jobName: jobName,
+                            runs: runs,
+                            runCount: runs.length,
+                            median: 0,
+                            mean: 0,
+                            skipped: true
+                        });
+                    } else {
+                        durations.sort((a, b) => a - b);
+                        const median = durations[Math.floor(durations.length / 2)];
+                        const mean = durations.reduce((sum, val) => sum + val, 0) / durations.length;
 
-                    totalRuns += runs.length;
-                    allRuntimes.push(...durations);
+                        jobStats.push({
+                            jobName: jobName,
+                            runs: runs,
+                            runCount: runs.length,
+                            median: median,
+                            mean: mean,
+                            skipped: false
+                        });
+
+                        totalRuns += runs.length;
+                        allRuntimes.push(...durations);
+                    }
                 }
 
-                // Sort jobs by median runtime (descending)
-                jobStats.sort((a, b) => b.median - a.median);
+                // Sort jobs: non-skipped by median descending, then skipped at the end
+                jobStats.sort((a, b) => {
+                    if (a.skipped !== b.skipped) return a.skipped ? 1 : -1;
+                    return b.median - a.median;
+                });
 
-                // Calculate overall stats
+                // Calculate overall stats (excluding skipped jobs)
+                const allSkipped = allRuntimes.length === 0;
                 allRuntimes.sort((a, b) => a - b);
-                const overallMedian = allRuntimes[Math.floor(allRuntimes.length / 2)];
-                const overallMean = allRuntimes.reduce((sum, val) => sum + val, 0) / allRuntimes.length;
+                const overallMedian = allSkipped ? 0 : allRuntimes[Math.floor(allRuntimes.length / 2)];
+                const overallMean = allSkipped ? 0 : allRuntimes.reduce((sum, val) => sum + val, 0) / allRuntimes.length;
 
                 result.push({
                     manifest: manifestName,
                     jobStats: jobStats,
-                    totalJobs: jobStats.length,
+                    totalJobs: jobStats.filter(j => !j.skipped).length,
                     totalRuns: totalRuns,
                     overallMedian: overallMedian,
-                    overallMean: overallMean
+                    overallMean: overallMean,
+                    allSkipped: allSkipped
                 });
             }
 
@@ -639,11 +664,15 @@
                 row.appendChild(runsCell);
 
                 const medianCell = document.createElement('td');
-                medianCell.innerHTML = `<span class="time-value">${formatDuration(item.overallMedian)}</span>`;
+                medianCell.innerHTML = item.allSkipped
+                    ? `<span class="time-value skip-label">SKIP</span>`
+                    : `<span class="time-value">${formatDuration(item.overallMedian)}</span>`;
                 row.appendChild(medianCell);
 
                 const meanCell = document.createElement('td');
-                meanCell.innerHTML = `<span class="time-value">${formatDuration(item.overallMean)}</span>`;
+                meanCell.innerHTML = item.allSkipped
+                    ? `<span class="time-value skip-label">SKIP</span>`
+                    : `<span class="time-value">${formatDuration(item.overallMean)}</span>`;
                 row.appendChild(meanCell);
 
                 tbody.appendChild(row);
@@ -686,11 +715,15 @@
                         jobRow.appendChild(jobRunsCell);
 
                         const jobMedianCell = document.createElement('td');
-                        jobMedianCell.innerHTML = `<span class="time-value">${formatDuration(jobStat.median)}</span>`;
+                        jobMedianCell.innerHTML = jobStat.skipped
+                            ? `<span class="time-value skip-label">SKIP</span>`
+                            : `<span class="time-value">${formatDuration(jobStat.median)}</span>`;
                         jobRow.appendChild(jobMedianCell);
 
                         const jobMeanCell = document.createElement('td');
-                        jobMeanCell.innerHTML = `<span class="time-value">${formatDuration(jobStat.mean)}</span>`;
+                        jobMeanCell.innerHTML = jobStat.skipped
+                            ? `<span class="time-value skip-label">SKIP</span>`
+                            : `<span class="time-value">${formatDuration(jobStat.mean)}</span>`;
                         jobRow.appendChild(jobMeanCell);
 
                         tbody.appendChild(jobRow);
