@@ -153,6 +153,17 @@
   flex: 1;
   width: 0;
   min-width: 0;
+  position: relative;
+}
+.track-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0,0,0,.4);
+  pointer-events: none;
+  display: none;
+  z-index: 5;
 }
 .track-canvas {
   display: block;
@@ -981,6 +992,9 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
     canvasWrap.appendChild(closureCanvas);
   }
   canvasWrap.appendChild(canvas);
+  const cursor = document.createElement('div');
+  cursor.className = 'track-cursor';
+  canvasWrap.appendChild(cursor);
   container.appendChild(canvasWrap);
   container.appendChild(tooltip);
   container.appendChild(btn);
@@ -989,9 +1003,24 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
 
   tbody.appendChild(tr);
 
-  const row = { tr, pool, name: pool.name.toLowerCase(), isAllTasks, canvas, closureCanvas, tooltip, statCells, globalStart, globalEnd, materialized: false };
+  const row = { tr, pool, name: pool.name.toLowerCase(), isAllTasks, canvas, closureCanvas, cursor, tooltip, statCells, globalStart, globalEnd, materialized: false };
   allRows.push(row);
   return row;
+}
+
+function showCursorAll(frac) {
+  const px = (frac * 100).toFixed(3) + '%';
+  for (const row of allRows) {
+    if (row.tr.style.display === 'none') continue;
+    row.cursor.style.left = px;
+    row.cursor.style.display = 'block';
+  }
+}
+
+function hideCursorAll() {
+  for (const row of allRows) {
+    row.cursor.style.display = 'none';
+  }
 }
 
 function redrawRow(row, trackW, trackH) {
@@ -1049,11 +1078,13 @@ function materializeRow(row, trackW, trackH) {
       }
       const w = row.closureCanvas.clientWidth;
       drawClosures(row.closureCanvas, globalStart, globalEnd, w, closure);
+      showCursorAll(frac);
     });
     row.closureCanvas.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
       const w = row.closureCanvas.clientWidth;
       drawClosures(row.closureCanvas, globalStart, globalEnd, w, null);
+      hideCursorAll();
     });
   }
 
@@ -1085,10 +1116,12 @@ function materializeRow(row, trackW, trackH) {
     tooltip.textContent = tip;
     tooltip.style.display = 'block';
     tooltip.style.left = Math.min(x, rect.width - 200) + 'px';
+    showCursorAll(frac);
   });
 
   canvas.addEventListener('mouseleave', () => {
     tooltip.style.display = 'none';
+    hideCursorAll();
   });
 }
 
