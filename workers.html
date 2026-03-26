@@ -994,6 +994,14 @@ function renderRow(tbody, pool, globalStart, globalEnd, isAllTasks) {
   return row;
 }
 
+function redrawRow(row, trackW, trackH) {
+  const { pool, canvas, globalStart, globalEnd } = row;
+  drawTrack(canvas, pool.timeSeries, globalStart, globalEnd, trackW, trackH);
+  if (row.closureCanvas) {
+    drawClosures(row.closureCanvas, globalStart, globalEnd, trackW);
+  }
+}
+
 function materializeRow(row, trackW, trackH) {
   if (row.materialized) return;
   row.materialized = true;
@@ -1021,11 +1029,9 @@ function materializeRow(row, trackW, trackH) {
   }
 
   const timeSeries = pool.timeSeries;
-  drawTrack(canvas, timeSeries, globalStart, globalEnd, trackW, trackH);
+  redrawRow(row, trackW, trackH);
 
   if (row.closureCanvas) {
-    drawClosures(row.closureCanvas, globalStart, globalEnd, trackW);
-
     row.closureCanvas.addEventListener('mousemove', (e) => {
       const rect = row.closureCanvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -1041,11 +1047,13 @@ function materializeRow(row, trackW, trackH) {
       } else {
         tooltip.style.display = 'none';
       }
-      drawClosures(row.closureCanvas, globalStart, globalEnd, trackW, closure);
+      const w = row.closureCanvas.clientWidth;
+      drawClosures(row.closureCanvas, globalStart, globalEnd, w, closure);
     });
     row.closureCanvas.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
-      drawClosures(row.closureCanvas, globalStart, globalEnd, trackW, null);
+      const w = row.closureCanvas.clientWidth;
+      drawClosures(row.closureCanvas, globalStart, globalEnd, w, null);
     });
   }
 
@@ -1153,6 +1161,22 @@ function observeRows() {
     }
   }
 }
+
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!allRows.length) return;
+    const firstCanvas = allRows[0].canvas;
+    const trackW = firstCanvas ? firstCanvas.clientWidth : 400;
+    const trackH = firstCanvas ? firstCanvas.clientHeight : 36;
+    for (const row of allRows) {
+      if (row.materialized && row.tr.style.display !== 'none') {
+        redrawRow(row, trackW, trackH);
+      }
+    }
+  }, 150);
+});
 
 function renderAllRows() {
   const { allPool, pools, globalStart, globalEnd } = renderContext;
