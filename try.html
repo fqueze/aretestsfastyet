@@ -1298,7 +1298,7 @@ self.onmessage = function(e) {
         html += `<th class="no-sort" style="width: 55px">Build</th>`;
         html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
         const hasRepro = reproState.size > 0;
-        html += `<th class="no-sort" style="width: ${hasRepro ? 38 : 20}px"></th>`;
+        html += `<th class="no-sort" style="width: ${hasRepro || isLocal ? 38 : 20}px"></th>`;
         html += '</tr></thead><tbody>';
 
         for (const test of tests) {
