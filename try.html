@@ -1575,6 +1575,31 @@ self.onmessage = function(e) {
 
         let html = `<tr class="detail-row visible" id="${escapeAttr(rowId)}">`;
         html += `<td colspan="${cols}">`;
+
+        // Show past attempts (not reproduced on earlier configs)
+        if (rs.pastAttempts && rs.pastAttempts.length > 0) {
+            for (const past of rs.pastAttempts) {
+                let pastMeta = `Config: ${past.config}`;
+                if (past.duration != null) pastMeta += ` &middot; ${past.duration}s`;
+                if (past.summary) pastMeta += ` &middot; ${escapeHtml(past.summary)}`;
+                html += '<div class="repro-detail not-reproduced" style="margin-bottom: 4px">';
+                html += '<div class="repro-detail-header"><span class="repro-icon repro-not-reproduced">&#x2717;</span> Not reproduced</div>';
+                html += `<div class="repro-detail-meta">${pastMeta}</div>`;
+                if (past.runId) {
+                    const pastLogUrl = `http://localhost:3000/api/runs/${encodeURIComponent(past.runId)}/log?format=text`;
+                    const pastProfileUrl = `http://localhost:3000/api/runs/${encodeURIComponent(past.runId)}/profile`;
+                    const pastProfileName = encodeURIComponent(`mach test ${rs.testPath || ''} (${past.config || 'unknown'})`);
+                    const pastProfilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(pastProfileUrl)}?profileName=${pastProfileName}`;
+                    html += '<div class="repro-links">';
+                    html += `<a href="${pastLogUrl}" target="_blank">View log</a>`;
+                    html += `<a href="${pastProfilerUrl}" target="_blank">Profile</a>`;
+                    html += '</div>';
+                    html += `<div class="repro-log-viewer" id="repro-log-${escapeAttr(past.runId)}"></div>`;
+                }
+                html += '</div>';
+            }
+        }
+
         html += `<div class="repro-detail ${cls}">`;
         html += `<div class="repro-detail-header"><span class="repro-icon repro-${cls}">${icon}</span> ${escapeHtml(label)}</div>`;
 
@@ -1738,7 +1763,7 @@ Error: ${msg}`;
     let reproState = new Map();
     let reproWs = null;
     let reproRunning = false;
-    let reproConfigs = null; // array of { name } from server
+    let reproConfigs = null; // array of { name, local? } from server
     let reproHistoryFetched = false;
     let reproPendingCount = 0;
 
@@ -1762,7 +1787,7 @@ Error: ${msg}`;
         const platConfigs = configs.filter(c => c.name.includes(platKey));
         if (platConfigs.length === 0) return null;
 
-        // Try to match build type (prefer faster builds: opt first, then debug, then sanitizers)
+        // Only match build types the failure actually occurred on
         const buildPriority = ['opt', 'debug', 'ccov', 'asan', 'tsan'];
         for (const bt of buildPriority) {
             if (!buildTypes.includes(bt)) continue;
@@ -1770,14 +1795,13 @@ Error: ${msg}`;
             if (match) return match.name;
         }
 
-        // Fallback: just return the first platform-matching config
-        return platConfigs[0].name;
+        return null;
     }
 
-    // For a test entry, find the best config to try reproduction.
-    // Prefers faster builds (opt before debug before sanitizers).
-    function findBestConfigForTest(test) {
-        if (!reproConfigs) return null;
+    // For a test entry, find all matching configs to try reproduction, in priority order.
+    // Prefers local configs over peers, and faster builds within each tier.
+    function findMatchingConfigsForTest(test) {
+        if (!reproConfigs) return [];
 
         // Collect unique platform+build combos, sorted by build speed
         const combos = [];
@@ -1799,11 +1823,22 @@ Error: ${msg}`;
             return aSpeed - bSpeed;
         });
 
-        for (const { platform, builds } of combos) {
-            const config = findMatchingConfig(platform, builds, reproConfigs);
-            if (config) return config;
+        // Try local configs first, then peers
+        const result = [];
+        const added = new Set();
+        const localConfigs = reproConfigs.filter(c => c.local);
+        const peerConfigs = reproConfigs.filter(c => !c.local);
+        for (const configs of [localConfigs, peerConfigs]) {
+            if (configs.length === 0) continue;
+            for (const { platform, builds } of combos) {
+                const config = findMatchingConfig(platform, builds, configs);
+                if (config && !added.has(config)) {
+                    added.add(config);
+                    result.push(config);
+                }
+            }
         }
-        return null;
+        return result;
     }
 
     function updateReproduceButton() {
@@ -1908,6 +1943,7 @@ Error: ${msg}`;
             updateReproIcon(testPath);
         } else if (msg.type === 'run_completed') {
             const testPath = requestIdToTest.get(msg.request_id);
+            const prevConfig = msg.config || requestIdToConfig.get(msg.request_id);
             if (testPath && reproState.has(testPath)) {
                 const s = reproState.get(testPath);
                 s.state = msg.reproduced ? 'reproduced' : 'not_reproduced';
@@ -1916,13 +1952,41 @@ Error: ${msg}`;
                 s.exitCode = msg.exit_code;
                 s.status = msg.status;
 
-                // If not reproduced, verify the test actually ran by checking the log
+                // If not reproduced and there are remaining configs to try, queue the next one
+                if (!msg.reproduced && s.remainingConfigs && s.remainingConfigs.length > 0) {
+                    // Save the completed attempt
+                    if (!s.pastAttempts) s.pastAttempts = [];
+                    s.pastAttempts.push({
+                        config: s.config, runId: s.runId, summary: s.summary,
+                        duration: s.duration, exitCode: s.exitCode, status: s.status,
+                    });
+                    const nextConfig = s.remainingConfigs.shift();
+                    s.state = 'queued';
+                    s.config = nextConfig;
+                    s.runId = null;
+                    s.summary = null;
+                    s.duration = null;
+                    s.exitCode = null;
+                    // reproPendingCount stays the same (not decremented, not re-incremented)
+                    if (!configQueues.has(nextConfig)) configQueues.set(nextConfig, []);
+                    const queue = configQueues.get(nextConfig);
+                    queue.push({ testPath, config: nextConfig });
+                    if (queue.length === 1) {
+                        sendRunRequest(queue.shift());
+                    }
+                    sendNextForConfig(prevConfig);
+                    updateReproduceButton();
+                    updateReproIcon(testPath);
+                    return;
+                }
+
+                // If not reproduced (no more configs to try), verify the test actually ran
                 if (!msg.reproduced && s.runId) {
                     verifyTestRan(s.runId, testPath);
                 }
             }
             reproPendingCount--;
-            sendNextForConfig(msg.config || requestIdToConfig.get(msg.request_id));
+            sendNextForConfig(prevConfig);
             updateReproduceButton();
             checkReproComplete();
             updateReproIcon(testPath);
@@ -1960,19 +2024,34 @@ Error: ${msg}`;
 
         // Build per-config queues
         for (const test of getFilteredTests()) {
-            // Skip tests that already have a cached result
+            // Skip tests that already have a final cached result
             const existing = reproState.get(test.path);
             if (existing && existing.cached && (existing.state === 'reproduced' || existing.state === 'not_reproduced')) {
                 continue;
             }
-
-            const config = findBestConfigForTest(test);
-            if (!config) {
-                reproState.set(test.path, { state: 'no_match', config: null, testPath: test.path });
+            // Skip tests already reproduced from a past attempt's retry
+            if (existing && existing.state === 'reproduced') {
                 continue;
             }
 
-            reproState.set(test.path, { state: 'queued', config, testPath: test.path });
+            // If we have a pending entry with past attempts (from cached history), use its state
+            let config, remainingConfigs, pastAttempts;
+            if (existing && existing.state === 'pending' && existing.pastAttempts) {
+                config = existing.config;
+                remainingConfigs = existing.remainingConfigs || [];
+                pastAttempts = existing.pastAttempts;
+            } else {
+                const configs = findMatchingConfigsForTest(test);
+                if (configs.length === 0) {
+                    reproState.set(test.path, { state: 'no_match', config: null, testPath: test.path });
+                    continue;
+                }
+                config = configs[0];
+                remainingConfigs = configs.slice(1);
+                pastAttempts = undefined;
+            }
+
+            reproState.set(test.path, { state: 'queued', config, testPath: test.path, remainingConfigs, pastAttempts });
             reproPendingCount++;
 
             if (!configQueues.has(config)) configQueues.set(config, []);
@@ -2000,11 +2079,11 @@ Error: ${msg}`;
         for (const test of getFilteredTests()) {
             const existing = reproState.get(test.path);
             if (existing && existing.state !== 'no_match') continue;
-            const config = findBestConfigForTest(test);
-            if (!config) {
+            const configs = findMatchingConfigsForTest(test);
+            if (configs.length === 0) {
                 reproState.set(test.path, { state: 'no_match', config: null, testPath: test.path });
             } else {
-                reproState.set(test.path, { state: 'pending', config, testPath: test.path });
+                reproState.set(test.path, { state: 'pending', config: configs[0], testPath: test.path, remainingConfigs: configs.slice(1) });
             }
             updateReproIcon(test.path);
         }
@@ -2015,10 +2094,11 @@ Error: ${msg}`;
             const existing = reproState.get(test.path);
             if (!existing || existing.state !== 'no_match') continue;
 
-            const config = findBestConfigForTest(test);
-            if (!config) continue;
+            const configs = findMatchingConfigsForTest(test);
+            if (configs.length === 0) continue;
 
-            reproState.set(test.path, { state: 'queued', config, testPath: test.path });
+            const config = configs[0];
+            reproState.set(test.path, { state: 'queued', config, testPath: test.path, remainingConfigs: configs.slice(1) });
             reproPendingCount++;
 
             if (!configQueues.has(config)) configQueues.set(config, []);
@@ -2112,17 +2192,35 @@ Error: ${msg}`;
                 if (reproState.has(test.path)) continue; // don't overwrite live repro
                 const run = bestByTest.get(test.path);
                 if (!run) continue;
-                reproState.set(test.path, {
-                    state: run.reproduced ? 'reproduced' : 'not_reproduced',
-                    config: run.config,
-                    testPath: test.path,
-                    runId: run.run_id,
-                    summary: null,
-                    duration: run.duration_seconds,
-                    exitCode: run.exit_code,
-                    status: run.status,
-                    cached: true,
-                });
+
+                if (run.reproduced) {
+                    reproState.set(test.path, {
+                        state: 'reproduced', config: run.config, testPath: test.path,
+                        runId: run.run_id, summary: null, duration: run.duration_seconds,
+                        exitCode: run.exit_code, status: run.status, cached: true,
+                    });
+                } else {
+                    // Check if there are other configs to try beyond the cached one
+                    const allConfigs = findMatchingConfigsForTest(test);
+                    const remaining = allConfigs.filter(c => c !== run.config);
+                    if (remaining.length === 0) {
+                        reproState.set(test.path, {
+                            state: 'not_reproduced', config: run.config, testPath: test.path,
+                            runId: run.run_id, summary: null, duration: run.duration_seconds,
+                            exitCode: run.exit_code, status: run.status, cached: true,
+                        });
+                    } else {
+                        // Show the cached attempt as a past attempt, mark as pending for retry
+                        reproState.set(test.path, {
+                            state: 'pending', config: remaining[0], testPath: test.path,
+                            remainingConfigs: remaining.slice(1),
+                            pastAttempts: [{
+                                config: run.config, runId: run.run_id, summary: null,
+                                duration: run.duration_seconds, exitCode: run.exit_code, status: run.status,
+                            }],
+                        });
+                    }
+                }
             }
 
             updateResetButton();
@@ -2183,12 +2281,24 @@ Error: ${msg}`;
 
         const cached = s.cached ? ' (cached)' : '';
         switch (s.state) {
-            case 'pending':
-                return `<span class="repro-icon repro-pending-idle" title="Can reproduce on ${escapeAttr(s.config)}">?</span>`;
-            case 'queued':
-                return '<span class="repro-icon repro-pending" title="Queued for reproduction">&#x23F3;</span>';
-            case 'running':
-                return '<span class="repro-icon repro-pending" title="Reproducing...">&#x23F3;</span>';
+            case 'pending': {
+                let title = `Can reproduce on ${s.config}`;
+                if (s.remainingConfigs && s.remainingConfigs.length > 0)
+                    title += `\nThen: ${s.remainingConfigs.join(', ')}`;
+                return `<span class="repro-icon repro-pending-idle" title="${escapeAttr(title)}">?</span>`;
+            }
+            case 'queued': {
+                let title = `Queued: ${s.config}`;
+                if (s.remainingConfigs && s.remainingConfigs.length > 0)
+                    title += `\nThen: ${s.remainingConfigs.join(', ')}`;
+                return `<span class="repro-icon repro-pending" title="${escapeAttr(title)}">&#x23F3;</span>`;
+            }
+            case 'running': {
+                let title = `Reproducing on ${s.config}`;
+                if (s.remainingConfigs && s.remainingConfigs.length > 0)
+                    title += `\nThen: ${s.remainingConfigs.join(', ')}`;
+                return `<span class="repro-icon repro-pending" title="${escapeAttr(title)}">&#x23F3;</span>`;
+            }
             case 'reproduced':
                 return `<span class="repro-icon repro-reproduced" title="Reproduced on ${escapeAttr(s.config)}${s.summary ? '\n' + escapeAttr(s.summary) : ''}${cached}">&#x2713;</span>`;
             case 'not_reproduced':
