@@ -160,6 +160,22 @@
         .chart-container > div[id$="Chart"] {
             height: 450px;
         }
+
+        .flavor-row .harness-name {
+            padding-top: 12px;
+            padding-left: 30px;
+            font-size: 0.95rem;
+            font-weight: 400;
+            color: #666;
+        }
+
+        .flavor-row .stat-value {
+            font-size: 1.4rem;
+        }
+
+        .flavor-row td {
+            padding: 0 15px;
+        }
     </style>
 </head>
 <body>
@@ -187,6 +203,9 @@
                 </tr>
             </thead>
             <tbody id="statsSummary">
+                <!-- Placeholder rows to reserve layout height and avoid flicker
+                     before JS replaces them. Keep structure and count in sync
+                     with what updateStatsSummary() generates. -->
                 <tr data-harness="xpcshell">
                     <td class="harness-name">XPCShell</td>
                     <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
@@ -201,6 +220,14 @@
                     <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
                     <td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">0,000 / 0,000,000</div></div></td>
                 </tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
+                <tr class="flavor-row"><td class="harness-name">&nbsp;</td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td><td><div class="stat-cell"><div class="stat-value">—</div><div class="stat-secondary">&nbsp;</div></div></td></tr>
             </tbody>
         </table>
     </div>
@@ -249,6 +276,17 @@
         let mochitestStats = null;
         let currentDisplayMode = 'percentage';
 
+        const MOCHITEST_FLAVORS = [
+            { key: 'browser-chrome', name: 'Browser Chrome', color: '#c0392b' },
+            { key: 'devtools', name: 'DevTools', color: '#e67e22' },
+            { key: 'plain', name: 'Plain', color: '#27ae60' },
+            { key: 'chrome', name: 'Chrome', color: '#8e44ad' },
+            { key: 'a11y', name: 'A11y', color: '#2980b9' },
+            { key: 'media', name: 'Media', color: '#16a085' },
+            { key: 'remote', name: 'Remote', color: '#d35400' },
+            { key: 'webgl', name: 'WebGL', color: '#2c3e50' },
+        ];
+
         async function loadData() {
             try {
                 // Await the fetches started before Plotly loaded
@@ -291,15 +329,16 @@
             if (!stats) return null;
 
             const count = Math.min(days, stats.dates.length);
+            const zeros = new Array(count).fill(0);
             return {
                 dates: stats.dates.slice(-count),
                 totalTestRuns: stats.totalTestRuns.slice(-count),
                 failedTestRuns: stats.failedTestRuns.slice(-count),
                 skippedTestRuns: stats.skippedTestRuns.slice(-count),
-                processedJobCount: stats.processedJobCount.slice(-count),
-                failedJobs: stats.failedJobs.slice(-count),
-                invalidJobs: stats.invalidJobs.slice(-count),
-                ignoredJobs: stats.ignoredJobs ? stats.ignoredJobs.slice(-count) : new Array(count).fill(0)
+                processedJobCount: stats.processedJobCount ? stats.processedJobCount.slice(-count) : zeros,
+                failedJobs: stats.failedJobs ? stats.failedJobs.slice(-count) : zeros,
+                invalidJobs: stats.invalidJobs ? stats.invalidJobs.slice(-count) : zeros,
+                ignoredJobs: stats.ignoredJobs ? stats.ignoredJobs.slice(-count) : zeros
             };
         }
 
@@ -313,49 +352,38 @@
             return sum;
         }
 
-        function updateStatsSummary() {
-            const harnesses = [
-                { name: 'XPCShell', kind: 'xpcshell', stats: xpcshellStats },
-                { name: 'Mochitest', kind: 'mochitest', stats: mochitestStats }
-            ];
+        function renderSummaryRow(data, name, kind, isFlavor) {
+            const totalTests = sumArray(data.totalTestRuns);
+            const totalFailed = sumArray(data.failedTestRuns);
+            const totalSkipped = sumArray(data.skippedTestRuns);
+            const totalJobs = sumArray(data.processedJobCount);
+            const failedJobs = sumArray(data.failedJobs);
+            const invalidJobs = sumArray(data.invalidJobs || []);
+            const testFailedJobs = failedJobs - invalidJobs; // Only test-related failures
 
-            for (const harness of harnesses) {
-                const row = document.querySelector(`tr[data-harness="${harness.kind}"]`);
-                if (!row) continue;
+            const testFailRate = totalTests > 0 ? ((totalFailed / totalTests) * 100).toFixed(2) : '0.00';
+            const jobFailRate = totalJobs > 0 ? ((testFailedJobs / totalJobs) * 100).toFixed(2) : '0.00';
+            const skipRate = totalTests > 0 ? ((totalSkipped / totalTests) * 100).toFixed(2) : '0.00';
+            const invalidRate = totalJobs > 0 ? ((invalidJobs / totalJobs) * 100).toFixed(2) : '0.00';
 
-                const data = getRecentStats(harness.stats, 7);
-                if (!data) continue;
-
-                const totalTests = sumArray(data.totalTestRuns);
-                const totalFailed = sumArray(data.failedTestRuns);
-                const totalSkipped = sumArray(data.skippedTestRuns);
-                const totalJobs = sumArray(data.processedJobCount);
-                const failedJobs = sumArray(data.failedJobs);
-                const invalidJobs = sumArray(data.invalidJobs);
-                const testFailedJobs = failedJobs - invalidJobs; // Only test-related failures
-
-                const testFailRate = totalTests > 0 ? ((totalFailed / totalTests) * 100).toFixed(2) : '0.00';
-                const jobFailRate = totalJobs > 0 ? ((testFailedJobs / totalJobs) * 100).toFixed(2) : '0.00';
-                const skipRate = totalTests > 0 ? ((totalSkipped / totalTests) * 100).toFixed(2) : '0.00';
-                const invalidRate = totalJobs > 0 ? ((invalidJobs / totalJobs) * 100).toFixed(2) : '0.00';
-
-                row.innerHTML = `
-                    <td class="harness-name">${harness.name}</td>
-                    <td>
-                        <a href="issues.html?kind=${harness.kind}#date=21days" class="stat-link" title="Percentage of test runs that failed">
+            return `
+                <tr${isFlavor ? ' class="flavor-row"' : ''}>
+                    <td class="harness-name">${name}</td>
+                    <td title="Percentage of test runs that failed">
+                        ${isFlavor ? '' : `<a href="issues.html?kind=${kind}#date=21days" class="stat-link">`}
                             <div class="stat-cell">
                                 <div class="stat-value">${testFailRate}%</div>
                                 <div class="stat-secondary">${totalFailed.toLocaleString()} / ${totalTests.toLocaleString()}</div>
                             </div>
-                        </a>
+                        ${isFlavor ? '' : '</a>'}
                     </td>
-                    <td>
-                        <a href="green.html#${harness.kind}" class="stat-link" title="Percentage of jobs that failed due to test flakiness (excludes invalid jobs from infrastructure issues, and failures due to broken patches that were backed out)">
+                    <td title="Percentage of jobs that failed${isFlavor ? '' : ' due to test flakiness'}">
+                        ${isFlavor ? '' : `<a href="green.html#${kind}" class="stat-link">`}
                             <div class="stat-cell">
                                 <div class="stat-value">${jobFailRate}%</div>
                                 <div class="stat-secondary">${testFailedJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
                             </div>
-                        </a>
+                        ${isFlavor ? '' : '</a>'}
                     </td>
                     <td title="Percentage of test runs that were skipped (excludes platform-irrelevant skips like run-if)">
                         <div class="stat-cell">
@@ -363,14 +391,54 @@
                             <div class="stat-secondary">${totalSkipped.toLocaleString()} / ${totalTests.toLocaleString()}</div>
                         </div>
                     </td>
-                    <td title="Percentage of jobs that failed to produce valid results due to infrastructure issues (harness failures, timeouts, etc.)">
-                        <div class="stat-cell">
-                            <div class="stat-value">${invalidRate}%</div>
-                            <div class="stat-secondary">${invalidJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div>
-                        </div>
+                    <td title="Percentage of jobs that failed to produce valid results due to infrastructure issues">
+                        ${isFlavor
+                            ? '<div class="stat-cell"><div class="stat-value">\u2014</div></div>'
+                            : `<div class="stat-cell"><div class="stat-value">${invalidRate}%</div><div class="stat-secondary">${invalidJobs.toLocaleString()} / ${totalJobs.toLocaleString()}</div></div>`
+                        }
                     </td>
-                `;
+                </tr>`;
+        }
+
+        function updateStatsSummary() {
+            const tbody = document.getElementById('statsSummary');
+
+            let html = '';
+
+            // XPCShell row
+            if (xpcshellStats) {
+                const data = getRecentStats(xpcshellStats, 7);
+                if (data) {
+                    html += renderSummaryRow(data, 'XPCShell', 'xpcshell', false);
+                }
             }
+
+            // Mochitest aggregate row
+            if (mochitestStats) {
+                const data = getRecentStats(mochitestStats, 7);
+                if (data) {
+                    html += renderSummaryRow(data, 'Mochitest', 'mochitest', false);
+
+                    // Per-flavor sub-rows
+                    if (mochitestStats.flavors) {
+                        for (const flavor of MOCHITEST_FLAVORS) {
+                            const flavorData = mochitestStats.flavors[flavor.key];
+                            if (!flavorData) continue;
+                            const recentFlavor = getRecentStats(
+                                { dates: mochitestStats.dates, ...flavorData },
+                                7
+                            );
+                            if (recentFlavor && sumArray(recentFlavor.totalTestRuns) > 0) {
+                                html += renderSummaryRow(
+                                    recentFlavor, flavor.name, 'mochitest', true
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            tbody.innerHTML = html;
         }
 
         function createPercentageTrace(dates, numerator, denominator, name, color) {
@@ -427,6 +495,23 @@
             };
         }
 
+        function addMochitestFlavorTraces(traces, numeratorKey, denominatorKey) {
+            if (!mochitestStats?.flavors) return;
+            for (const flavor of MOCHITEST_FLAVORS) {
+                const data = mochitestStats.flavors[flavor.key];
+                if (!data || !data[denominatorKey]) continue;
+                const trace = createPercentageTrace(
+                    mochitestStats.dates, data[numeratorKey],
+                    data[denominatorKey], flavor.name, flavor.color
+                );
+                trace.line.width = 1.5;
+                trace.line.dash = 'dot';
+                trace.marker.size = 4;
+                trace.visible = 'legendonly';
+                traces.push(trace);
+            }
+        }
+
         function createTestFailureChart() {
             const traces = [];
             if (xpcshellStats) {
@@ -438,6 +523,7 @@
                 traces.push(createPercentageTrace(
                     mochitestStats.dates, mochitestStats.failedTestRuns,
                     mochitestStats.totalTestRuns, 'Mochitest', '#ff6b6b'));
+                addMochitestFlavorTraces(traces, 'failedTestRuns', 'totalTestRuns');
             }
             Plotly.newPlot('testFailureChart', traces,
                 chartLayout(currentDisplayMode === 'percentage' ? 'Failure Percentage (%)' : 'Failed Test Runs'),
@@ -451,6 +537,21 @@
                 const testFailedJobs = stats.failedJobs.map((failed, i) =>
                     (failed !== null && stats.invalidJobs[i] !== null) ? failed - stats.invalidJobs[i] : failed);
                 traces.push(createPercentageTrace(stats.dates, testFailedJobs, stats.processedJobCount, name, color));
+            }
+            if (mochitestStats?.flavors) {
+                for (const flavor of MOCHITEST_FLAVORS) {
+                    const data = mochitestStats.flavors[flavor.key];
+                    if (!data?.processedJobCount) continue;
+                    const trace = createPercentageTrace(
+                        mochitestStats.dates, data.failedJobs,
+                        data.processedJobCount, flavor.name, flavor.color
+                    );
+                    trace.line.width = 1.5;
+                    trace.line.dash = 'dot';
+                    trace.marker.size = 4;
+                    trace.visible = 'legendonly';
+                    traces.push(trace);
+                }
             }
             Plotly.newPlot('jobFailureChart', traces,
                 chartLayout(currentDisplayMode === 'percentage' ? 'Failure Percentage (%)' : 'Failed Jobs'),
@@ -468,6 +569,7 @@
                 traces.push(createPercentageTrace(
                     mochitestStats.dates, mochitestStats.skippedTestRuns,
                     mochitestStats.totalTestRuns, 'Mochitest', '#ff6b6b'));
+                addMochitestFlavorTraces(traces, 'skippedTestRuns', 'totalTestRuns');
             }
             Plotly.newPlot('skipRateChart', traces,
                 chartLayout(currentDisplayMode === 'percentage' ? 'Skip Percentage (%)' : 'Skipped Test Runs'),
