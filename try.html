@@ -28,8 +28,8 @@
         }
 
         #status {
-            margin-top: 10px;
             color: #666;
+            font-size: 13px;
         }
         #status.error-text {
             color: #c00;
@@ -37,11 +37,15 @@
 
         .progress-bar {
             background: #eee;
-            border-radius: 4px;
+            border-radius: 0 0 8px 8px;
             height: 6px;
-            margin-top: 8px;
+            margin: 0 -15px -15px;
             overflow: hidden;
-            display: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .progress-bar.visible {
+            opacity: 1;
         }
         .progress-bar .fill {
             background: #0060df;
@@ -52,6 +56,24 @@
 
         #results {
             margin-top: 20px;
+        }
+
+        .revisions-list {
+            margin: 8px 0 0;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .revisions-list .rev-hash {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+        }
+        .revisions-list .rev-comment {
+            color: #333;
+        }
+        .revisions-list .rev-author {
+            color: #888;
+            font-size: 12px;
         }
 
         .summary-cards {
@@ -530,6 +552,7 @@
                 <label for="revision-input">Try revision:</label>
                 <input type="text" id="revision-input" placeholder="Enter a try revision (40-char hex or Treeherder URL)" autofocus>
                 <button id="load-btn" onclick="loadRevision()">Load</button>
+                <span id="status"></span>
                 <span id="treeherder-link-container"></span>
                 <span id="filter-container" style="display:none; margin-left: auto;">
                     <span class="search-container">
@@ -538,7 +561,7 @@
                     </span>
                 </span>
             </div>
-            <div id="status"></div>
+            <div id="revisions-container"></div>
             <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
         </div>
 
@@ -562,9 +585,13 @@
     const BUILD_TYPE_ORDER = ['opt', 'debug', 'asan', 'tsan', 'ccov'];
 
     let currentFailures = null;
+    let currentUnblamedJobs = [];
     let currentSort = { column: 'count', ascending: false };
     let currentSearch = '';
     let expandedTests = new Set();
+    let expandedUnblamed = new Set();
+    let unblamedGroups = null; // cached after first fetch
+    let unblamedRenderedKeys = []; // keys in display order from last render
     let currentRevision = null;
 
     // ===== Treeherder API =====
@@ -577,7 +604,8 @@
         if (!data.results || data.results.length === 0) {
             throw new Error(`No push found for revision ${revision} on try`);
         }
-        return data.results[0].id;
+        const push = data.results[0];
+        return { pushId: push.id, revisions: push.revisions || [] };
     }
 
     async function fetchAllJobs(pushId) {
@@ -601,6 +629,7 @@
 
     function parseJobs(allJobs, propertyNames) {
         const idx = name => propertyNames.indexOf(name);
+        const jobIdIdx = idx('id');
         const jobTypeNameIdx = idx('job_type_name');
         const taskIdIdx = idx('task_id');
         const retryIdIdx = idx('retry_id');
@@ -609,6 +638,7 @@
 
         const jobs = [];
         for (const job of allJobs) {
+            const jobId = job[jobIdIdx];
             const jobName = job[jobTypeNameIdx];
             const taskId = job[taskIdIdx];
             const retryId = job[retryIdIdx] || 0;
@@ -617,7 +647,7 @@
 
             if (!jobName || !taskId) continue;
 
-            jobs.push({ jobName, taskId, retryId, state, result });
+            jobs.push({ jobId, jobName, taskId, retryId, state, result });
         }
         return jobs;
     }
@@ -981,9 +1011,9 @@ self.onmessage = function(e) {
         const bar = document.getElementById('progress-bar');
         const fill = document.getElementById('progress-fill');
         if (fraction < 0) {
-            bar.style.display = 'none';
+            bar.classList.remove('visible');
         } else {
-            bar.style.display = 'block';
+            bar.classList.add('visible');
             fill.style.width = Math.round(fraction * 100) + '%';
         }
     }
@@ -1018,12 +1048,18 @@ self.onmessage = function(e) {
 
         document.getElementById('load-btn').disabled = true;
         document.getElementById('results').innerHTML = '';
+        document.getElementById('treeherder-link-container').innerHTML = '';
+        document.getElementById('filter-container').style.display = 'none';
+        document.getElementById('revisions-container').innerHTML = '';
         expandedTests.clear();
+        expandedUnblamed.clear();
+        unblamedGroups = null;
 
         try {
             setStatus('Looking up push on Treeherder...');
             setProgress(-1);
-            const pushId = await fetchPushId(revision);
+            const { pushId, revisions } = await fetchPushId(revision);
+            renderRevisions(revisions);
 
             setStatus('Fetching jobs...');
             const { allJobs, propertyNames } = await fetchAllJobs(pushId);
@@ -1066,14 +1102,20 @@ self.onmessage = function(e) {
             // that specific test (failed on different tests instead).
             //
             // Build per-jobName, per-run sets of failing test paths.
+            // Seed with all failed test jobs so that runs whose profiles had no
+            // parseable test-level failures (e.g. harness crashes) still count as
+            // separate runs for intermittent detection.
             const failsByJobAndRun = new Map(); // jobName -> Map<runKey, Set<testPath>>
+            for (const job of failedTestJobs) {
+                const runKey = `${job.taskId}.${job.retryId}`;
+                if (!failsByJobAndRun.has(job.jobName)) failsByJobAndRun.set(job.jobName, new Map());
+                const runs = failsByJobAndRun.get(job.jobName);
+                if (!runs.has(runKey)) runs.set(runKey, new Set());
+            }
             for (const t of result.timings) {
                 if (!isFailureStatus(t.status)) continue;
                 const runKey = `${t.taskId}.${t.retryId}`;
-                if (!failsByJobAndRun.has(t.jobName)) failsByJobAndRun.set(t.jobName, new Map());
-                const runs = failsByJobAndRun.get(t.jobName);
-                if (!runs.has(runKey)) runs.set(runKey, new Set());
-                runs.get(runKey).add(t.path);
+                failsByJobAndRun.get(t.jobName).get(runKey).add(t.path);
             }
 
             for (const t of result.timings) {
@@ -1114,6 +1156,15 @@ self.onmessage = function(e) {
             const failures = aggregateFailures(result.timings, globalPlatforms, globalBuildTypes);
             currentFailures = failures;
             setProgress(-1);
+
+            // Find failed jobs with no test-level failures attributed to them.
+            const jobsWithFailures = new Set(
+                result.timings.filter(t => isFailureStatus(t.status))
+                              .map(t => `${t.taskId}.${t.retryId}`)
+            );
+            currentUnblamedJobs = failedTestJobs.filter(
+                j => !jobsWithFailures.has(`${j.taskId}.${j.retryId}`)
+            );
 
             const treeherderUrl = `${TH_BASE}/jobs?repo=try&revision=${revision}`;
             setStatus('');
@@ -1207,6 +1258,27 @@ self.onmessage = function(e) {
         return `<span title="${tooltip}">${buildBadgesHtml(builds)}</span>`;
     }
 
+    function renderRevisions(revisions) {
+        const container = document.getElementById('revisions-container');
+        if (!revisions.length) { container.innerHTML = ''; return; }
+
+        // Show revisions in reverse (oldest first), skip the try commit itself (first in array = tip).
+        const displayRevs = revisions.length > 1 ? revisions.slice(1).reverse() : revisions;
+
+        let html = '<div class="revisions-list">';
+        for (const rev of displayRevs) {
+            const shortHash = rev.revision.slice(0, 12);
+            const comment = rev.comments.split('\n')[0];
+            const hgUrl = `https://hg.mozilla.org/try/rev/${rev.revision}`;
+            html += `<div><a class="rev-hash" href="${escapeAttr(hgUrl)}" target="_blank">${shortHash}</a> `;
+            html += `<span class="rev-comment">${escapeHtml(comment)}</span>`;
+            html += `<span class="rev-author"> — ${escapeHtml(rev.author)}</span>`;
+            html += '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
     function renderResults(failures, totalJobs, failedJobCount, treeherderUrl) {
         setFavicon('#ff9500');
         const container = document.getElementById('results');
@@ -1235,6 +1307,7 @@ self.onmessage = function(e) {
         html += '</div>';
 
         html += '<div id="failure-table-container"></div>';
+        html += '<div id="unblamed-table-container"></div>';
 
         container.innerHTML = html;
 
@@ -1245,7 +1318,7 @@ self.onmessage = function(e) {
         initSearchBox({
             searchBoxId: 'search-box',
             searchClearId: 'search-clear',
-            onSearch: () => { currentSearch = document.getElementById('search-box').value.toLowerCase(); renderTable(); },
+            onSearch: () => { currentSearch = document.getElementById('search-box').value.toLowerCase(); renderTable(); renderUnblamedJobs(); },
             updateUrlHash: () => {},
         });
 
@@ -1253,6 +1326,7 @@ self.onmessage = function(e) {
         reproHistoryFetched = false;
         updateReproduceButton();
         renderTable();
+        renderUnblamedJobs();
 
         // Connect to reproduction server for configs and cached history
         if (isLocal) connectReproServer();
@@ -1343,6 +1417,177 @@ self.onmessage = function(e) {
         html += '</tbody></table>';
         container.innerHTML = html;
         loadVisibleReproLogs();
+    }
+
+    async function renderUnblamedJobs() {
+        const container = document.getElementById('unblamed-table-container');
+        if (!container) return;
+        if (!currentUnblamedJobs.length) { container.innerHTML = ''; unblamedGroups = null; return; }
+
+        if (!unblamedGroups) {
+            // Fetch all bug suggestions in parallel.
+            const summaries = await Promise.all(currentUnblamedJobs.map(async job => {
+                if (!job.jobId) return [];
+                try {
+                    const resp = await fetch(`${TH_BASE}/api/project/try/jobs/${job.jobId}/bug_suggestions/`);
+                    if (!resp.ok) return [];
+                    const suggestions = await resp.json();
+                    return suggestions
+                        .filter(s => s.search && s.search.trim())
+                        .map(s => s.search.trim());
+                } catch (e) {
+                    return [];
+                }
+            }));
+
+            // Clean up and normalize summaries for grouping.
+            const cleanedSummaries = summaries.map(cleanFailureSummary);
+
+            // Group jobs by their cleaned summary.
+            unblamedGroups = new Map(); // summary key -> { lines, jobs[] }
+            for (let i = 0; i < currentUnblamedJobs.length; i++) {
+                const key = cleanedSummaries[i].join('\n');
+                if (!unblamedGroups.has(key)) {
+                    unblamedGroups.set(key, { lines: cleanedSummaries[i], jobs: [] });
+                }
+                unblamedGroups.get(key).jobs.push(currentUnblamedJobs[i]);
+            }
+        }
+
+        let html = '<h3 style="margin: 20px 0 8px; font-size: 14px; color: #666;">Failed jobs with no specific test blamed</h3>';
+        html += '<table class="failure-table">';
+        html += '<thead><tr>';
+        html += '<th class="no-sort" style="width: 24px">#</th>';
+        html += '<th class="no-sort" style="width: 65px">Status</th>';
+        html += '<th class="no-sort" style="width: 55px">OS</th>';
+        html += '<th class="no-sort" style="width: 55px">Build</th>';
+        html += '<th class="no-sort">Job</th>';
+        html += '<th class="no-sort" style="width: 20px"></th>';
+        html += '</tr></thead><tbody>';
+
+        // Apply search filter: filter jobs within each group, skip empty groups.
+        const filteredGroups = new Map();
+        for (const [key, group] of unblamedGroups) {
+            const jobs = currentSearch
+                ? group.jobs.filter(j =>
+                    j.jobName.toLowerCase().includes(currentSearch) ||
+                    group.lines.some(l => l.toLowerCase().includes(currentSearch)))
+                : group.jobs;
+            if (jobs.length > 0) {
+                filteredGroups.set(key, { lines: group.lines, jobs });
+            }
+        }
+
+        if (filteredGroups.size === 0) { container.innerHTML = ''; return; }
+
+        unblamedRenderedKeys = [...filteredGroups.keys()].sort((a, b) => filteredGroups.get(b).jobs.length - filteredGroups.get(a).jobs.length);
+        const sortedGroupKeys = unblamedRenderedKeys;
+        let groupIdx = 0;
+        for (const key of sortedGroupKeys) {
+            const group = filteredGroups.get(key);
+            const allPlatforms = new Set();
+            const allBuildTypes = new Set();
+            for (const job of group.jobs) {
+                allPlatforms.add(extractPlatform(job.jobName));
+                for (const bt of extractBuildTypes(job.jobName)) allBuildTypes.add(bt);
+            }
+            const countClass = group.jobs.length >= 5 ? 'high' : group.jobs.length >= 2 ? 'medium' : 'low';
+            const isExpanded = expandedUnblamed.has(key);
+
+            html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleUnblamedGroup(${groupIdx})" title="Click to expand">`;
+            html += `<td class="count-cell ${countClass}">${group.jobs.length}</td>`;
+            html += `<td><span class="status-badge status-FAIL">FAIL</span></td>`;
+            html += `<td class="badges-cell">${platformBadgesHtml(sortedPlatforms(allPlatforms))}</td>`;
+            html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(allBuildTypes))}</td>`;
+            html += '<td class="test-info">';
+            if (group.lines.length > 0) {
+                if (isExpanded) {
+                    for (const line of group.lines) {
+                        html += `<div class="inline-message">${escapeHtml(line)}</div>`;
+                    }
+                } else {
+                    const fullMessage = group.lines.join('\n');
+                    html += `<div class="inline-message" title="${escapeAttr(fullMessage)}">${escapeHtml(group.lines[0])}</div>`;
+                }
+            } else {
+                html += '<div class="inline-message" style="color:#999">(no failure summary available)</div>';
+            }
+            html += '</td>';
+            html += '<td></td>';
+            html += '</tr>';
+
+            if (isExpanded) {
+                for (const job of group.jobs) {
+                    html += renderUnblamedJobRow(job);
+                }
+            }
+            groupIdx++;
+        }
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    function cleanFailureSummary(lines) {
+        // Filter out "exit status N" unless it's the only line.
+        let cleaned = lines.length > 1
+            ? lines.filter(l => !/^\[taskcluster:error\] exit status \d+$/.test(l))
+            : lines;
+
+        // Strip lines between "Aborting task..." and "task aborted" for grouping.
+        const result = [];
+        let skipping = false;
+        for (const line of cleaned) {
+            if (/^\[taskcluster:error\] Aborting task/.test(line)) {
+                result.push(line);
+                skipping = true;
+                continue;
+            }
+            if (skipping) {
+                if (/^\[taskcluster:error\] task aborted/.test(line)) {
+                    result.push(line);
+                    skipping = false;
+                }
+                continue;
+            }
+            result.push(line);
+        }
+        return result;
+    }
+
+    function renderUnblamedJobRow(job) {
+        const platform = extractPlatform(job.jobName);
+        const builds = extractBuildTypes(job.jobName);
+        const profilerUrl = getProfilerUrl({ taskId: job.taskId, retryId: job.retryId, jobName: job.jobName });
+        const thJobUrl = `${TH_BASE}/jobs?repo=try&selectedTaskRun=${job.taskId}.${job.retryId}&revision=${currentRevision}`;
+
+        let html = '<tr class="detail-row visible">';
+        html += '<td class="count-cell"></td>';
+        html += `<td><span class="status-badge status-FAIL">FAIL</span></td>`;
+        html += `<td class="badges-cell">${platformBadgesHtml([platform])}</td>`;
+        html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(new Set(builds)))}</td>`;
+        html += '<td class="test-info">';
+        html += '<div class="job-header">';
+        html += `<span class="job-name">${escapeHtml(job.jobName)}</span>`;
+        html += ' <span class="job-links">';
+        html += `<a href="${escapeAttr(profilerUrl)}" target="_blank" onclick="event.stopPropagation()">Profile</a>`;
+        html += `<a href="${escapeAttr(thJobUrl)}" target="_blank" onclick="event.stopPropagation()">Treeherder</a>`;
+        html += '</span>';
+        html += '</div>';
+        html += '</td>';
+        html += '<td></td>';
+        html += '</tr>';
+        return html;
+    }
+
+    function toggleUnblamedGroup(groupIdx) {
+        const key = unblamedRenderedKeys[groupIdx];
+        if (expandedUnblamed.has(key)) {
+            expandedUnblamed.delete(key);
+        } else {
+            expandedUnblamed.add(key);
+        }
+        renderUnblamedJobs();
     }
 
     function renderTestDetailRows(test, hasRepro) {
@@ -1590,9 +1835,10 @@ self.onmessage = function(e) {
                 html += `<div class="repro-detail-meta">${pastMeta}</div>`;
                 if (past.runId) {
                     const pastLogUrl = `http://localhost:3000/api/runs/${encodeURIComponent(past.runId)}/log?format=text`;
-                    const pastProfileUrl = `http://localhost:3000/api/runs/${encodeURIComponent(past.runId)}/profile`;
-                    const pastProfileName = encodeURIComponent(`mach test ${rs.testPath || ''} (${past.config || 'unknown'})`);
-                    const pastProfilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(pastProfileUrl)}?profileName=${pastProfileName}`;
+                    const pastProfilerUrl = getProfilerUrl({
+                        profile: `http://localhost:3000/api/runs/${encodeURIComponent(past.runId)}/profile`,
+                        profileName: `mach test ${rs.testPath || ''} (${past.config || 'unknown'})`,
+                    });
                     html += '<div class="repro-links">';
                     html += `<a href="${pastLogUrl}" target="_blank">View log</a>`;
                     html += `<a href="${pastProfilerUrl}" target="_blank">Profile</a>`;
@@ -1620,9 +1866,10 @@ self.onmessage = function(e) {
 
         const finished = rs.runId && rs.state !== 'queued' && rs.state !== 'running';
         if (finished) {
-            const profileUrl = `http://localhost:3000/api/runs/${encodeURIComponent(rs.runId)}/profile`;
-            const profileName = encodeURIComponent(`mach test ${rs.testPath || ''} (${rs.config || 'unknown'})`);
-            const profilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${profileName}`;
+            const profilerUrl = getProfilerUrl({
+                profile: `http://localhost:3000/api/runs/${encodeURIComponent(rs.runId)}/profile`,
+                profileName: `mach test ${rs.testPath || ''} (${rs.config || 'unknown'})`,
+            });
 
             const logUrl = `http://localhost:3000/api/runs/${encodeURIComponent(rs.runId)}/log?format=text`;
             html += '<div class="repro-links">';
