@@ -1224,6 +1224,7 @@ self.onmessage = function(e) {
             const treeherderUrl = `${TH_BASE}/jobs?repo=${currentRepo}&revision=${revision}`;
             setStatus('');
             renderResults(failures, totalJobs, failedTestJobs.length, treeherderUrl);
+            logConsoleAPI();
 
             // Fetch 21-day flakiness data for failed tests (async, updates UI progressively).
             fetchFlakinessData(failures.tests);
@@ -2856,6 +2857,106 @@ Error: ${msg}`;
             default:
                 return '';
         }
+    }
+
+    // ===== Console API =====
+
+    function getSortedFailures() {
+        if (!currentFailures) return [];
+
+        let tests = getFilteredTests();
+        const col = currentSort.column;
+        const asc = currentSort.ascending;
+        tests = [...tests].sort((a, b) => {
+            let va, vb;
+            if (col === 'count') { va = a.instances.length; vb = b.instances.length; }
+            else if (col === 'test') { va = a.path; vb = b.path; }
+            else if (col === 'status') {
+                va = Array.from(a.statuses).sort().join(',');
+                vb = Array.from(b.statuses).sort().join(',');
+            }
+            if (typeof va === 'string') return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            return asc ? va - vb : vb - va;
+        });
+
+        const globalPlatforms = currentFailures.globalPlatforms;
+        const globalBuildTypes = currentFailures.globalBuildTypes;
+
+        return tests.map(test => {
+            const allPlatforms = test.sortedPlatforms.length === globalPlatforms.size &&
+                test.sortedPlatforms.every(p => globalPlatforms.has(p));
+            const allBuildTypes = test.sortedBuildTypes.length === globalBuildTypes.size &&
+                test.sortedBuildTypes.every(b => globalBuildTypes.has(b));
+            return {
+                test: test.path,
+                count: test.instances.length,
+                statuses: Array.from(test.statuses),
+                platforms: allPlatforms ? 'all' : test.sortedPlatforms,
+                buildTypes: allBuildTypes ? 'all' : test.sortedBuildTypes,
+                flaky: test.intermittentCount === test.instances.length,
+                message: test.commonMessage
+                    ? test.commonMessage.split('\n')[0]
+                    : undefined,
+            };
+        });
+    }
+
+    function logFailures(list) {
+        console.table(list.map(f => ({
+            '#': f.count,
+            test: f.test,
+            statuses: f.statuses.join(', '),
+            platforms: Array.isArray(f.platforms) ? f.platforms.join(', ') : f.platforms,
+            buildTypes: Array.isArray(f.buildTypes) ? f.buildTypes.join(', ') : f.buildTypes,
+            flaky: f.flaky,
+            message: f.message || '',
+        })));
+    }
+
+    window.formatForPrompt = function(list) {
+        return list.map(f => {
+            let line = f.test;
+            const isFlaky = f.flaky ? ' is flaky' : ' permafails';
+            line += isFlaky;
+            const config = [];
+            if (f.platforms !== 'all') config.push(f.platforms.join(', '));
+            if (f.buildTypes !== 'all') config.push(f.buildTypes.join(', '));
+            if (config.length) line += ' on ' + config.join(' ');
+            if (f.message) line += ' with `' + f.message + '`';
+            return line;
+        }).join('\n');
+    };
+
+    Object.defineProperty(window, 'failures', { get() {
+        const list = getSortedFailures();
+        logFailures(list);
+        return list;
+    }});
+
+    Object.defineProperty(window, 'permaFails', { get() {
+        const list = getSortedFailures().filter(f => !f.flaky);
+        logFailures(list);
+        return list;
+    }});
+
+    function logConsoleAPI() {
+        console.log(
+            '%cConsole API available',
+            'font-weight: bold; font-size: 14px; color: #2563eb'
+        );
+        console.log(
+            `%c  failures%c    — all failures sorted as on page\n` +
+            `%c  permaFails%c  — same, excluding flaky failures\n\n` +
+            `    Each entry: { test, count, statuses, platforms, buildTypes, flaky, message }\n` +
+            `    • platforms/buildTypes: array of names, or "all" if present on every config\n` +
+            `    • flaky: true if failure was intermittent in all runs (didn't happen in every job)\n` +
+            `    • message: first line of failure message (if consistent across instances)\n` +
+            `    Also logs a console.table() for quick viewing.\n\n` +
+            `  formatForPrompt(list) — pretty-prints for use as a Claude prompt\n\n` +
+            `  Example: copy(formatForPrompt(permaFails))`,
+            'color: #059669; font-weight: bold', 'color: inherit',
+            'color: #059669; font-weight: bold', 'color: inherit'
+        );
     }
 
     // ===== Init =====
