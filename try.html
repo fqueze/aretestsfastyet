@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Try Push Results</title>
+    <link rel="icon" href="favicon-orange.svg">
     <link rel="stylesheet" href="shared.css">
     <style>
         .revision-input {
@@ -1044,6 +1045,7 @@ self.onmessage = function(e) {
                 const completedTestJobs = jobs.filter(j =>
                     j.state === 'completed' && isTestJob(j.jobName)
                 );
+                setFavicon('#4caf50');
                 setStatus(`No failed test jobs found. ${completedTestJobs.length} test jobs completed successfully out of ${totalJobs} total jobs.`);
                 setProgress(-1);
                 document.getElementById('load-btn').disabled = false;
@@ -1206,6 +1208,7 @@ self.onmessage = function(e) {
     }
 
     function renderResults(failures, totalJobs, failedJobCount, treeherderUrl) {
+        setFavicon('#ff9500');
         const container = document.getElementById('results');
         const totalFailures = failures.tests.reduce((s, t) => s + t.instances.length, 0);
         const intermittentTests = failures.tests.filter(t => t.intermittentCount === t.instances.length).length;

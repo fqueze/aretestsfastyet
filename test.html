@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Info</title>
+    <link rel="icon" href="favicon-orange.svg">
     <script src="fetch-utils.js"></script>
     <script src="common-ui.js"></script>
     <script src="common-links.js"></script>
@@ -2007,6 +2008,9 @@
 
                 // Compute stats
                 const stats = computeTestStats(testInfo.testId);
+
+                // Set favicon based on test health
+                setFavicon(stats.passPercentage === 100 ? '#4caf50' : '#ff9500');
 
                 // Render page (replaces the initial header)
                 contentEl.innerHTML = renderPage(testPath, testInfo, stats, usedHarness);
