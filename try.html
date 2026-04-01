@@ -1469,15 +1469,18 @@ self.onmessage = function(e) {
                 }
             }));
 
-            // Clean up and normalize summaries for grouping.
-            const cleanedSummaries = summaries.map(cleanFailureSummary);
-
-            // Group jobs by their cleaned summary.
-            unblamedGroups = new Map(); // summary key -> { lines, jobs[] }
+            // Attach cleaned summaries to jobs for display in expanded rows.
             for (let i = 0; i < currentUnblamedJobs.length; i++) {
-                const key = cleanedSummaries[i].join('\n');
+                currentUnblamedJobs[i].cleanedSummary = cleanFailureSummary(summaries[i]);
+            }
+
+            // Group jobs by summary with UUIDs stripped for deduplication.
+            unblamedGroups = new Map(); // groupKey -> { lines (UUID-stripped), jobs[] }
+            for (let i = 0; i < currentUnblamedJobs.length; i++) {
+                const key = failureSummaryGroupKey(summaries[i]);
                 if (!unblamedGroups.has(key)) {
-                    unblamedGroups.set(key, { lines: cleanedSummaries[i], jobs: [] });
+                    const displayLines = key.split('\n');
+                    unblamedGroups.set(key, { lines: displayLines, jobs: [] });
                 }
                 unblamedGroups.get(key).jobs.push(currentUnblamedJobs[i]);
             }
@@ -1530,14 +1533,8 @@ self.onmessage = function(e) {
             html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(allBuildTypes))}</td>`;
             html += '<td class="test-info">';
             if (group.lines.length > 0) {
-                if (isExpanded) {
-                    for (const line of group.lines) {
-                        html += `<div class="inline-message">${escapeHtml(line)}</div>`;
-                    }
-                } else {
-                    const fullMessage = group.lines.join('\n');
-                    html += `<div class="inline-message" title="${escapeAttr(fullMessage)}">${escapeHtml(group.lines[0])}</div>`;
-                }
+                const fullMessage = group.lines.join('\n');
+                html += `<div class="inline-message" title="${escapeAttr(fullMessage)}">${escapeHtml(group.lines[0])}</div>`;
             } else {
                 html += '<div class="inline-message" style="color:#999">(no failure summary available)</div>';
             }
@@ -1563,7 +1560,7 @@ self.onmessage = function(e) {
             ? lines.filter(l => !/^\[taskcluster:error\] exit status \d+$/.test(l))
             : lines;
 
-        // Strip lines between "Aborting task..." and "task aborted" for grouping.
+        // Strip lines between "Aborting task..." and "task aborted".
         const result = [];
         let skipping = false;
         for (const line of cleaned) {
@@ -1582,6 +1579,22 @@ self.onmessage = function(e) {
             result.push(line);
         }
         return result;
+    }
+
+    function failureSummaryGroupKey(lines) {
+        // Strip crash UUIDs so identical crash signatures group together.
+        return cleanFailureSummary(lines)
+            .map(l => l.replace(/^(PROCESS-CRASH \| )[0-9a-f-]{36} \| /, '$1'))
+            .join('\n');
+    }
+
+    function linkifyCrashIds(line, job) {
+        // Turn "PROCESS-CRASH | <uuid> | rest" into HTML with the UUID linked to the crash viewer.
+        const m = line.match(/^(PROCESS-CRASH \| )([0-9a-f-]{36})( \| .*)$/);
+        if (!m) return escapeHtml(line);
+        const crashUrl = getCrashViewerUrl({ taskId: job.taskId, retryId: job.retryId, minidump: m[2] });
+        if (!crashUrl) return escapeHtml(line);
+        return `${escapeHtml(m[1])}<a href="${escapeAttr(crashUrl)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(m[2])}</a>${escapeHtml(m[3])}`;
     }
 
     function renderUnblamedJobRow(job) {
@@ -1603,6 +1616,15 @@ self.onmessage = function(e) {
         html += `<a href="${escapeAttr(thJobUrl)}" target="_blank" onclick="event.stopPropagation()">Treeherder</a>`;
         html += '</span>';
         html += '</div>';
+        if (job.cleanedSummary) {
+            for (const line of job.cleanedSummary) {
+                if (/^PROCESS-CRASH \| [0-9a-f-]{36} \| /.test(line)) {
+                    html += `<div class="inline-message">${linkifyCrashIds(line, job)}</div>`;
+                } else {
+                    html += `<div class="inline-message">${escapeHtml(line)}</div>`;
+                }
+            }
+        }
         html += '</td>';
         html += '<td></td>';
         html += '</tr>';
@@ -1673,11 +1695,22 @@ self.onmessage = function(e) {
             html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(new Set(builds)))}</td>`;
 
             // Test column - job name, links, assertions
+            // Collect crash viewer URLs for this job's instances.
+            const crashUrls = new Set();
+            for (const inst of job.instances) {
+                if (inst.minidump) {
+                    crashUrls.add(getCrashViewerUrl({ taskId: inst.taskId, retryId: inst.retryId, minidump: inst.minidump }));
+                }
+            }
+
             html += '<td class="test-info">';
             html += '<div class="job-header">';
             html += `<span class="job-name">${escapeHtml(job.jobName)}</span>`;
             html += ' <span class="job-links">';
             html += `<a href="${escapeAttr(profilerUrl)}" target="_blank">Profile</a>`;
+            for (const crashUrl of crashUrls) {
+                if (crashUrl) html += `<a href="${escapeAttr(crashUrl)}" target="_blank">Crash</a>`;
+            }
             html += `<a href="${escapeAttr(thJobUrl)}" target="_blank">Treeherder</a>`;
             html += '</span>';
             html += '</div>';
@@ -1686,7 +1719,12 @@ self.onmessage = function(e) {
             const allItems = [];
             for (const inst of job.instances) {
                 if (inst.crashSignature) {
-                    allItems.push({ html: `<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>` });
+                    const crashViewerUrl = inst.minidump ? getCrashViewerUrl({ taskId: inst.taskId, retryId: inst.retryId, minidump: inst.minidump }) : '';
+                    if (crashViewerUrl) {
+                        allItems.push({ html: `<a href="${escapeAttr(crashViewerUrl)}" target="_blank" class="crash-sig">${escapeHtml(inst.crashSignature)}</a>` });
+                    } else {
+                        allItems.push({ html: `<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>` });
+                    }
                 }
                 if (inst.allMessages && inst.allMessages.length > 0) {
                     for (const msg of inst.allMessages) {
