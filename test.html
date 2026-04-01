@@ -8,6 +8,7 @@
     <script src="fetch-utils.js"></script>
     <script src="common-ui.js"></script>
     <script src="common-links.js"></script>
+    <script src="common-test-data.js"></script>
     <script defer src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
@@ -535,42 +536,6 @@
         }
 
         // Detect harness type from test file name
-        function detectHarness(testPath) {
-            const fileName = testPath.split('/').pop();
-            if (fileName.startsWith('browser_') && fileName.endsWith('.js')) {
-                return 'mochitest';
-            }
-            if (fileName.startsWith('test_') && fileName.endsWith('.html')) {
-                return 'mochitest';
-            }
-            if (fileName.startsWith('test_') && fileName.endsWith('.js')) {
-                return 'xpcshell';
-            }
-            // Default to xpcshell
-            return 'xpcshell';
-        }
-
-        function getChunkIndex(fullPath, totalChunks = 64) {
-            let hash = 0;
-            for (let i = 0; i < fullPath.length; i++) {
-                hash = ((hash << 5) - hash + fullPath.charCodeAt(i)) | 0;
-            }
-            return ((hash % totalChunks) + totalChunks) % totalChunks;
-        }
-
-        // Get count for a specific index in a statusGroup, handling all formats
-        function getCountAtIndex(statusGroup, index) {
-            if (statusGroup.counts !== undefined) {
-                return statusGroup.counts[index];
-            } else if (statusGroup.durations && statusGroup.days !== undefined) {
-                return statusGroup.durations[index].length;
-            } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
-                return statusGroup.taskIdIds[index].length;
-            } else {
-                return 1;
-            }
-        }
-
         // Iterate over all taskIdIndexes in a statusGroup
         function forEachTaskId(statusGroup, callback) {
             if (!statusGroup.taskIdIds) return;
@@ -624,120 +589,6 @@
 
         // Placeholder message for failures without recorded details
         const FAILURE_NO_MESSAGE = 'Failure details not recorded (likely Android or platform logging issue)';
-
-        // Find test in data by matching full path
-        function findTest(data, testPath) {
-            if (!data.testRuns || !data.tables || !data.testInfo) return null;
-
-            for (let testId = 0; testId < data.testRuns.length; testId++) {
-                const testGroup = data.testRuns[testId];
-                if (!testGroup) continue;
-
-                const dirPath = data.tables.testPaths[data.testInfo.testPathIds[testId]];
-                const testName = data.tables.testNames[data.testInfo.testNameIds[testId]];
-                const fullPath = dirPath ? `${dirPath}/${testName}` : testName;
-
-                if (fullPath === testPath) {
-                    const componentId = data.testInfo.componentIds ? data.testInfo.componentIds[testId] : null;
-                    const component = (componentId !== null && data.tables.components) ? data.tables.components[componentId] : null;
-                    return { testId, fullPath, component };
-                }
-            }
-            return null;
-        }
-
-        // Compute statistics for a test
-        function computeTestStats(testId) {
-            const testGroup = currentData.testRuns[testId];
-            if (!testGroup) {
-                return { runCount: 0, skipCount: 0, passCount: 0, failCount: 0, timeoutCount: 0, crashCount: 0, max: 0, min: 0, totalDuration: 0 };
-            }
-
-            let skipCount = 0, timeoutCount = 0, failCount = 0, crashCount = 0, passCount = 0;
-            let maxDuration = 0, minDuration = Infinity, totalDuration = 0;
-
-            for (let statusId = 0; statusId < testGroup.length; statusId++) {
-                const statusGroup = testGroup[statusId];
-                if (!statusGroup) continue;
-
-                const status = currentData.tables.statuses[statusId];
-
-                let runCount = 0;
-                if (statusGroup.counts !== undefined) {
-                    runCount = statusGroup.counts.reduce((sum, count) => sum + count, 0);
-                } else if (statusGroup.durations && statusGroup.days !== undefined) {
-                    runCount = statusGroup.durations.reduce((sum, bucket) => sum + bucket.length, 0);
-                } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
-                    runCount = statusGroup.taskIdIds.reduce((sum, bucket) => sum + bucket.length, 0);
-                } else if (statusGroup.taskIdIds) {
-                    runCount = statusGroup.taskIdIds.length;
-                }
-
-                const isSkip = status === 'SKIP';
-                const isCrash = status === 'CRASH';
-                const isTimeout = status && status.startsWith('TIMEOUT');
-                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL', 'OK'].includes(status);
-
-                if (isSkip) {
-                    if (statusGroup.messageIds) {
-                        for (let i = 0; i < statusGroup.messageIds.length; i++) {
-                            const messageId = statusGroup.messageIds[i];
-                            const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                            if (!message || !message.startsWith('run-if')) {
-                                skipCount += getCountAtIndex(statusGroup, i);
-                            }
-                        }
-                    } else {
-                        skipCount += runCount;
-                    }
-                } else if (isCrash) {
-                    crashCount += runCount;
-                } else if (isTimeout) {
-                    timeoutCount += runCount;
-                } else if (status === 'UNKNOWN') {
-                    // Ignore UNKNOWN status — these are from before structured logging
-                    // was enabled (e.g. mochitest on android) and can't be classified.
-                } else if (isFail) {
-                    failCount += runCount;
-                } else {
-                    // PASS, EXPECTED-FAIL, PASS-PARALLEL, PASS-SEQUENTIAL, OK
-                    passCount += runCount;
-                    if (statusGroup.durations) {
-                        if (statusGroup.days !== undefined) {
-                            for (const bucket of statusGroup.durations) {
-                                for (const duration of bucket) {
-                                    totalDuration += duration;
-                                    if (duration > maxDuration) maxDuration = duration;
-                                    if (duration < minDuration) minDuration = duration;
-                                }
-                            }
-                        } else {
-                            for (const duration of statusGroup.durations) {
-                                totalDuration += duration;
-                                if (duration > maxDuration) maxDuration = duration;
-                                if (duration < minDuration) minDuration = duration;
-                            }
-                        }
-                    }
-                }
-            }
-
-            const totalRunCount = timeoutCount + failCount + crashCount + passCount;
-            if (minDuration === Infinity) minDuration = 0;
-
-            return {
-                runCount: totalRunCount,
-                skipCount,
-                passCount,
-                failCount,
-                timeoutCount,
-                crashCount,
-                max: maxDuration,
-                min: minDuration,
-                totalDuration,
-                passPercentage: totalRunCount > 0 ? Math.round((passCount / totalRunCount) * 10000) / 100 : 0
-            };
-        }
 
         // Get skip message counts
         function getSkipMessageCounts(testId) {
@@ -1633,7 +1484,7 @@
 
         // Render issue details section
         function renderIssueDetails(testPath, testInfo) {
-            const stats = computeTestStats(testInfo.testId);
+            const stats = computeTestStats(currentData, testInfo.testId);
             const allIssues = [];
 
             // Skip messages
@@ -2007,7 +1858,7 @@
                 }
 
                 // Compute stats
-                const stats = computeTestStats(testInfo.testId);
+                const stats = computeTestStats(currentData, testInfo.testId);
 
                 // Set favicon based on test health
                 setFavicon(stats.passPercentage === 100 ? '#4caf50' : '#ff9500');

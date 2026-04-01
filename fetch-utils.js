@@ -9,10 +9,24 @@ function getHarnessType() {
 
 // Helper function to fetch from Firefox CI
 // indexName is the test-info-* suffix, e.g. 'xpcshell-timings', 'worker-data'
-function fetchFromCI(indexName, filename) {
+// Caches the resolved base URL after the first redirect to avoid repeated redirects.
+const _resolvedBaseUrls = new Map(); // indexName -> resolved base URL prefix
+async function fetchFromCI(indexName, filename) {
+    const cached = _resolvedBaseUrls.get(indexName);
+    if (cached) {
+        return fetch(`${cached}${filename}`);
+    }
     const repository = window.location.hostname === 'fqueze.github.io' ? 'try' : 'mozilla-central';
     const prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.latest.source.test-info-${indexName}/artifacts/public/`;
-    return fetch(`${prefix}${filename}`);
+    const response = await fetch(`${prefix}${filename}`);
+    // Cache the resolved base URL from the final (redirected) URL.
+    if (response.ok && response.url) {
+        const base = response.url.substring(0, response.url.lastIndexOf('/') + 1);
+        if (base !== prefix) {
+            _resolvedBaseUrls.set(indexName, base);
+        }
+    }
+    return response;
 }
 
 // Helper function to fetch JSON with error handling

@@ -371,13 +371,29 @@
         }
 
         .history-link {
-            font-size: 11px;
-            color: #0060df;
+            font-size: 13px;
             text-decoration: none;
-            opacity: 0.6;
+            color: #888;
+            margin-left: 6px;
         }
         .history-link:hover {
             text-decoration: underline;
+        }
+        .history-link.flaky {
+            font-family: monospace;
+            color: #c00;
+        }
+        .history-link.flaky-new {
+            font-family: monospace;
+            color: #c00;
+        }
+        .history-link.flaky-new::before {
+            content: '\26a0\fe0f';
+            margin-right: 4px;
+        }
+        .history-link.flaky-msg {
+            font-family: monospace;
+            color: #e65100;
             opacity: 1;
         }
 
@@ -444,11 +460,18 @@
             background: #ffebee;
             color: #c62828;
         }
-        .intermittent-icon {
+        .mitten::before {
+            content: '';
+            display: inline-block;
             width: 13px;
             height: 13px;
-            color: #e65100;
             vertical-align: middle;
+            margin-left: 4px;
+            margin-right: 4px;
+            background-color: #e65100;
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 448 512'%3E%3Cpath d='M352 384L64 384 5.4 178.9C1.8 166.4 0 153.4 0 140.3C0 62.8 62.8 0 140.3 0l3.4 0c66 0 123.5 44.9 139.5 108.9l31.4 125.8 17.6-20.1C344.8 200.2 362.9 192 382 192l2.8 0c34.9 0 63.3 28.3 63.3 63.3c0 15.9-6 31.2-16.8 42.9L352 384zM32 448c0-17.7 14.3-32 32-32l288 0c17.7 0 32 14.3 32 32l0 32c0 17.7-14.3 32-32 32L64 512c-17.7 0-32-14.3-32-32l0-32z'/%3E%3C/svg%3E");
+            mask-size: contain;
+            mask-repeat: no-repeat;
         }
         .repro-summary {
             font-size: 11px;
@@ -574,6 +597,7 @@
     <script src="fetch-utils.js"></script>
     <script src="common-ui.js"></script>
     <script src="common-links.js"></script>
+    <script src="common-test-data.js"></script>
     <script defer src="shared.js"></script>
     <script>
     'use strict';
@@ -1084,6 +1108,7 @@ self.onmessage = function(e) {
         expandedTests.clear();
         expandedUnblamed.clear();
         unblamedGroups = null;
+        flakinessCache.clear();
 
         try {
             setStatus('Looking up push on Treeherder...');
@@ -1200,6 +1225,9 @@ self.onmessage = function(e) {
             setStatus('');
             renderResults(failures, totalJobs, failedTestJobs.length, treeherderUrl);
 
+            // Fetch 21-day flakiness data for failed tests (async, updates UI progressively).
+            fetchFlakinessData(failures.tests);
+
             // Defer worker termination so it doesn't block the paint.
             setTimeout(() => { for (const w of result.workers) w.terminate(); }, 0);
         } catch (e) {
@@ -1211,7 +1239,7 @@ self.onmessage = function(e) {
         }
     }
 
-    const MITTEN_SVG = '<svg class="intermittent-icon" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><title>Intermittent</title><path fill="currentColor" d="M352 384L64 384 5.4 178.9C1.8 166.4 0 153.4 0 140.3C0 62.8 62.8 0 140.3 0l3.4 0c66 0 123.5 44.9 139.5 108.9l31.4 125.8 17.6-20.1C344.8 200.2 362.9 192 382 192l2.8 0c34.9 0 63.3 28.3 63.3 63.3c0 15.9-6 31.2-16.8 42.9L352 384zM32 448c0-17.7 14.3-32 32-32l288 0c17.7 0 32 14.3 32 32l0 32c0 17.7-14.3 32-32 32L64 512c-17.7 0-32-14.3-32-32l0-32z"></path></svg>';
+    const MITTEN = '<span class="mitten"></span>';
 
     function isFailureStatus(status) {
         return status === 'FAIL' || status === 'FAIL-SEQUENTIAL' || status === 'FAIL-PARALLEL' ||
@@ -1330,7 +1358,7 @@ self.onmessage = function(e) {
         html += `<div class="summary-card"><div class="label">Unique Failing Tests</div><div class="value orange">${failures.tests.length}</div></div>`;
         html += `<div class="summary-card"><div class="label">Total Failures</div><div class="value red">${totalFailures}</div></div>`;
         if (intermittentTests > 0) {
-            html += `<div class="summary-card"><div class="label">Intermittent ${MITTEN_SVG}</div><div class="value orange">${intermittentTests}</div></div>`;
+            html += `<div class="summary-card"><div class="label">Intermittent ${MITTEN}</div><div class="value orange">${intermittentTests}</div></div>`;
         }
         html += '<div class="summary-actions">';
         html += '<button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>';
@@ -1415,7 +1443,7 @@ self.onmessage = function(e) {
             const countClass = test.instances.length >= 5 ? 'high' : test.instances.length >= 2 ? 'medium' : 'low';
 
             html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleTest('${escapeAttr(test.path)}')" title="Click to expand">`;
-            const intermittentHtml = test.intermittentCount === test.instances.length ? ' ' + MITTEN_SVG : '';
+            const intermittentHtml = test.intermittentCount === test.instances.length ? ' ' + MITTEN : '';
             html += `<td class="count-cell ${countClass}">${test.instances.length}${intermittentHtml}</td>`;
             html += '<td>';
             for (const s of test.statuses) {
@@ -1426,7 +1454,7 @@ self.onmessage = function(e) {
             html += `<td class="badges-cell">${summaryBuildBadges(test)}</td>`;
             html += '<td class="test-info">';
             html += `<span class="test-path"><a href="${getSearchfoxUrl(test.path)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(test.path)}</a></span>`;
-            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()" title="Check 21-day history">history</a>`;
+            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()"><span id="history-${escapeAttr(test.path)}">loading history…</span></a>`;
             if (test.commonMessage) {
                 const firstLine = test.commonMessage.split('\n')[0];
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
@@ -1449,6 +1477,11 @@ self.onmessage = function(e) {
         html += '</tbody></table>';
         container.innerHTML = html;
         loadVisibleReproLogs();
+
+        // Restore cached flakiness data after re-render.
+        for (const [path, { stats, hasMatchingMessage }] of flakinessCache) {
+            updateFlakinessDisplay(path, stats, hasMatchingMessage);
+        }
     }
 
     async function renderUnblamedJobs() {
@@ -1682,7 +1715,7 @@ self.onmessage = function(e) {
             const jobIntermittent = job.instances.every(i => i.intermittent);
 
             // # column - intermittent icon if applicable
-            html += `<td class="count-cell">${jobIntermittent ? MITTEN_SVG : ''}</td>`;
+            html += `<td class="count-cell">${jobIntermittent ? MITTEN : ''}</td>`;
 
             // Status column
             html += '<td>';
@@ -2032,6 +2065,199 @@ self.onmessage = function(e) {
             currentSort.ascending = column === 'test';
         }
         renderTable();
+    }
+
+    // ===== 21-day flakiness data =====
+
+    const flakinessCache = new Map(); // testPath -> { stats, hasMatchingMessage }
+    let flakinessWorker = null;
+
+    function initFlakinessWorker() {
+        if (flakinessWorker) return flakinessWorker;
+        // Embed shared helpers (already loaded via <script>) in the worker.
+        const sharedCode = [getChunkIndex, getCountAtIndex, findTest, computeTestStats]
+            .map(fn => fn.toString()).join('\n');
+        const workerCode = sharedCode + `
+self.onmessage = function(e) {
+    const { buffer, tests } = e.data;
+    try {
+        const json = new TextDecoder().decode(buffer);
+        const data = JSON.parse(json);
+        const results = [];
+        for (const { path, tryMessages } of tests) {
+            const testInfo = findTest(data, path);
+            if (!testInfo) { results.push({ path, found: false }); continue; }
+            const stats = computeTestStats(data, testInfo.testId);
+            const hasMatchingMessage = stats.failureMessages.some(m => tryMessages.includes(m));
+            // Strip failureMessages to avoid transferring large strings back.
+            delete stats.failureMessages;
+            results.push({ path, found: true, stats, hasMatchingMessage });
+        }
+        self.postMessage({ results });
+    } catch (err) {
+        self.postMessage({ error: err.message });
+    }
+};`;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        flakinessWorker = new Worker(URL.createObjectURL(blob));
+        return flakinessWorker;
+    }
+
+    function processInWorker(worker, buffer, tests) {
+        return new Promise(resolve => {
+            const handler = e => {
+                worker.removeEventListener('message', handler);
+                resolve(e.data);
+            };
+            worker.addEventListener('message', handler);
+            // Convert tryMessages Sets to arrays for structured clone.
+            const testsForWorker = tests.map(t => ({ path: t.path, tryMessages: [...t.tryMessages] }));
+            worker.postMessage({ buffer, tests: testsForWorker }, [buffer]);
+        });
+    }
+
+    async function fetchFlakinessData(tests) {
+        const worker = initFlakinessWorker();
+
+        // Build per-test info with try failure messages.
+        const testEntries = tests.map(test => {
+            const tryMessages = new Set();
+            for (const inst of test.instances) {
+                if (inst.message) tryMessages.add(inst.message);
+            }
+            return { path: test.path, tryMessages };
+        });
+
+        // Group tests by chunk file (harness + chunkHex).
+        function buildChunkMap(entries) {
+            const chunkMap = new Map();
+            for (const entry of entries) {
+                const harness = detectHarness(entry.path);
+                const chunkHex = getChunkIndex(entry.path).toString(16).padStart(2, '0');
+                const key = `${harness}-${chunkHex}`;
+                if (!chunkMap.has(key)) chunkMap.set(key, []);
+                chunkMap.get(key).push(entry);
+            }
+            return chunkMap;
+        }
+
+        // Order chunks by the position of their highest-priority test in the table.
+        const testOrder = new Map(tests.map((t, i) => [t.path, i]));
+        function sortChunks(chunkMap) {
+            return [...chunkMap.entries()].sort((a, b) => {
+                const minA = Math.min(...a[1].map(t => testOrder.get(t.path) ?? Infinity));
+                const minB = Math.min(...b[1].map(t => testOrder.get(t.path) ?? Infinity));
+                return minA - minB;
+            });
+        }
+
+        async function processChunks(chunkMap) {
+            const notFound = [];
+            const sorted = sortChunks(chunkMap);
+
+            // Pipeline: fetch next file while worker processes the current one.
+            let workerPromise = null;
+            let workerTests = null;
+
+            async function drainWorker() {
+                if (!workerPromise) return;
+                try {
+                    const result = await workerPromise;
+                    if (result.error) { notFound.push(...workerTests); }
+                    else {
+                        for (const r of result.results) {
+                            if (!r.found) { notFound.push(workerTests.find(t => t.path === r.path)); continue; }
+                            flakinessCache.set(r.path, { stats: r.stats, hasMatchingMessage: r.hasMatchingMessage });
+                            updateFlakinessDisplay(r.path, r.stats, r.hasMatchingMessage);
+                        }
+                    }
+                } catch (e) {
+                    notFound.push(...workerTests);
+                }
+                workerPromise = null;
+                workerTests = null;
+            }
+
+            // Sequential fetches, but overlap fetch N+1 with worker processing N.
+            let pendingFetch = null;
+            for (let i = 0; i < sorted.length; i++) {
+                const [chunkFile, chunkTests] = sorted[i];
+                // Use prefetched result if available, otherwise fetch now.
+                const fetched = await (pendingFetch || fetchData(`${chunkFile}.json`)
+                    .then(r => r.ok ? r.arrayBuffer() : null).catch(() => null));
+                pendingFetch = null;
+                if (!fetched) { notFound.push(...chunkTests); continue; }
+                // Drain previous worker result before sending new buffer.
+                await drainWorker();
+                workerTests = chunkTests;
+                workerPromise = processInWorker(worker, fetched, chunkTests);
+                // Start fetching next chunk while worker processes this one.
+                if (i + 1 < sorted.length) {
+                    const [nextFile] = sorted[i + 1];
+                    pendingFetch = fetchData(`${nextFile}.json`)
+                        .then(r => r.ok ? r.arrayBuffer() : null).catch(() => null);
+                }
+            }
+            await drainWorker();
+            return notFound;
+        }
+
+        // First pass with detected harness.
+        const notFound = await processChunks(buildChunkMap(testEntries));
+
+        // Retry not-found tests with the other harness.
+        if (notFound.length > 0) {
+            const altMap = new Map();
+            for (const entry of notFound) {
+                const altHarness = detectHarness(entry.path) === 'xpcshell' ? 'mochitest' : 'xpcshell';
+                const chunkHex = getChunkIndex(entry.path).toString(16).padStart(2, '0');
+                const key = `${altHarness}-${chunkHex}`;
+                if (!altMap.has(key)) altMap.set(key, []);
+                altMap.get(key).push(entry);
+            }
+            const stillNotFound = await processChunks(altMap);
+            for (const entry of stillNotFound) {
+                updateFlakinessDisplay(entry.path, null, false);
+            }
+        }
+
+        worker.terminate();
+        flakinessWorker = null;
+    }
+
+    function formatFailRate(rate) {
+        return rate >= 10 ? Math.round(rate) + '%' : rate.toFixed(1) + '%';
+    }
+
+    function updateFlakinessDisplay(testPath, stats, hasMatchingMessage) {
+        const el = document.getElementById(`history-${testPath}`);
+        if (!el) return;
+
+        if (!stats) {
+            el.textContent = 'no history';
+            return;
+        }
+
+        const failCount = stats.failCount + stats.crashCount + stats.timeoutCount;
+        const failRate = stats.runCount > 0 ? (failCount / stats.runCount * 100) : 0;
+
+        const link = el.parentElement;
+        if (failRate === 0) {
+            link.className = 'history-link flaky-new';
+            el.textContent = 'New failure';
+            link.title = `${stats.runCount} runs, 100% pass rate over 21 days — this failure is new`;
+        } else {
+            const pct = formatFailRate(failRate);
+            if (hasMatchingMessage) {
+                link.className = 'history-link flaky-msg';
+                el.innerHTML = `${MITTEN}${pct} flaky (${failCount} failures with the same message)`;
+                link.title = `${pct} failure rate over 21 days (${stats.runCount} runs) — same failure message seen in history`;
+            } else {
+                link.className = 'history-link flaky';
+                el.textContent = `${pct} flaky`;
+                link.title = `${pct} failure rate over 21 days (${stats.runCount} runs)`;
+            }
+        }
     }
 
     function toggleTest(path) {
