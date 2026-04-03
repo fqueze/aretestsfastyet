@@ -524,6 +524,7 @@
         let selectionState = {
             hoveredCell: null,      // "variant|platform" or null
             hoveredDay: null,       // day index or null
+            hoveredIssueIndex: null, // index into allIssuesGlobal or null
             clickedCells: new Set(),
             clickedDays: new Set(),
             shiftAnchorDay: null,
@@ -535,6 +536,7 @@
         let allIssuesGlobal = null;
         let originalCellContent = new WeakMap();
         let dailyRateDataGlobal = null;
+        let testIdGlobal = null;
 
         // Format duration in milliseconds to human readable
         function formatDurationMs(ms, hasData = true) {
@@ -1568,6 +1570,20 @@
             updateSelection();
         }
 
+        // Hover handlers for issue items
+        function hoverIssue(item) {
+            const index = parseInt(item.dataset.issueIndex);
+            if (selectionState.hoveredIssueIndex === index) return;
+            selectionState.hoveredIssueIndex = index;
+            updateChartHighlight();
+        }
+
+        function unhoverIssue() {
+            if (selectionState.hoveredIssueIndex === null) return;
+            selectionState.hoveredIssueIndex = null;
+            updateChartHighlight();
+        }
+
         // === Cross-component selection & filtering ===
 
         function getActiveCells() {
@@ -1800,6 +1816,26 @@
             updateRuntimeForSelection();
         }
 
+        // Compute issue-filtered daily rates for a single issue
+        function computeIssueFilteredRates(issueIndex) {
+            if (!allIssuesGlobal || !dailyRateDataGlobal || testIdGlobal === null) return null;
+            const issue = allIssuesGlobal[issueIndex];
+            const dailyData = calculateIssueMessageDailyRates(testIdGlobal, issue.type, issue.message);
+            if (!dailyData) return null;
+
+            return dailyData.map((d, i) => {
+                const overall = dailyRateDataGlobal[i];
+                const totalNonSkip = overall.passes + overall.failures + overall.timeouts + overall.crashes;
+                const totalWithSkips = totalNonSkip + overall.skips;
+                return {
+                    failureRate: issue.type === 'FAIL' && totalNonSkip > 0 ? (d.count / totalNonSkip * 100) : 0,
+                    timeoutRate: issue.type === 'TIMEOUT' && totalNonSkip > 0 ? (d.count / totalNonSkip * 100) : 0,
+                    crashRate: issue.type === 'CRASH' && totalNonSkip > 0 ? (d.count / totalNonSkip * 100) : 0,
+                    skipRate: issue.type === 'SKIP' && totalWithSkips > 0 ? (d.count / totalWithSkips * 100) : 0,
+                };
+            });
+        }
+
         // Compute cell-filtered daily rates from dayJobMatrix
         function computeCellFilteredRates(activeCells) {
             if (!dayJobMatrix || !dailyRateDataGlobal) return null;
@@ -1827,16 +1863,18 @@
             });
         }
 
-        function updateSingleChartHighlight(chart, skipCellFilter) {
+        function updateSingleChartHighlight(chart, skipCellFilter, overrideRates) {
             if (!chart) return;
 
             const activeCells = getActiveCells();
             const activeDays = getActiveDays();
             const hasCellFilter = activeCells.size > 0 && !skipCellFilter;
             const hasDayFilter = activeDays.size > 0;
+            const hasOverride = overrideRates !== undefined && overrideRates !== null;
 
             // Build a cache key to skip chart.update() when nothing changed
-            const cellKey = hasCellFilter ? Array.from(activeCells).sort().join(',') : '';
+            const cellKey = hasOverride ? 'issue' + selectionState.hoveredIssueIndex :
+                            hasCellFilter ? Array.from(activeCells).sort().join(',') : '';
             const dayKey = hasDayFilter ? selectionState.hoveredDay + '|' + Array.from(selectionState.clickedDays).join(',') : '';
             const cacheKey = cellKey + '/' + dayKey;
             if (chart._lastHighlightKey === cacheKey) return;
@@ -1844,9 +1882,9 @@
 
             const numBars = chart.data.labels.length;
 
-            // Cell filter: split each bar into cell portion (normal color) + remainder (desaturated)
-            if (hasCellFilter) {
-                const filtered = computeCellFilteredRates(activeCells);
+            // Override rates (from issue hover) or cell filter
+            if (hasOverride || hasCellFilter) {
+                const filtered = hasOverride ? overrideRates : computeCellFilteredRates(activeCells);
                 if (filtered) {
                     for (const dataset of chart.data.datasets) {
                         if (dataset._isRemainder) {
@@ -1857,15 +1895,19 @@
                         }
                     }
                 }
-                // Store raw cell daily counts for tooltips
-                chart._cellDailyData = dayJobMatrix?.map(dayData => {
-                    const r = {failures: 0, timeouts: 0, crashes: 0, skips: 0};
-                    for (const cellKey of activeCells) {
-                        const cd = dayData[cellKey];
-                        if (cd) { r.failures += cd.failures; r.timeouts += cd.timeouts; r.crashes += cd.crashes; r.skips += cd.skips; }
-                    }
-                    return r;
-                });
+                // Store raw cell daily counts for tooltips (not for issue hover)
+                if (!hasOverride) {
+                    chart._cellDailyData = dayJobMatrix?.map(dayData => {
+                        const r = {failures: 0, timeouts: 0, crashes: 0, skips: 0};
+                        for (const cellKey of activeCells) {
+                            const cd = dayData[cellKey];
+                            if (cd) { r.failures += cd.failures; r.timeouts += cd.timeouts; r.crashes += cd.crashes; r.skips += cd.skips; }
+                        }
+                        return r;
+                    });
+                } else {
+                    chart._cellDailyData = null;
+                }
             } else {
                 for (const dataset of chart.data.datasets) {
                     if (dataset._isRemainder) {
@@ -1901,6 +1943,17 @@
         }
 
         function updateChartHighlight() {
+            // Issue hover overrides cell hover for chart filtering
+            const issueIdx = selectionState.hoveredIssueIndex;
+            if (issueIdx !== null && allIssuesGlobal) {
+                const issue = allIssuesGlobal[issueIdx];
+                const rates = computeIssueFilteredRates(issueIdx);
+                const isSkip = issue.type === 'SKIP';
+                updateSingleChartHighlight(failureRateChart, true, isSkip ? null : rates);
+                updateSingleChartHighlight(skipRateChart, true, isSkip ? rates : null);
+                return;
+            }
+
             const activeCells = getActiveCells();
             const { hasIssues, hasSkips } = activeCells.size > 0
                 ? getActiveCellIssueTypes(activeCells)
@@ -2259,9 +2312,9 @@
                 }
 
                 if (isExpandable) {
-                    html += `<div class="issue-item" data-issue-index="${index}" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                    html += `<div class="issue-item" data-issue-index="${index}" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)" onmouseenter="hoverIssue(this)" onmouseleave="unhoverIssue()">`;
                 } else {
-                    html += `<div class="issue-item" data-issue-index="${index}" style="cursor: default;">`;
+                    html += `<div class="issue-item" data-issue-index="${index}" style="cursor: default;" onmouseenter="hoverIssue(this)" onmouseleave="unhoverIssue()">`;
                 }
                 html += `<span class="issue-count"${tooltip ? ` title="${escapeAttr(tooltip)}"` : ''}>${count}</span>`;
                 html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
@@ -2597,6 +2650,7 @@
                 contentEl.innerHTML = renderPage(testPath, testInfo, stats, usedHarness);
 
                 // Build cross-component data structures
+                testIdGlobal = testInfo.testId;
                 dayJobMatrix = buildDayJobMatrix(testInfo.testId);
                 if (allIssuesGlobal) {
                     issueFilterData = buildIssueFilterData(testInfo.testId, allIssuesGlobal);
