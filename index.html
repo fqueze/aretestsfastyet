@@ -623,6 +623,7 @@
             ['skipRateContainer', createSkipRateChart],
             ['xpcshellBreakdownContainer', createBreakdownCharts],
         ]);
+        const createdCharts = new Set();
         const visibleContainers = new Set();
         let dataReady = false;
 
@@ -630,8 +631,9 @@
             for (const entry of entries) {
                 if (entry.isIntersecting) {
                     visibleContainers.add(entry.target.id);
-                    if (dataReady) {
+                    if (dataReady && !createdCharts.has(entry.target.id)) {
                         chartCreators.get(entry.target.id)();
+                        createdCharts.add(entry.target.id);
                     }
                 } else {
                     visibleContainers.delete(entry.target.id);
@@ -649,9 +651,13 @@
 
             requestAnimationFrame(() => {
                 updateStatsSummary();
+                // Recreate all visible charts; reset created state so
+                // off-screen charts get recreated when scrolled into view.
+                createdCharts.clear();
                 setTimeout(() => {
                     for (const id of visibleContainers) {
                         chartCreators.get(id)();
+                        createdCharts.add(id);
                     }
                 }, 0);
             });
