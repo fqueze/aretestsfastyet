@@ -397,8 +397,16 @@
             opacity: 1;
         }
 
+        #extra-args {
+            font-family: monospace;
+            font-size: 12px;
+            padding: 4px 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 200px;
+        }
         #reproduce-btn {
-            margin-left: 10px;
+            margin-left: 0;
         }
         #reproduce-btn:disabled {
             opacity: 0.5;
@@ -1362,6 +1370,7 @@ self.onmessage = function(e) {
             html += `<div class="summary-card"><div class="label">Intermittent ${MITTEN}</div><div class="value orange">${intermittentTests}</div></div>`;
         }
         html += '<div class="summary-actions">';
+        html += '<input id="extra-args" type="text" value="" placeholder="extra mach test args" title="Extra arguments appended to ./mach test <path> --headless" style="display:none">';
         html += '<button id="reproduce-btn" disabled title="Load failures first" onclick="reproduceFailures()" style="display:none">Reproduce Failures</button>';
         html += '<button id="repro-reset-btn" style="display:none; font-size: 12px; padding: 6px 10px;" onclick="clearCachedReproResults()" title="Clear cached reproduction results and re-test all failures">Reset</button>';
         html += '</div>';
@@ -1373,6 +1382,7 @@ self.onmessage = function(e) {
         container.innerHTML = html;
 
         if (isLocal) {
+            document.getElementById('extra-args').style.display = '';
             document.getElementById('reproduce-btn').style.display = '';
         }
 
@@ -2270,6 +2280,18 @@ self.onmessage = function(e) {
         renderTable();
     }
 
+    function getExtraArgs() {
+        const val = document.getElementById('extra-args')?.value?.trim() || '';
+        return val ? val.split(/\s+/) : [];
+    }
+
+    function getMachCmd(testPath) {
+        const extra = getExtraArgs();
+        const parts = ['./mach test', testPath, '--headless'];
+        if (extra.length) parts.push(...extra);
+        return parts.join(' ');
+    }
+
     function copyMachCmd(testPath, event) {
         const el = event.currentTarget;
         let text;
@@ -2278,11 +2300,11 @@ self.onmessage = function(e) {
             const msg = test?.commonMessage || test?.instances[0]?.message || '';
             text = `Follow the instructions in @../DEBUG_STANDALONE_TEST_FAILURES.md to debug this test failure.
 
-\`./mach test ${testPath} --headless\`
+\`${getMachCmd(testPath)}\`
 
 Error: ${msg}`;
         } else {
-            text = `./mach test ${testPath} --headless`;
+            text = getMachCmd(testPath);
         }
         navigator.clipboard.writeText(text).then(() => {
             const prev = el.innerHTML;
@@ -2672,7 +2694,7 @@ Error: ${msg}`;
             request_id: reqId,
             test: item.testPath,
             config: item.config,
-            extra_args: [],
+            extra_args: getExtraArgs(),
         }));
     }
 
