@@ -1133,7 +1133,7 @@
                         typeName = count === 1 ? 'crash' : 'crashes';
                         cellCount = chart._cellDailyData?.[dataIndex]?.crashes;
                     }
-                    if (count === 0 && (cellCount === null || cellCount === 0)) return null;
+                    if (count === 0) return null;
                     const total = data.passes + data.failures + data.timeouts + data.crashes;
                     const percentage = (total > 0 ? (count / total * 100) : 0).toFixed(1);
                     let line = `${formatNumber(count)} ${typeName} out of ${formatNumber(total)} runs (${percentage}%)`;
