@@ -334,6 +334,7 @@
         .historical-chart {
             margin: 0;
             padding: 0;
+            cursor: pointer;
         }
 
         .chart-wrap {
@@ -362,8 +363,24 @@
             line-height: 1.4;
         }
 
+        .cell-stack {
+            display: grid;
+        }
+
+        .cell-layer {
+            grid-area: 1 / 1;
+            align-self: center;
+            justify-self: start;
+        }
+
         .job-cell .issue-badge {
             margin-right: 0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .badge-pct {
+            display: inline-block;
+            text-align: right;
         }
 
         .job-cell br + .issue-badge {
@@ -466,8 +483,26 @@
             margin-bottom: 12px;
         }
 
-        .job-cell[data-variant]:hover {
+        .job-cell[data-variant]:hover:not(.no-hover) {
             background-color: #e8f0fe;
+        }
+
+        .job-cell.cell-selected {
+            background-color: #d0e4fd !important;
+        }
+
+        .issue-item.issue-hidden,
+        .historical-chart.issue-hidden,
+        .issue-runs.issue-hidden {
+            display: none !important;
+        }
+
+        .issue-filter-notice {
+            font-size: 12px;
+            color: #888;
+            font-style: italic;
+            font-weight: normal;
+            margin-left: 12px;
         }
     </style>
 </head>
@@ -484,6 +519,22 @@
         let overallDurations = [];
         let overallDurationRange = null;
         let overallHistogramBins = null;
+
+        // Cross-component selection state
+        let selectionState = {
+            hoveredCell: null,      // "variant|platform" or null
+            hoveredDay: null,       // day index or null
+            clickedCells: new Set(),
+            clickedDays: new Set(),
+            shiftAnchorDay: null,
+        };
+        let dayJobMatrix = null;
+        let issueFilterData = null;
+        let failureRateChart = null;
+        let skipRateChart = null;
+        let allIssuesGlobal = null;
+        let originalCellContent = new WeakMap();
+        let dailyRateDataGlobal = null;
 
         // Format duration in milliseconds to human readable
         function formatDurationMs(ms, hasData = true) {
@@ -973,6 +1024,31 @@
             return options;
         }
 
+        // Helper: create a pair of datasets (cell portion + remainder) for the chart
+        function makeDatasetPair(label, data, origBg, dimBg, origBorder, rateField) {
+            return [
+                {
+                    label,
+                    data: data.slice(),
+                    backgroundColor: origBg,
+                    borderColor: origBorder,
+                    borderWidth: 1,
+                    _origData: data,
+                    _rateField: rateField,
+                },
+                {
+                    label: label + ' (other)',
+                    data: new Array(data.length).fill(0),
+                    backgroundColor: dimBg,
+                    borderColor: dimBg,
+                    borderWidth: 0,
+                    _origData: data,
+                    _rateField: rateField,
+                    _isRemainder: true,
+                }
+            ];
+        }
+
         // Create daily failure rate chart (adapted from issues.html)
         // Canvases are pre-rendered with correct visibility and CSS classes by renderPage.
         function createFailureRateChart(canvasId, dailyData) {
@@ -991,90 +1067,179 @@
                 };
             });
 
-            if (canvas) {
-                new Chart(canvas, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            {
-                                label: 'Failure %',
-                                data: percentageData.map(d => d.failureRate),
-                                backgroundColor: 'rgba(255, 140, 0, 0.7)',
-                                borderColor: '#ff8c00',
-                                borderWidth: 1
-                            },
-                            {
-                                label: 'Timeout %',
-                                data: percentageData.map(d => d.timeoutRate),
-                                backgroundColor: 'rgba(255, 193, 7, 0.7)',
-                                borderColor: '#ffc107',
-                                borderWidth: 1
-                            },
-                            {
-                                label: 'Crash %',
-                                data: percentageData.map(d => d.crashRate),
-                                backgroundColor: 'rgba(220, 53, 69, 0.7)',
-                                borderColor: '#dc3545',
-                                borderWidth: 1
-                            }
-                        ]
-                    },
-                    options: getCommonChartOptions('% failures', function(context) {
-                        const dataIndex = context.dataIndex;
-                        const data = dailyData[dataIndex];
-                        const label = context.dataset.label;
-                        const percentage = context.parsed.y.toFixed(1);
+            let _chartPointerInside = false;
 
-                        let count = 0, typeName = '';
-                        if (label === 'Failure %') {
-                            count = data.failures;
-                            typeName = count === 1 ? 'failure' : 'failures';
-                        } else if (label === 'Timeout %') {
-                            count = data.timeouts;
-                            typeName = count === 1 ? 'timeout' : 'timeouts';
-                        } else if (label === 'Crash %') {
-                            count = data.crashes;
-                            typeName = count === 1 ? 'crash' : 'crashes';
-                        }
-                        if (count === 0) return null;
-                        const total = data.passes + data.failures + data.timeouts + data.crashes;
-                        return `${formatNumber(count)} ${typeName} out of ${formatNumber(total)} runs (${percentage}%)`;
-                    }, {
-                        stacked: true,
-                        tooltipFooter: function(tooltipItems) {
-                            const dataIndex = tooltipItems[0].dataIndex;
-                            const data = dailyData[dataIndex];
-                            return `Passes: ${formatNumber(data.passes)}`;
-                        }
-                    })
+            function chartHover(event, elements) {
+                // Ignore callbacks triggered by chart.update() after the pointer has left
+                if (!_chartPointerInside) return;
+                if (event.native) {
+                    event.native.target.style.cursor = elements.length > 0 ? 'pointer' : '';
+                }
+                const dayIndex = elements.length > 0 ? elements[0].index : null;
+                if (selectionState.hoveredDay !== dayIndex) {
+                    selectionState.hoveredDay = dayIndex;
+                    updateSelection();
+                }
+            }
+
+            function chartClick(event, elements) {
+                if (elements.length === 0) return;
+                const dayIndex = elements[0].index;
+                handleDayClick(dayIndex, event.native);
+            }
+
+            function chartMouseLeave() {
+                _chartPointerInside = false;
+                if (selectionState.hoveredDay !== null) {
+                    selectionState.hoveredDay = null;
+                    updateSelection();
+                }
+            }
+
+            if (canvas) {
+                const failureData = percentageData.map(d => d.failureRate);
+                const timeoutData = percentageData.map(d => d.timeoutRate);
+                const crashData = percentageData.map(d => d.crashRate);
+
+                const datasets = [
+                    ...makeDatasetPair('Failure %', failureData,
+                        'rgba(255, 140, 0, 0.7)', 'rgba(200, 180, 160, 0.18)', '#ff8c00', 'failureRate'),
+                    ...makeDatasetPair('Timeout %', timeoutData,
+                        'rgba(255, 193, 7, 0.7)', 'rgba(200, 185, 140, 0.18)', '#ffc107', 'timeoutRate'),
+                    ...makeDatasetPair('Crash %', crashData,
+                        'rgba(220, 53, 69, 0.7)', 'rgba(190, 150, 150, 0.18)', '#dc3545', 'crashRate'),
+                ];
+
+                const options = getCommonChartOptions('% failures', function(context) {
+                    if (context.dataset._isRemainder) return null;
+                    const dataIndex = context.dataIndex;
+                    const data = dailyData[dataIndex];
+                    const chart = context.chart;
+                    const label = context.dataset.label;
+
+                    let count = 0, typeName = '', cellCount = null;
+                    if (label === 'Failure %') {
+                        count = data.failures;
+                        typeName = count === 1 ? 'failure' : 'failures';
+                        cellCount = chart._cellDailyData?.[dataIndex]?.failures;
+                    } else if (label === 'Timeout %') {
+                        count = data.timeouts;
+                        typeName = count === 1 ? 'timeout' : 'timeouts';
+                        cellCount = chart._cellDailyData?.[dataIndex]?.timeouts;
+                    } else if (label === 'Crash %') {
+                        count = data.crashes;
+                        typeName = count === 1 ? 'crash' : 'crashes';
+                        cellCount = chart._cellDailyData?.[dataIndex]?.crashes;
+                    }
+                    if (count === 0 && (cellCount === null || cellCount === 0)) return null;
+                    const total = data.passes + data.failures + data.timeouts + data.crashes;
+                    const percentage = (total > 0 ? (count / total * 100) : 0).toFixed(1);
+                    let line = `${formatNumber(count)} ${typeName} out of ${formatNumber(total)} runs (${percentage}%)`;
+                    if (cellCount !== null && cellCount !== undefined) {
+                        line += ` \u2014 ${formatNumber(cellCount)} from selected job${cellCount !== count ? '' : 's'}`;
+                    }
+                    return line;
+                }, {
+                    stacked: true,
+                    tooltipFooter: function(tooltipItems) {
+                        const dataIndex = tooltipItems[0].dataIndex;
+                        const data = dailyData[dataIndex];
+                        return `Passes: ${formatNumber(data.passes)}`;
+                    }
+                });
+                options.onHover = chartHover;
+                options.onClick = chartClick;
+
+                failureRateChart = new Chart(canvas, {
+                    type: 'bar',
+                    data: { labels, datasets },
+                    options
                 });
             }
 
             if (skipCanvas) {
-                new Chart(skipCanvas, {
+                const skipData = percentageData.map(d => d.skipRate);
+
+                const skipDatasets = [
+                    ...makeDatasetPair('Skip %', skipData,
+                        'rgba(108, 117, 125, 0.7)', 'rgba(160, 160, 160, 0.15)', '#6c757d', 'skipRate'),
+                ];
+
+                const skipOptions = getCommonChartOptions('% skips', function(context) {
+                    if (context.dataset._isRemainder) return null;
+                    const dataIndex = context.dataIndex;
+                    const data = dailyData[dataIndex];
+                    const percentage = context.parsed.y.toFixed(1);
+                    if (data.skips === 0) return null;
+                    const total = data.passes + data.failures + data.timeouts + data.crashes + data.skips;
+                    const skipWord = data.skips === 1 ? 'skip' : 'skips';
+                    return `${formatNumber(data.skips)} ${skipWord} out of ${formatNumber(total)} scheduled runs (${percentage}%)`;
+                }, {
+                    stacked: true,
+                    hideXAxis: !!canvas
+                });
+                skipOptions.onHover = chartHover;
+                skipOptions.onClick = chartClick;
+
+                skipRateChart = new Chart(skipCanvas, {
                     type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Skip %',
-                            data: percentageData.map(d => d.skipRate),
-                            backgroundColor: 'rgba(108, 117, 125, 0.7)',
-                            borderColor: '#6c757d',
-                            borderWidth: 1
-                        }]
-                    },
-                    options: getCommonChartOptions('% skips', function(context) {
-                        const dataIndex = context.dataIndex;
-                        const data = dailyData[dataIndex];
-                        const percentage = context.parsed.y.toFixed(1);
-                        if (data.skips === 0) return null;
-                        const total = data.passes + data.failures + data.timeouts + data.crashes + data.skips;
-                        const skipWord = data.skips === 1 ? 'skip' : 'skips';
-                        return `${formatNumber(data.skips)} ${skipWord} out of ${formatNumber(total)} scheduled runs (${percentage}%)`;
-                    }, {
-                        hideXAxis: !!canvas
-                    })
+                    data: { labels, datasets: skipDatasets },
+                    options: skipOptions
+                });
+            }
+
+            // Make the entire chart section (including x-axis labels and gap) a hover/click target
+            const chartArea = document.getElementById('daily-chart-area');
+            if (chartArea) {
+                const refChart = failureRateChart || skipRateChart;
+
+                function getDayFromMouseEvent(e) {
+                    if (!refChart) return -1;
+                    const xScale = refChart.scales.x;
+                    if (!xScale) return -1;
+                    const rect = refChart.canvas.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const barWidth = xScale.width / xScale.ticks.length;
+                    const relX = mouseX - xScale.left;
+                    const dayIndex = Math.floor(relX / barWidth);
+                    return (dayIndex >= 0 && dayIndex < xScale.ticks.length) ? dayIndex : -1;
+                }
+
+                chartArea.addEventListener('mousemove', function(e) {
+                    _chartPointerInside = true;
+                    // Skip if Chart.js is handling this (mouse is over the chart plot area)
+                    if (e.target.tagName === 'CANVAS') {
+                        const chart = (e.target === failureRateChart?.canvas) ? failureRateChart :
+                                      (e.target === skipRateChart?.canvas) ? skipRateChart : null;
+                        if (chart) {
+                            const area = chart.chartArea;
+                            const rect = chart.canvas.getBoundingClientRect();
+                            const y = e.clientY - rect.top;
+                            // If mouse is within the plot area, let Chart.js onHover handle it
+                            if (y >= area.top && y <= area.bottom) return;
+                        }
+                    }
+                    // Mouse is on x-axis labels or in the gap between charts
+                    const dayIndex = getDayFromMouseEvent(e);
+                    if (dayIndex >= 0 && selectionState.hoveredDay !== dayIndex) {
+                        selectionState.hoveredDay = dayIndex;
+                        updateSelection();
+                    }
+                });
+                chartArea.addEventListener('mouseleave', chartMouseLeave);
+                chartArea.addEventListener('click', function(e) {
+                    if (e.target.tagName === 'CANVAS') {
+                        const chart = (e.target === failureRateChart?.canvas) ? failureRateChart :
+                                      (e.target === skipRateChart?.canvas) ? skipRateChart : null;
+                        if (chart) {
+                            const area = chart.chartArea;
+                            const rect = chart.canvas.getBoundingClientRect();
+                            const y = e.clientY - rect.top;
+                            if (y >= area.top && y <= area.bottom) return;
+                        }
+                    }
+                    const dayIndex = getDayFromMouseEvent(e);
+                    if (dayIndex >= 0) handleDayClick(dayIndex, e);
                 });
             }
         }
@@ -1389,20 +1554,572 @@
             const variant = cell.dataset.variant;
             const platform = cell.dataset.platform;
             if (!variant || !platform) return;
+            // Don't hover cells that are currently showing only PASS or em-dash
+            if (cell.classList.contains('no-hover')) return;
             const key = `${variant}|${platform}`;
-            const durations = cellDurationMap[key];
-            if (durations && durations.length > 0) {
-                const panel = document.getElementById('runtime-panel-content');
-                if (panel) {
-                    panel.innerHTML = renderRuntimePanelContent(`${variant} on ${platform}`, durations);
+            if (selectionState.hoveredCell === key) return;
+            selectionState.hoveredCell = key;
+            updateSelection();
+        }
+
+        function showOverallRuntime() {
+            if (selectionState.hoveredCell === null) return;
+            selectionState.hoveredCell = null;
+            updateSelection();
+        }
+
+        // === Cross-component selection & filtering ===
+
+        function getActiveCells() {
+            const cells = new Set(selectionState.clickedCells);
+            if (selectionState.hoveredCell) cells.add(selectionState.hoveredCell);
+            return cells;
+        }
+
+        function getActiveDays() {
+            const days = new Set(selectionState.clickedDays);
+            if (selectionState.hoveredDay !== null) days.add(selectionState.hoveredDay);
+            return days;
+        }
+
+        function handleCellClick(cell, event) {
+            event.stopPropagation();
+            const variant = cell.dataset.variant;
+            const platform = cell.dataset.platform;
+            if (!variant || !platform) return;
+            const key = `${variant}|${platform}`;
+
+            if (event.ctrlKey || event.metaKey) {
+                if (selectionState.clickedCells.has(key)) {
+                    selectionState.clickedCells.delete(key);
+                } else {
+                    selectionState.clickedCells.add(key);
+                }
+            } else {
+                if (selectionState.clickedCells.size === 1 && selectionState.clickedCells.has(key)) {
+                    selectionState.clickedCells.clear();
+                } else {
+                    selectionState.clickedCells.clear();
+                    selectionState.clickedCells.add(key);
+                }
+            }
+            updateSelection();
+        }
+
+        function handleDayClick(dayIndex, nativeEvent) {
+            if (nativeEvent.shiftKey && selectionState.shiftAnchorDay !== null) {
+                const start = Math.min(selectionState.shiftAnchorDay, dayIndex);
+                const end = Math.max(selectionState.shiftAnchorDay, dayIndex);
+                if (!nativeEvent.ctrlKey && !nativeEvent.metaKey) {
+                    selectionState.clickedDays.clear();
+                }
+                for (let d = start; d <= end; d++) {
+                    selectionState.clickedDays.add(d);
+                }
+            } else if (nativeEvent.ctrlKey || nativeEvent.metaKey) {
+                if (selectionState.clickedDays.has(dayIndex)) {
+                    selectionState.clickedDays.delete(dayIndex);
+                } else {
+                    selectionState.clickedDays.add(dayIndex);
+                }
+                selectionState.shiftAnchorDay = dayIndex;
+            } else {
+                if (selectionState.clickedDays.size === 1 && selectionState.clickedDays.has(dayIndex)) {
+                    selectionState.clickedDays.clear();
+                } else {
+                    selectionState.clickedDays.clear();
+                    selectionState.clickedDays.add(dayIndex);
+                }
+                selectionState.shiftAnchorDay = dayIndex;
+            }
+            updateSelection();
+        }
+
+        function buildDayJobMatrix(testId) {
+            const days = currentData.metadata.days || 21;
+            const matrix = [];
+            for (let d = 0; d < days; d++) matrix.push({});
+
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return matrix;
+
+            const ensureCell = (day, key) => {
+                if (!matrix[day][key]) matrix[day][key] = {passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0};
+                return matrix[day][key];
+            };
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = currentData.tables.statuses[statusId];
+                if (status === 'UNKNOWN') continue;
+                const isPass = status?.startsWith('PASS') || status === 'OK' || status === 'EXPECTED-FAIL';
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status?.startsWith('TIMEOUT');
+                const isFail = !isPass && !isSkip && !isCrash && !isTimeout;
+
+                const addCount = (cell, count) => {
+                    if (isPass) cell.passes += count;
+                    else if (isSkip) cell.skips += count;
+                    else if (isCrash) cell.crashes += count;
+                    else if (isTimeout) cell.timeouts += count;
+                    else if (isFail) cell.failures += count;
+                };
+
+                if (statusGroup.days !== undefined) {
+                    // Bucketed format (counts, durations, or taskIdIds with days)
+                    if (statusGroup.jobNameIds) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
+                            if (day >= days) continue;
+                            if (isSkip) {
+                                const messageId = statusGroup.messageIds?.[i];
+                                const msg = messageId !== null && messageId !== undefined ? currentData.tables.messages[messageId] : null;
+                                if (msg?.startsWith('run-if')) continue;
+                            }
+                            const jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
+                            const platform = extractPlatform(jobName) || 'unknown';
+                            const variant = extractVariant(jobName);
+                            addCount(ensureCell(day, `${variant}|${platform}`), getCountAtIndex(statusGroup, i));
+                        }
+                    } else if (statusGroup.taskIdIds) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
+                            if (day >= days) continue;
+                            for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                const platform = extractPlatform(jobName) || 'unknown';
+                                const variant = extractVariant(jobName);
+                                addCount(ensureCell(day, `${variant}|${platform}`), 1);
+                            }
+                        }
+                    }
+                } else if (statusGroup.timestamps && statusGroup.taskIdIds) {
+                    // Flat format with timestamps (daily data or non-bucketed aggregated)
+                    let currentTime = 0;
+                    for (let i = 0; i < statusGroup.timestamps.length; i++) {
+                        currentTime += statusGroup.timestamps[i];
+                        const day = Math.floor(currentTime / 86400);
+                        if (day >= days) continue;
+                        const taskIdIndex = statusGroup.taskIdIds[i];
+                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                        const platform = extractPlatform(jobName) || 'unknown';
+                        const variant = extractVariant(jobName);
+                        addCount(ensureCell(day, `${variant}|${platform}`), 1);
+                    }
+                }
+            }
+
+            return matrix;
+        }
+
+        function buildIssueFilterData(testId, allIssues) {
+            const testGroup = currentData.testRuns[testId];
+            if (!testGroup) return allIssues.map(() => ({ days: new Set(), cells: new Set(), dayCells: new Map() }));
+
+            const days = currentData.metadata.days || 21;
+
+            return allIssues.map(issue => {
+                const result = { days: new Set(), cells: new Set(), dayCells: new Map() };
+
+                const addDayCell = (day, cellKey) => {
+                    result.days.add(day);
+                    result.cells.add(cellKey);
+                    let cellSet = result.dayCells.get(day);
+                    if (!cellSet) { cellSet = new Set(); result.dayCells.set(day, cellSet); }
+                    cellSet.add(cellKey);
+                };
+
+                for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                    const statusGroup = testGroup[statusId];
+                    if (!statusGroup) continue;
+                    const status = currentData.tables.statuses[statusId];
+
+                    const matchesType =
+                        (issue.type === 'SKIP' && status === 'SKIP') ||
+                        (issue.type === 'FAIL' && status?.startsWith('FAIL')) ||
+                        (issue.type === 'CRASH' && status === 'CRASH') ||
+                        (issue.type === 'TIMEOUT' && status?.startsWith('TIMEOUT'));
+                    if (!matchesType) continue;
+
+                    const matchesEntry = (i) => {
+                        if (issue.type === 'TIMEOUT') return true;
+                        if (issue.type === 'SKIP' || issue.type === 'FAIL') {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const message = messageId !== null && messageId !== undefined ? currentData.tables.messages[messageId] : null;
+                            const clean = issue.type === 'SKIP' ? (message ? message.replace(/^skip-if:\s*/, '') : '') : message;
+                            return issue.message === FAILURE_NO_MESSAGE ? !clean : clean === issue.message;
+                        }
+                        if (issue.type === 'CRASH') {
+                            const sigId = statusGroup.crashSignatureIds?.[i];
+                            const sig = sigId !== null && sigId !== undefined ? currentData.tables.crashSignatures[sigId] : null;
+                            return sig === issue.message || (!sig && issue.message === 'Crash signature not recorded');
+                        }
+                        return false;
+                    };
+
+                    if (statusGroup.days !== undefined) {
+                        if (statusGroup.jobNameIds) {
+                            let day = 0;
+                            for (let i = 0; i < statusGroup.days.length; i++) {
+                                day += statusGroup.days[i];
+                                if (day >= days || !matchesEntry(i)) continue;
+                                const jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
+                                const platform = extractPlatform(jobName) || 'unknown';
+                                const variant = extractVariant(jobName);
+                                addDayCell(day, `${variant}|${platform}`);
+                            }
+                        } else if (statusGroup.taskIdIds) {
+                            let day = 0;
+                            for (let i = 0; i < statusGroup.days.length; i++) {
+                                day += statusGroup.days[i];
+                                if (day >= days || !matchesEntry(i)) continue;
+                                for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                    const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                    const platform = extractPlatform(jobName) || 'unknown';
+                                    const variant = extractVariant(jobName);
+                                    addDayCell(day, `${variant}|${platform}`);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return result;
+            });
+        }
+
+        function updateSelection() {
+            updateChartHighlight();
+            updateTableHighlight();
+            updateIssueListFilter();
+            updateRuntimeForSelection();
+        }
+
+        // Compute cell-filtered daily rates from dayJobMatrix
+        function computeCellFilteredRates(activeCells) {
+            if (!dayJobMatrix || !dailyRateDataGlobal) return null;
+            return dayJobMatrix.map((dayData, d) => {
+                let cellFailures = 0, cellTimeouts = 0, cellCrashes = 0, cellSkips = 0;
+                for (const cellKey of activeCells) {
+                    const cd = dayData[cellKey];
+                    if (cd) {
+                        cellFailures += cd.failures;
+                        cellTimeouts += cd.timeouts;
+                        cellCrashes += cd.crashes;
+                        cellSkips += cd.skips;
+                    }
+                }
+                // Use overall denominator so bars show the cell's subset of the total rate
+                const overall = dailyRateDataGlobal[d];
+                const totalNonSkip = overall.passes + overall.failures + overall.timeouts + overall.crashes;
+                const totalWithSkips = totalNonSkip + overall.skips;
+                return {
+                    failureRate: totalNonSkip > 0 ? (cellFailures / totalNonSkip * 100) : 0,
+                    timeoutRate: totalNonSkip > 0 ? (cellTimeouts / totalNonSkip * 100) : 0,
+                    crashRate: totalNonSkip > 0 ? (cellCrashes / totalNonSkip * 100) : 0,
+                    skipRate: totalWithSkips > 0 ? (cellSkips / totalWithSkips * 100) : 0,
+                };
+            });
+        }
+
+        function updateSingleChartHighlight(chart, skipCellFilter) {
+            if (!chart) return;
+
+            const activeCells = getActiveCells();
+            const activeDays = getActiveDays();
+            const hasCellFilter = activeCells.size > 0 && !skipCellFilter;
+            const hasDayFilter = activeDays.size > 0;
+
+            // Build a cache key to skip chart.update() when nothing changed
+            const cellKey = hasCellFilter ? Array.from(activeCells).sort().join(',') : '';
+            const dayKey = hasDayFilter ? selectionState.hoveredDay + '|' + Array.from(selectionState.clickedDays).join(',') : '';
+            const cacheKey = cellKey + '/' + dayKey;
+            if (chart._lastHighlightKey === cacheKey) return;
+            chart._lastHighlightKey = cacheKey;
+
+            const numBars = chart.data.labels.length;
+
+            // Cell filter: split each bar into cell portion (normal color) + remainder (desaturated)
+            if (hasCellFilter) {
+                const filtered = computeCellFilteredRates(activeCells);
+                if (filtered) {
+                    for (const dataset of chart.data.datasets) {
+                        if (dataset._isRemainder) {
+                            dataset.data = dataset._origData.map((val, i) =>
+                                Math.max(0, val - filtered[i][dataset._rateField]));
+                        } else {
+                            dataset.data = filtered.map(r => r[dataset._rateField]);
+                        }
+                    }
+                }
+                // Store raw cell daily counts for tooltips
+                chart._cellDailyData = dayJobMatrix?.map(dayData => {
+                    const r = {failures: 0, timeouts: 0, crashes: 0, skips: 0};
+                    for (const cellKey of activeCells) {
+                        const cd = dayData[cellKey];
+                        if (cd) { r.failures += cd.failures; r.timeouts += cd.timeouts; r.crashes += cd.crashes; r.skips += cd.skips; }
+                    }
+                    return r;
+                });
+            } else {
+                for (const dataset of chart.data.datasets) {
+                    if (dataset._isRemainder) {
+                        dataset.data = new Array(numBars).fill(0);
+                    } else {
+                        dataset.data = dataset._origData.slice();
+                    }
+                }
+                chart._cellDailyData = null;
+            }
+
+            // Store active days for the column highlight plugin
+            chart._hoveredDay = selectionState.hoveredDay;
+            chart._clickedDays = selectionState.clickedDays.size > 0 ? selectionState.clickedDays : null;
+
+            chart.update('none');
+        }
+
+        // Determine which issue types the active cells have across all days
+        function getActiveCellIssueTypes(activeCells) {
+            if (!dayJobMatrix || activeCells.size === 0) return { hasIssues: false, hasSkips: false };
+            let hasIssues = false, hasSkips = false;
+            for (const dayData of dayJobMatrix) {
+                for (const cellKey of activeCells) {
+                    const cd = dayData[cellKey];
+                    if (!cd) continue;
+                    if (cd.failures > 0 || cd.crashes > 0 || cd.timeouts > 0) hasIssues = true;
+                    if (cd.skips > 0) hasSkips = true;
+                    if (hasIssues && hasSkips) return { hasIssues, hasSkips };
+                }
+            }
+            return { hasIssues, hasSkips };
+        }
+
+        function updateChartHighlight() {
+            const activeCells = getActiveCells();
+            const { hasIssues, hasSkips } = activeCells.size > 0
+                ? getActiveCellIssueTypes(activeCells)
+                : { hasIssues: false, hasSkips: false };
+
+            // Only update a chart if the active cells are relevant to it
+            updateSingleChartHighlight(failureRateChart, activeCells.size > 0 && !hasIssues);
+            updateSingleChartHighlight(skipRateChart, activeCells.size > 0 && !hasSkips);
+        }
+
+        function updateTableHighlight() {
+            const activeDays = getActiveDays();
+            const hasDayFilter = activeDays.size > 0;
+
+            document.querySelectorAll('.job-cell[data-variant]').forEach(cell => {
+                const key = `${cell.dataset.variant}|${cell.dataset.platform}`;
+                cell.classList.toggle('cell-selected', selectionState.clickedCells.has(key));
+
+                const badges = cell.querySelectorAll('[data-type]');
+
+                if (hasDayFilter && dayJobMatrix) {
+                    cell._dayFiltered = true;
+                    // Sum counts for selected days only
+                    const f = {passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0};
+                    for (const day of activeDays) {
+                        const dayData = dayJobMatrix[day]?.[key];
+                        if (dayData) {
+                            f.passes += dayData.passes;
+                            f.failures += dayData.failures;
+                            f.timeouts += dayData.timeouts;
+                            f.crashes += dayData.crashes;
+                            f.skips += dayData.skips;
+                        }
+                    }
+                    const total = f.passes + f.failures + f.timeouts + f.crashes;
+                    const countOf = { fail: f.failures, crash: f.crashes, timeout: f.timeouts, pass: f.passes, skip: f.skips };
+
+                    const allIssuesHidden = f.failures === 0 && f.crashes === 0 && f.timeouts === 0;
+                    const noData = total === 0 && f.skips === 0;
+
+                    // Toggle overlay prefix badges (em-dash, prefix PASS)
+                    const hasPrefix = cell.querySelector('[data-prefix]') !== null;
+                    cell.querySelectorAll('[data-type="na"]').forEach(el => {
+                        el.style.display = noData ? '' : 'none';
+                    });
+                    cell.querySelectorAll('[data-prefix]').forEach(el => {
+                        const show = allIssuesHidden && f.passes > 0 && !noData;
+                        el.style.display = show ? '' : 'none';
+                        if (show) el.title = `${f.passes} run${f.passes !== 1 ? 's' : ''}`;
+                    });
+
+                    // Hide badges layer only when an overlay replaces it:
+                    // - noData: em-dash overlay
+                    // - hasPrefix && allIssuesHidden: prefix PASS overlay
+                    // For pass-only or skip-only cells (no prefix), layer stays visible.
+                    const layer = cell.querySelector('.badges-layer');
+                    if (layer) {
+                        layer.style.visibility = (noData || (hasPrefix && allIssuesHidden)) ? 'hidden' : '';
+                    }
+
+                    // Update individual badges within the layer
+                    badges.forEach(badge => {
+                        if (badge.dataset.prefix || badge.dataset.type === 'na') return;
+                        const type = badge.dataset.type;
+                        const count = countOf[type] || 0;
+                        if (type === 'pass') {
+                            badge.style.visibility = f.passes > 0 ? '' : 'hidden';
+                            if (f.passes > 0) badge.title = `${f.passes} run${f.passes !== 1 ? 's' : ''}`;
+                        } else if (type === 'skip') {
+                            badge.style.visibility = count > 0 ? '' : 'hidden';
+                            if (count > 0) badge.title = `${count} skip${count !== 1 ? 's' : ''}`;
+                        } else {
+                            badge.style.visibility = count > 0 ? '' : 'hidden';
+                            if (count > 0) {
+                                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+                                const pctEl = badge.querySelector('.badge-pct');
+                                if (pctEl) pctEl.textContent = `${pct}%`;
+                                else badge.textContent = `${type.toUpperCase()} ${pct}%`;
+                            }
+                        }
+                    });
+
+                    // Suppress hover on cells showing only PASS or em-dash
+                    const hasVisibleIssues = f.failures > 0 || f.crashes > 0 || f.timeouts > 0 || f.skips > 0;
+                    cell.classList.toggle('no-hover', !hasVisibleIssues);
+                } else if (cell._dayFiltered) {
+                    cell._dayFiltered = false;
+                    cell.innerHTML = originalCellContent.get(cell);
+                    cell.classList.toggle('no-hover', !cell.querySelector('.badges-layer [data-type="fail"], .badges-layer [data-type="crash"], .badges-layer [data-type="timeout"], .badges-layer [data-type="skip"]'));
+                }
+            });
+        }
+
+        function updateIssueListFilter() {
+            if (!issueFilterData) return;
+
+            const activeDays = getActiveDays();
+            const activeCells = getActiveCells();
+            const hasFilter = activeDays.size > 0 || activeCells.size > 0;
+
+            let visibleCount = 0;
+            let totalCount = 0;
+
+            document.querySelectorAll('.issue-item[data-issue-index]').forEach(item => {
+                totalCount++;
+                const index = parseInt(item.dataset.issueIndex);
+                const filterInfo = issueFilterData[index];
+
+                if (!hasFilter || !filterInfo) {
+                    item.classList.remove('issue-hidden');
+                    visibleCount++;
+                    // Unhide associated elements
+                    const issueId = item.dataset.issueId;
+                    if (issueId) {
+                        const chartEl = document.getElementById(`${issueId}-chart`);
+                        const runsEl = document.getElementById(`${issueId}-runs`);
+                        if (chartEl) chartEl.classList.remove('issue-hidden');
+                        if (runsEl) runsEl.classList.remove('issue-hidden');
+                    }
+                    return;
+                }
+
+                let visible = false;
+                const hasDayFilter = activeDays.size > 0;
+                const hasCellFilter = activeCells.size > 0;
+
+                if (hasDayFilter && hasCellFilter) {
+                    // Both active: issue must have occurred on a selected day AND on a selected cell ON THAT SAME DAY
+                    for (const day of activeDays) {
+                        const cellsOnDay = filterInfo.dayCells.get(day);
+                        if (!cellsOnDay) continue;
+                        for (const cell of activeCells) {
+                            if (cellsOnDay.has(cell)) { visible = true; break; }
+                        }
+                        if (visible) break;
+                    }
+                } else if (hasDayFilter) {
+                    for (const day of activeDays) {
+                        if (filterInfo.days.has(day)) { visible = true; break; }
+                    }
+                } else if (hasCellFilter) {
+                    for (const cell of activeCells) {
+                        if (filterInfo.cells.has(cell)) { visible = true; break; }
+                    }
+                }
+
+                item.classList.toggle('issue-hidden', !visible);
+                if (visible) visibleCount++;
+
+                const issueId = item.dataset.issueId;
+                if (issueId) {
+                    const chartEl = document.getElementById(`${issueId}-chart`);
+                    const runsEl = document.getElementById(`${issueId}-runs`);
+                    if (chartEl) chartEl.classList.toggle('issue-hidden', !visible);
+                    if (runsEl) runsEl.classList.toggle('issue-hidden', !visible);
+                }
+            });
+
+            const notice = document.getElementById('issue-filter-notice');
+            if (notice) {
+                if (hasFilter) {
+                    const parts = [];
+                    if (activeDays.size > 0 && dailyRateDataGlobal) {
+                        const dates = Array.from(activeDays).sort((a, b) => a - b)
+                            .map(d => dailyRateDataGlobal[d]?.date).filter(Boolean);
+                        if (dates.length === 1) parts.push(dates[0]);
+                        else if (dates.length <= 3) parts.push(dates.join(', '));
+                        else parts.push(`${dates[0]} \u2013 ${dates[dates.length - 1]}`);
+                    }
+                    if (activeCells.size > 0) {
+                        const cellNames = Array.from(activeCells).map(k => {
+                            const [variant, platform] = k.split('|');
+                            return `${variant} on ${platform}`;
+                        });
+                        if (cellNames.length === 1) parts.push(cellNames[0]);
+                        else parts.push(`${activeCells.size} jobs`);
+                    }
+                    notice.style.display = '';
+                    notice.textContent = `\u2014 ${visibleCount} of ${totalCount} shown` +
+                        (parts.length ? ` (${parts.join(', ')})` : '');
+                } else {
+                    notice.style.display = 'none';
                 }
             }
         }
 
-        function showOverallRuntime() {
+        let _lastRuntimeKey = 'overall';
+        function updateRuntimeForSelection() {
+            const activeCells = getActiveCells();
             const panel = document.getElementById('runtime-panel-content');
-            if (panel && overallDurations.length > 0) {
-                panel.innerHTML = renderRuntimePanelContent('Overall', overallDurations);
+            if (!panel) return;
+
+            // Build a key to avoid re-rendering when cells haven't changed
+            const key = activeCells.size === 0 ? 'overall' : Array.from(activeCells).sort().join(',');
+            if (key === _lastRuntimeKey) return;
+            _lastRuntimeKey = key;
+
+            if (activeCells.size === 0) {
+                if (overallDurations.length > 0) {
+                    panel.innerHTML = renderRuntimePanelContent('Overall', overallDurations);
+                }
+                return;
+            }
+
+            let combined = [];
+            for (const k of activeCells) {
+                if (cellDurationMap[k]) combined.push(...cellDurationMap[k]);
+            }
+
+            if (combined.length > 0) {
+                let title;
+                if (activeCells.size === 1) {
+                    const [k] = activeCells;
+                    const [variant, platform] = k.split('|');
+                    title = `${variant} on ${platform}`;
+                } else {
+                    title = `${activeCells.size} selected cells`;
+                }
+                panel.innerHTML = renderRuntimePanelContent(title, combined);
             }
         }
 
@@ -1457,7 +2174,7 @@
             if (hasIssues || hasSkips) {
                 html += `<div class="section">`;
                 html += `<h2>Daily Issue Rates</h2>`;
-                html += `<div class="historical-chart">`;
+                html += `<div class="historical-chart" id="daily-chart-area">`;
                 if (hasIssues) {
                     html += `<div class="chart-wrap"><canvas id="daily-rate-canvas"></canvas></div>`;
                 }
@@ -1522,9 +2239,10 @@
             if (allIssues.length === 0) return '';
 
             allIssues.sort((a, b) => b.count - a.count);
+            allIssuesGlobal = allIssues;
 
-            let html = `<div class="section">`;
-            html += `<h2>Issue Details</h2>`;
+            let html = `<div class="section" id="issue-details-section">`;
+            html += `<h2>Issue Details<span id="issue-filter-notice" class="issue-filter-notice" style="display: none;"></span></h2>`;
             html += `<div class="issue-section">`;
 
             allIssues.forEach(({ count, type, message }, index) => {
@@ -1541,9 +2259,9 @@
                 }
 
                 if (isExpandable) {
-                    html += `<div class="issue-item" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
+                    html += `<div class="issue-item" data-issue-index="${index}" data-issue-id="${issueId}" data-test-path="${escapeAttr(testPath)}" data-test-id="${testInfo.testId}" data-issue-type="${type}" data-issue-message="${escapedMessage}" onclick="toggleIssueRuns(this, event)">`;
                 } else {
-                    html += `<div class="issue-item" style="cursor: default;">`;
+                    html += `<div class="issue-item" data-issue-index="${index}" style="cursor: default;">`;
                 }
                 html += `<span class="issue-count"${tooltip ? ` title="${escapeAttr(tooltip)}"` : ''}>${count}</span>`;
                 html += `<span class="issue-badge ${badgeClass}">${type}</span>`;
@@ -1712,10 +2430,22 @@
                     const total = d.passes + d.failures + d.timeouts + d.crashes;
                     const issues = d.failures + d.timeouts + d.crashes;
 
-                    html += `<td class="job-cell" data-variant="${escapeAttr(variant)}" data-platform="${escapeAttr(platform)}" onmouseenter="showCellRuntime(this)" onmouseleave="showOverallRuntime()">`;
+                    html += `<td class="job-cell" data-variant="${escapeAttr(variant)}" data-platform="${escapeAttr(platform)}" onmouseenter="showCellRuntime(this)" onmouseleave="showOverallRuntime()" onclick="handleCellClick(this, event)">`;
+
+                    // Grid stack: overlay layers share the same cell area.
+                    // - em-dash layer (display:none): shown for no-run days
+                    // - prefix PASS layer (display:none): shown for pass-only days in issue cells
+                    // - main badges layer (always present, uses visibility for filtering)
+                    html += `<div class="cell-stack">`;
+                    html += `<span class="cell-layer job-na" data-type="na" style="display:none">\u2014</span>`;
+                    if (issues > 0 && d.passes > 0) {
+                        html += `<span class="cell-layer issue-badge badge-pass" data-type="pass" data-prefix="1" style="display:none">PASS</span>`;
+                    }
+
+                    html += `<div class="cell-layer badges-layer">`;
+                    const lines = [];
 
                     if (issues > 0) {
-                        // Build shared tooltip with a line per issue type
                         const tooltipLines = [];
                         if (d.failures > 0) tooltipLines.push(`${d.failures} failure${d.failures !== 1 ? 's' : ''}`);
                         if (d.crashes > 0) tooltipLines.push(`${d.crashes} crash${d.crashes !== 1 ? 'es' : ''}`);
@@ -1724,26 +2454,23 @@
                         tooltipLines.push(`${total} total runs`);
                         const tooltip = escapeAttr(tooltipLines.join('\n'));
 
-                        const badges = [];
                         if (d.failures > 0) {
                             const pct = ((d.failures / total) * 100).toFixed(1);
-                            badges.push(`<span class="issue-badge badge-fail" title="${tooltip}">FAIL ${pct}%</span>`);
+                            lines.push(`<span class="issue-badge badge-fail "data-type="fail" title="${tooltip}"><span>FAIL</span><span class="badge-pct">${pct}%</span></span>`);
                         }
                         if (d.crashes > 0) {
                             const pct = ((d.crashes / total) * 100).toFixed(1);
-                            badges.push(`<span class="issue-badge badge-crash" title="${tooltip}">CRASH ${pct}%</span>`);
+                            lines.push(`<span class="issue-badge badge-crash "data-type="crash" title="${tooltip}"><span>CRASH</span><span class="badge-pct">${pct}%</span></span>`);
                         }
                         if (d.timeouts > 0) {
                             const pct = ((d.timeouts / total) * 100).toFixed(1);
-                            badges.push(`<span class="issue-badge badge-timeout" title="${tooltip}">TIMEOUT ${pct}%</span>`);
+                            lines.push(`<span class="issue-badge badge-timeout "data-type="timeout" title="${tooltip}"><span>TIMEOUT</span><span class="badge-pct">${pct}%</span></span>`);
                         }
-                        html += badges.join('<br>');
                     } else if (total > 0) {
-                        html += `<span class="issue-badge badge-pass" title="${escapeAttr(`${d.passes} run${d.passes !== 1 ? 's' : ''}`)}">PASS</span>`;
+                        lines.push(`<span class="issue-badge badge-pass" data-type="pass" title="${escapeAttr(`${d.passes} run${d.passes !== 1 ? 's' : ''}`)}">PASS</span>`);
                     }
 
                     if (d.skips > 0) {
-                        if (total > 0) html += '<br>';
                         const skipCount = `${d.skips} skip${d.skips !== 1 ? 's' : ''}`;
                         let skipTooltip;
                         if (d.skipMessages.size === 1) {
@@ -1758,8 +2485,11 @@
                         } else {
                             skipTooltip = skipCount;
                         }
-                        html += `<span class="issue-badge badge-skip" title="${escapeAttr(skipTooltip)}">SKIP</span>`;
+                        lines.push(`<span class="issue-badge badge-skip" data-type="skip" title="${escapeAttr(skipTooltip)}">SKIP</span>`);
                     }
+
+                    html += lines.join('<br>');
+                    html += `</div></div>`;
 
                     html += `</td>`;
                 }
@@ -1866,6 +2596,12 @@
                 // Render page (replaces the initial header)
                 contentEl.innerHTML = renderPage(testPath, testInfo, stats, usedHarness);
 
+                // Build cross-component data structures
+                dayJobMatrix = buildDayJobMatrix(testInfo.testId);
+                if (allIssuesGlobal) {
+                    issueFilterData = buildIssueFilterData(testInfo.testId, allIssuesGlobal);
+                }
+
                 // Insert job table and runtime panel side by side
                 const runtimeSections = document.getElementById('runtime-sections');
                 if (runtimeSections) {
@@ -1889,13 +2625,74 @@
                     }
                 }
 
+                // Measure worst-case percentage width and lock min-width on .badge-pct spans
+                const measureEl = document.createElement('span');
+                measureEl.className = 'badge-pct';
+                measureEl.style.cssText = 'position:absolute;visibility:hidden;font-size:10px;font-weight:bold;font-variant-numeric:tabular-nums;display:inline-block;text-align:right;';
+                document.body.appendChild(measureEl);
+                measureEl.textContent = '100.0%';
+                const pctMinWidth = measureEl.offsetWidth + 'px';
+                document.body.removeChild(measureEl);
+
+                // Lock issue details section height to prevent scroll jumps when filtering
+                const issueSection = document.getElementById('issue-details-section');
+                if (issueSection) {
+                    issueSection.style.minHeight = issueSection.offsetHeight + 'px';
+                }
+
+                // Store original cell content and apply min-widths for table filtering
+                document.querySelectorAll('.job-cell[data-variant]').forEach(cell => {
+                    cell.querySelectorAll('.badge-pct').forEach(span => {
+                        span.style.minWidth = pctMinWidth;
+                    });
+                    // Suppress hover on pass-only cells
+                    if (!cell.querySelector('.badges-layer [data-type="fail"], .badges-layer [data-type="crash"], .badges-layer [data-type="timeout"], .badges-layer [data-type="skip"]')) {
+                        cell.classList.add('no-hover');
+                    }
+                    originalCellContent.set(cell, cell.innerHTML);
+                });
+
                 // Load Chart.js for daily rate charts (canvases already rendered with correct layout)
                 if (document.getElementById('daily-rate-canvas') || document.getElementById('daily-skips-canvas')) {
-                    const dailyRateData = calculateDailyFailureRates(testInfo.testId);
+                    dailyRateDataGlobal = calculateDailyFailureRates(testInfo.testId);
+                    const dailyRateData = dailyRateDataGlobal;
                     const chartScript = document.createElement('script');
                     chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
                     chartScript.async = true;
                     chartScript.onload = function() {
+                        // Register global plugin for day column highlighting
+                        Chart.register({
+                            id: 'dayColumnHighlight',
+                            beforeDatasetsDraw(chart) {
+                                const hovered = chart._hoveredDay;
+                                const clicked = chart._clickedDays;
+                                if (hovered === null && !clicked) return;
+
+                                const ctx = chart.ctx;
+                                const xScale = chart.scales.x;
+                                const chartArea = chart.chartArea;
+                                const barWidth = xScale.width / xScale.ticks.length;
+
+                                ctx.save();
+                                // Draw clicked day backgrounds (selected blue)
+                                if (clicked) {
+                                    ctx.fillStyle = '#d0e4fd';
+                                    for (const dayIdx of clicked) {
+                                        const x = xScale.getPixelForValue(dayIdx);
+                                        ctx.fillRect(x - barWidth / 2, chartArea.top,
+                                                     barWidth, chartArea.bottom - chartArea.top);
+                                    }
+                                }
+                                // Draw hovered day background (hover blue)
+                                if (hovered !== null && (!clicked || !clicked.has(hovered))) {
+                                    ctx.fillStyle = '#e8f0fe';
+                                    const x = xScale.getPixelForValue(hovered);
+                                    ctx.fillRect(x - barWidth / 2, chartArea.top,
+                                                 barWidth, chartArea.bottom - chartArea.top);
+                                }
+                                ctx.restore();
+                            }
+                        });
                         createFailureRateChart('daily-rate-canvas', dailyRateData);
                     };
                     document.head.appendChild(chartScript);
