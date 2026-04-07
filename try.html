@@ -579,7 +579,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Try Push Results</h1>
+        <h1 id="page-heading">Try Push Results</h1>
 
         <div class="controls" id="input-section">
             <div class="revision-input">
@@ -1346,6 +1346,16 @@ self.onmessage = function(e) {
         }
         html += '</div>';
         container.innerHTML = html;
+
+        // Update heading and tab title with repo name and commit message.
+        const repoLabel = currentRepo.charAt(0).toUpperCase() + currentRepo.slice(1);
+        const mainRev = displayRevs[displayRevs.length - 1] || revisions[0];
+        const commitMsg = mainRev?.comments?.split('\n')[0];
+        document.getElementById('page-heading').textContent =
+            repoLabel + ' Push Results';
+        document.title = commitMsg
+            ? repoLabel + ': ' + commitMsg
+            : repoLabel + ' Push Results';
     }
 
     function renderResults(failures, totalJobs, failedJobCount, treeherderUrl) {
