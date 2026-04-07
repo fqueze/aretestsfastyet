@@ -47,6 +47,7 @@
             'tsan': '#8c564b',
             'ccov': '#e377c2',
             'msix': '#17becf',
+            'standalone': '#bcbd22',
             'condprof': '#ffa500',
             'debug-isolated-process': '#ffa500'
         };
@@ -85,6 +86,7 @@
                         const isTsan = row.name.includes('-tsan');
                         const isCcov = row.name.includes('-ccov');
                         const isMsix = row.name.includes('-msix');
+                        const isStandalone = row.name.includes('-standalone');
                         const isCondprof = row.name.includes('-condprof');
                         const isIsolatedProcess = row.name.includes('-isolated-process');
                         let buildType;
@@ -96,6 +98,8 @@
                             buildType = 'ccov';
                         } else if (isMsix) {
                             buildType = 'msix';
+                        } else if (isStandalone) {
+                            buildType = 'standalone';
                         } else if (isCondprof) {
                             buildType = 'condprof';
                         } else if (isDebug && isIsolatedProcess) {
@@ -256,7 +260,7 @@
 
             if (platformData.length > 0) {
                 container.innerHTML = ''; // Remove loading placeholder
-                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'condprof', 'debug-isolated-process'];
+                const buildTypes = ['debug', 'opt', 'asan', 'tsan', 'ccov', 'msix', 'standalone', 'condprof', 'debug-isolated-process'];
                 createScatterPlot(container, platformData, platform, currentRepository, colors, buildTypes);
                 container.dataset.loaded = 'true';
 
