@@ -1217,7 +1217,15 @@ self.onmessage = function(e) {
                 for (const bt of extractBuildTypes(job.jobName)) globalBuildTypes.add(bt);
             }
 
-            const failures = aggregateFailures(result.timings, globalPlatforms, globalBuildTypes);
+            // Count total completed test job runs per jobName (for intermittent ratio display).
+            const jobRunCounts = new Map(); // jobName -> number of runs
+            for (const job of jobs) {
+                if (job.state === 'completed' && isTestJob(job.jobName)) {
+                    jobRunCounts.set(job.jobName, (jobRunCounts.get(job.jobName) || 0) + 1);
+                }
+            }
+
+            const failures = aggregateFailures(result.timings, globalPlatforms, globalBuildTypes, jobRunCounts);
             currentFailures = failures;
             setProgress(-1);
 
@@ -1257,7 +1265,7 @@ self.onmessage = function(e) {
                status === 'UNEXPECTED-PASS';
     }
 
-    function aggregateFailures(allTimings, globalPlatforms, globalBuildTypes) {
+    function aggregateFailures(allTimings, globalPlatforms, globalBuildTypes, jobRunCounts) {
         const testMap = new Map();
 
         for (const t of allTimings) {
@@ -1292,6 +1300,11 @@ self.onmessage = function(e) {
                 entry.commonMessage = messages[0];
             }
             entry.intermittentCount = entry.instances.filter(i => i.intermittent).length;
+            // Total runs across all job names that ran this test.
+            entry.totalJobRuns = 0;
+            for (const jobName of entry.jobs) {
+                entry.totalJobRuns += jobRunCounts.get(jobName) || 0;
+            }
             // Pre-sort for rendering
             entry.sortedPlatforms = sortedPlatforms(entry.platforms);
             entry.sortedBuildTypes = sortedBuildTypes(entry.buildTypes);
@@ -1388,6 +1401,7 @@ self.onmessage = function(e) {
         html += '</div>';
 
         html += '<div id="failure-table-container"></div>';
+        html += '<div id="intermittent-table-container"></div>';
         html += '<div id="unblamed-table-container"></div>';
 
         container.innerHTML = html;
@@ -1448,6 +1462,7 @@ self.onmessage = function(e) {
 
     function renderTable() {
         const container = document.getElementById('failure-table-container');
+        const intermittentContainer = document.getElementById('intermittent-table-container');
         if (!currentFailures) return;
 
         let tests = getFilteredTests();
@@ -1466,17 +1481,49 @@ self.onmessage = function(e) {
             return asc ? va - vb : vb - va;
         });
 
+        const nonIntermittent = tests.filter(t => t.intermittentCount !== t.instances.length);
+        const intermittent = tests.filter(t => t.intermittentCount === t.instances.length);
+
+        const hasRepro = reproState.size > 0;
+
+        container.innerHTML = renderTestTable(nonIntermittent, hasRepro, true, false);
+
+        if (intermittent.length > 0) {
+            intermittentContainer.innerHTML =
+                `<h3 style="margin: 20px 0 8px; font-size: 14px; color: #666;">Intermittent failures ${MITTEN}</h3>` +
+                renderTestTable(intermittent, hasRepro, false, true);
+        } else {
+            intermittentContainer.innerHTML = '';
+        }
+
+        loadVisibleReproLogs();
+
+        // Restore cached flakiness data after re-render.
+        for (const [path, { stats, hasMatchingMessage }] of flakinessCache) {
+            updateFlakinessDisplay(path, stats, hasMatchingMessage);
+        }
+    }
+
+    function renderTestTable(tests, hasRepro, sortable, showJobCount) {
         const arrow = c => currentSort.column === c ? (currentSort.ascending ? ' &#9650;' : ' &#9660;') : '';
         const cls = c => currentSort.column === c ? ' class="active"' : '';
 
         let html = '<table class="failure-table">';
         html += '<thead><tr>';
-        html += `<th${cls('count')} onclick="sortTable('count')" style="width: 24px">#${arrow('count')}</th>`;
-        html += `<th${cls('status')} onclick="sortTable('status')" style="width: 65px">Status${arrow('status')}</th>`;
+        if (sortable) {
+            html += `<th${cls('count')} onclick="sortTable('count')" style="width: 24px">#${arrow('count')}</th>`;
+            html += `<th${cls('status')} onclick="sortTable('status')" style="width: 65px">Status${arrow('status')}</th>`;
+        } else {
+            html += '<th class="no-sort" style="width: 24px">#</th>';
+            html += '<th class="no-sort" style="width: 65px">Status</th>';
+        }
         html += `<th class="no-sort" style="width: 55px">OS</th>`;
         html += `<th class="no-sort" style="width: 55px">Build</th>`;
-        html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
-        const hasRepro = reproState.size > 0;
+        if (sortable) {
+            html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
+        } else {
+            html += '<th class="no-sort">Test</th>';
+        }
         html += `<th class="no-sort" style="width: ${hasRepro || isLocal ? 38 : 20}px"></th>`;
         html += '</tr></thead><tbody>';
 
@@ -1485,8 +1532,10 @@ self.onmessage = function(e) {
             const countClass = test.instances.length >= 5 ? 'high' : test.instances.length >= 2 ? 'medium' : 'low';
 
             html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleTest('${escapeAttr(test.path)}')" title="Click to expand">`;
-            const intermittentHtml = test.intermittentCount === test.instances.length ? ' ' + MITTEN : '';
-            html += `<td class="count-cell ${countClass}">${test.instances.length}${intermittentHtml}</td>`;
+            const countText = showJobCount
+                ? `<span title="Failed in ${test.instances.length} of ${test.totalJobRuns} job runs">${test.instances.length}<span class="all-configs">/${test.totalJobRuns}</span></span>`
+                : `${test.instances.length}`;
+            html += `<td class="count-cell ${countClass}">${countText}</td>`;
             html += '<td>';
             for (const s of test.statuses) {
                 html += `<span class="status-badge status-${s}">${s}</span> `;
@@ -1517,13 +1566,7 @@ self.onmessage = function(e) {
         }
 
         html += '</tbody></table>';
-        container.innerHTML = html;
-        loadVisibleReproLogs();
-
-        // Restore cached flakiness data after re-render.
-        for (const [path, { stats, hasMatchingMessage }] of flakinessCache) {
-            updateFlakinessDisplay(path, stats, hasMatchingMessage);
-        }
+        return html;
     }
 
     async function renderUnblamedJobs() {
