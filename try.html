@@ -622,7 +622,8 @@
     let currentFailures = null;
     let currentUnblamedJobs = [];
     let currentSort = { column: 'count', ascending: false };
-    let currentSearch = '';
+    let currentSearchTerm = '';
+    let currentSearchNegate = false;
     let expandedTests = new Set();
     let expandedUnblamed = new Set();
     let unblamedGroups = null; // cached after first fetch
@@ -1399,7 +1400,12 @@ self.onmessage = function(e) {
         initSearchBox({
             searchBoxId: 'search-box',
             searchClearId: 'search-clear',
-            onSearch: () => { currentSearch = document.getElementById('search-box').value.toLowerCase(); renderTable(); renderUnblamedJobs(); },
+            onSearch: () => {
+                const raw = document.getElementById('search-box').value.toLowerCase();
+                currentSearchNegate = raw.startsWith('!');
+                currentSearchTerm = currentSearchNegate ? raw.slice(1) : raw;
+                renderTable(); renderUnblamedJobs();
+            },
             updateUrlHash: () => {},
         });
 
@@ -1413,14 +1419,29 @@ self.onmessage = function(e) {
         if (isLocal) connectReproServer();
     }
 
+    function matchesSearch(text) {
+        if (currentSearchNegate) {
+            return !text.toLowerCase().includes(currentSearchTerm);
+        }
+        return text.toLowerCase().includes(currentSearchTerm);
+    }
+
     function getFilteredTests() {
         let tests = currentFailures.tests;
-        if (currentSearch) {
-            tests = tests.filter(t =>
-                t.path.toLowerCase().includes(currentSearch) ||
-                t.instances.some(i => i.message?.toLowerCase().includes(currentSearch)) ||
-                t.instances.some(i => i.jobName.toLowerCase().includes(currentSearch))
-            );
+        if (currentSearchTerm) {
+            if (currentSearchNegate) {
+                tests = tests.filter(t =>
+                    !t.path.toLowerCase().includes(currentSearchTerm) &&
+                    !t.instances.some(i => i.message?.toLowerCase().includes(currentSearchTerm)) &&
+                    !t.instances.some(i => i.jobName.toLowerCase().includes(currentSearchTerm))
+                );
+            } else {
+                tests = tests.filter(t =>
+                    t.path.toLowerCase().includes(currentSearchTerm) ||
+                    t.instances.some(i => i.message?.toLowerCase().includes(currentSearchTerm)) ||
+                    t.instances.some(i => i.jobName.toLowerCase().includes(currentSearchTerm))
+                );
+            }
         }
         return tests;
     }
@@ -1557,10 +1578,13 @@ self.onmessage = function(e) {
         // Apply search filter: filter jobs within each group, skip empty groups.
         const filteredGroups = new Map();
         for (const [key, group] of unblamedGroups) {
-            const jobs = currentSearch
-                ? group.jobs.filter(j =>
-                    j.jobName.toLowerCase().includes(currentSearch) ||
-                    group.lines.some(l => l.toLowerCase().includes(currentSearch)))
+            const jobs = currentSearchTerm
+                ? group.jobs.filter(j => {
+                    const matches =
+                        j.jobName.toLowerCase().includes(currentSearchTerm) ||
+                        group.lines.some(l => l.toLowerCase().includes(currentSearchTerm));
+                    return currentSearchNegate ? !matches : matches;
+                  })
                 : group.jobs;
             if (jobs.length > 0) {
                 filteredGroups.set(key, { lines: group.lines, jobs });
