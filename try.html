@@ -379,22 +379,38 @@
         .history-link:hover {
             text-decoration: underline;
         }
-        .history-link.flaky {
-            font-family: monospace;
+        .flakiness-cell {
+            text-align: right;
+            white-space: nowrap;
+        }
+        .flakiness-cell.flaky-new {
             color: #c00;
         }
-        .history-link.flaky-new {
-            font-family: monospace;
-            color: #c00;
-        }
-        .history-link.flaky-new::before {
-            content: '\26a0\fe0f';
-            margin-right: 4px;
-        }
-        .history-link.flaky-msg {
-            font-family: monospace;
+        .flakiness-cell.flaky-msg {
             color: #e65100;
-            opacity: 1;
+        }
+        .flakiness-cell.flaky {
+            color: #c00;
+        }
+        .flakiness-cell a {
+            font-family: monospace;
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+            color: inherit;
+            text-decoration: none;
+        }
+        .flakiness-cell a:hover {
+            text-decoration: underline;
+        }
+        .failure-table th .mitten::before {
+            vertical-align: 0;
+            margin-right: 0;
+            background-color: #555;
+        }
+        .flakiness-cell .mitten::before {
+            vertical-align: -1px;
+            margin-left: -12px;
+            margin-right: 2px;
         }
 
         #extra-args {
@@ -1501,6 +1517,11 @@ self.onmessage = function(e) {
         tests = [...tests].sort((a, b) => {
             let va, vb;
             if (col === 'count') { va = a.instances.length; vb = b.instances.length; }
+            else if (col === 'flakiness') {
+                const fa = flakinessCache.get(a.path), fb = flakinessCache.get(b.path);
+                va = fa?.stats ? (fa.stats.failCount + fa.stats.crashCount + fa.stats.timeoutCount) / fa.stats.runCount : -1;
+                vb = fb?.stats ? (fb.stats.failCount + fb.stats.crashCount + fb.stats.timeoutCount) / fb.stats.runCount : -1;
+            }
             else if (col === 'test') { va = a.path; vb = b.path; }
             else if (col === 'status') {
                 va = Array.from(a.statuses).sort().join(',');
@@ -1515,12 +1536,12 @@ self.onmessage = function(e) {
 
         const hasRepro = reproState.size > 0;
 
-        container.innerHTML = renderTestTable(nonIntermittent, hasRepro, true, false);
+        container.innerHTML = renderTestTable(nonIntermittent, hasRepro, false);
 
         if (intermittent.length > 0) {
             intermittentContainer.innerHTML =
                 `<h3 style="margin: 20px 0 8px; font-size: 14px; color: #666;">Intermittent failures ${MITTEN}</h3>` +
-                renderTestTable(intermittent, hasRepro, false, true);
+                renderTestTable(intermittent, hasRepro, true);
         } else {
             intermittentContainer.innerHTML = '';
         }
@@ -1533,26 +1554,18 @@ self.onmessage = function(e) {
         }
     }
 
-    function renderTestTable(tests, hasRepro, sortable, showJobCount) {
+    function renderTestTable(tests, hasRepro, showJobCount) {
         const arrow = c => currentSort.column === c ? (currentSort.ascending ? ' &#9650;' : ' &#9660;') : '';
         const cls = c => currentSort.column === c ? ' class="active"' : '';
 
         let html = '<table class="failure-table">';
         html += '<thead><tr>';
-        if (sortable) {
-            html += `<th${cls('count')} onclick="sortTable('count')" style="width: 24px">#${arrow('count')}</th>`;
-            html += `<th${cls('status')} onclick="sortTable('status')" style="width: 65px">Status${arrow('status')}</th>`;
-        } else {
-            html += '<th class="no-sort" style="width: 24px">#</th>';
-            html += '<th class="no-sort" style="width: 65px">Status</th>';
-        }
+        html += `<th${cls('count')} onclick="sortTable('count')" style="width: 24px">#${arrow('count')}</th>`;
+        html += `<th${cls('status')} onclick="sortTable('status')" style="width: 65px">Status${arrow('status')}</th>`;
         html += `<th class="no-sort" style="width: 55px">OS</th>`;
         html += `<th class="no-sort" style="width: 55px">Build</th>`;
-        if (sortable) {
-            html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
-        } else {
-            html += '<th class="no-sort">Test</th>';
-        }
+        html += `<th${cls('flakiness')} onclick="sortTable('flakiness')" style="width: 45px; text-align: right" title="Existing flakiness: failure rate over 21 days on autoland and mozilla-central">${MITTEN}${arrow('flakiness')}</th>`;
+        html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
         html += `<th class="no-sort" style="width: ${hasRepro || isLocal ? 38 : 20}px"></th>`;
         html += '</tr></thead><tbody>';
 
@@ -1585,9 +1598,10 @@ self.onmessage = function(e) {
             html += '</td>';
             html += `<td class="badges-cell">${summaryPlatformBadges(test)}</td>`;
             html += `<td class="badges-cell">${summaryBuildBadges(test)}</td>`;
+            html += `<td class="flakiness-cell" id="flakiness-${escapeAttr(test.path)}"></td>`;
             html += '<td class="test-info">';
             html += `<span class="test-path"><a href="${getSearchfoxUrl(test.path)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(test.path)}</a></span>`;
-            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()"><span id="history-${escapeAttr(test.path)}">loading history…</span></a>`;
+            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()">history</a>`;
             if (test.commonMessage) {
                 const firstLine = test.commonMessage.split('\n')[0];
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
@@ -1603,7 +1617,7 @@ self.onmessage = function(e) {
         }
 
         if (tests.length === 0) {
-            const cols = 6;
+            const cols = 7;
             html += `<tr><td colspan="${cols}" style="text-align: center; color: #666; padding: 20px;">No matching tests found.</td></tr>`;
         }
 
@@ -1860,6 +1874,9 @@ self.onmessage = function(e) {
             // Build column
             html += `<td class="badges-cell">${buildBadgesHtml(sortedBuildTypes(new Set(builds)))}</td>`;
 
+            // Flakiness column (empty for detail rows)
+            html += '<td></td>';
+
             // Test column - job name, links, assertions
             // Collect crash viewer URLs for this job's instances.
             const crashUrls = new Set();
@@ -2026,7 +2043,7 @@ self.onmessage = function(e) {
     }
 
     function renderReproDetailRow(rs, hasRepro) {
-        const cols = 6;
+        const cols = 7;
         const rowId = `repro-detail-${rs.testPath || ''}`;
         let cls = 'pending';
         let icon = '&#x23F3;';
@@ -2356,36 +2373,36 @@ self.onmessage = function(e) {
     }
 
     function formatFailRate(rate) {
-        return rate >= 10 ? Math.round(rate) + '%' : rate.toFixed(1) + '%';
+        return rate.toFixed(1) + '%';
     }
 
     function updateFlakinessDisplay(testPath, stats, hasMatchingMessage) {
-        const el = document.getElementById(`history-${testPath}`);
+        const el = document.getElementById(`flakiness-${testPath}`);
         if (!el) return;
 
+        const histUrl = `test.html?test=${encodeURIComponent(testPath)}`;
+
         if (!stats) {
-            el.textContent = 'no history';
+            el.textContent = '';
+            el.className = 'flakiness-cell';
+            el.title = '';
             return;
         }
 
         const failCount = stats.failCount + stats.crashCount + stats.timeoutCount;
         const failRate = stats.runCount > 0 ? (failCount / stats.runCount * 100) : 0;
 
-        const link = el.parentElement;
         if (failRate === 0) {
-            link.className = 'history-link flaky-new';
-            el.textContent = 'New failure';
-            link.title = `${stats.runCount} runs, 100% pass rate over 21 days — this failure is new`;
+            el.className = 'flakiness-cell flaky-new';
+            el.innerHTML = `<a href="${escapeAttr(histUrl)}" target="_blank" onclick="event.stopPropagation()" title="${stats.runCount} runs, 100% pass rate over 21 days — this failure is new">&#x26a0;&#xfe0f;</a>`;
         } else {
             const pct = formatFailRate(failRate);
             if (hasMatchingMessage) {
-                link.className = 'history-link flaky-msg';
-                el.innerHTML = `${MITTEN}${pct} flaky (${failCount} failures with the same message)`;
-                link.title = `${pct} failure rate over 21 days (${stats.runCount} runs) — same failure message seen in history`;
+                el.className = 'flakiness-cell flaky-msg';
+                el.innerHTML = `<a href="${escapeAttr(histUrl)}" target="_blank" onclick="event.stopPropagation()" title="${pct} failure rate over 21 days (${stats.runCount} runs) — same failure message seen in history">${MITTEN}${pct}</a>`;
             } else {
-                link.className = 'history-link flaky';
-                el.textContent = `${pct} flaky`;
-                link.title = `${pct} failure rate over 21 days (${stats.runCount} runs)`;
+                el.className = 'flakiness-cell flaky';
+                el.innerHTML = `<a href="${escapeAttr(histUrl)}" target="_blank" onclick="event.stopPropagation()" title="${pct} failure rate over 21 days (${stats.runCount} runs)">${pct}</a>`;
             }
         }
     }
