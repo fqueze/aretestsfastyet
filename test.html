@@ -269,6 +269,13 @@
             text-decoration: underline;
         }
 
+        .run-date {
+            color: #888;
+            font-size: 12px;
+            font-family: monospace;
+            margin-right: 8px;
+        }
+
         .issue-count {
             font-weight: bold;
             margin-right: 10px;
@@ -733,12 +740,15 @@
         }
 
         // Create run info for issue detail expansion
-        function createRunInfo(taskIdIndex, issueType, testPath, minidump) {
+        function createRunInfo(taskIdIndex, issueType, testPath, minidump, dayIndex) {
             const taskIdString = currentData.tables.taskIds[taskIdIndex];
             const baseJobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
             const chunk = currentData.taskInfo.chunks?.[taskIdIndex];
             const jobName = chunk != null ? `${baseJobName}-${chunk}` : baseJobName;
             const [taskId, retryId] = taskIdString.split('.');
+
+            const startTime = currentData.metadata.startTime;
+            const date = dayIndex != null ? new Date((startTime + dayIndex * 86400) * 1000).toISOString().split('T')[0] : null;
 
             const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
             const profileName = `${jobName} (${taskIdString})`;
@@ -753,14 +763,31 @@
 
             const treeherderLink = getTreeherderJobUrl({ taskId, retryId }, currentData);
 
-            return { jobName, profileLink, crashLink, taskIdString, issueType, treeherderLink };
+            return { jobName, date, profileLink, crashLink, taskIdString, issueType, treeherderLink };
         }
 
         // Get runs for a specific issue
-        function getIssueRuns(testId, testPath, issueType, issueMessage) {
+        function runMatchesFilter(taskIdIndex, activeDays, activeCells, dayIndex) {
+            const hasDayFilter = activeDays && activeDays.size > 0;
+            const hasCellFilter = activeCells && activeCells.size > 0;
+            if (!hasDayFilter && !hasCellFilter) return true;
+
+            const dayOk = !hasDayFilter || activeDays.has(dayIndex);
+            if (hasDayFilter && !dayOk) return false;
+
+            if (!hasCellFilter) return true;
+            const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            const platform = extractPlatform(jobName) || 'unknown';
+            const variant = extractVariant(jobName);
+            const cellKey = `${variant}|${platform}`;
+            return activeCells.has(cellKey);
+        }
+
+        function getIssueRuns(testId, testPath, issueType, issueMessage, activeDays, activeCells) {
             const testGroup = currentData.testRuns[testId];
             if (!testGroup) return '<div class="issue-run-item">No run data available</div>';
 
+            const days = currentData.metadata.days || 21;
             const runs = [];
 
             if (issueType === 'SKIP') {
@@ -784,40 +811,60 @@
                     .filter(idx => idx !== -1);
                 failStatusIds.forEach(statusId => {
                     const statusGroup = testGroup[statusId];
-                    if (statusGroup) {
-                        forEachMatchingTaskId(statusGroup, (i) => {
+                    if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
+                            if (day >= days) continue;
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                            return message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE);
-                        }, (taskIdIndex) => {
-                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, null));
-                        });
+                            if (!(message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE))) continue;
+                            for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                if (runMatchesFilter(taskIdIndex, activeDays, activeCells, day)) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, day));
+                                }
+                            }
+                        }
                     }
                 });
             } else if (issueType === 'CRASH') {
                 const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
                 if (crashStatusId !== -1) {
                     const statusGroup = testGroup[crashStatusId];
-                    if (statusGroup) {
-                        forEachMatchingTaskId(statusGroup, (i) => {
+                    if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
+                            if (day >= days) continue;
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
-                            return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
-                        }, (taskIdIndex, i, j) => {
-                            const minidumpData = statusGroup.minidumps?.[i];
-                            const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
-                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, minidump));
-                        });
+                            if (!(signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded'))) continue;
+                            const bucket = statusGroup.taskIdIds[i];
+                            for (let j = 0; j < bucket.length; j++) {
+                                if (runMatchesFilter(bucket[j], activeDays, activeCells, day)) {
+                                    const minidumpData = statusGroup.minidumps?.[i];
+                                    const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
+                                    runs.push(createRunInfo(bucket[j], issueType, testPath, minidump, day));
+                                }
+                            }
+                        }
                     }
                 }
             } else if (issueType === 'TIMEOUT') {
                 currentData.tables.statuses.forEach((status, statusId) => {
                     if (status && status.startsWith('TIMEOUT')) {
                         const statusGroup = testGroup[statusId];
-                        if (statusGroup) {
-                            forEachTaskId(statusGroup, (taskIdIndex) => {
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, null));
-                            });
+                        if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                            let day = 0;
+                            for (let i = 0; i < statusGroup.days.length; i++) {
+                                day += statusGroup.days[i];
+                                if (day >= days) continue;
+                                for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                    if (runMatchesFilter(taskIdIndex, activeDays, activeCells, day)) {
+                                        runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, day));
+                                    }
+                                }
+                            }
                         }
                     }
                 });
@@ -827,9 +874,15 @@
                 return '<div class="issue-run-item">No matching runs found</div>';
             }
 
+            runs.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+            let lastDate = null;
             return runs.map(run => {
                 const mainLink = (run.issueType === 'CRASH' && run.crashLink) ? run.crashLink : run.profileLink;
                 const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${escapeHtml(run.jobName)}</a>` : escapeHtml(run.jobName);
+                const showDate = run.date && run.date !== lastDate;
+                lastDate = run.date;
+                const dateStr = run.date ? `<span class="run-date">${showDate ? run.date : '&nbsp;'.repeat(10)}</span>` : '';
 
                 const links = [];
                 if (run.profileLink) links.push(`<a href="${run.profileLink}" target="_blank">Profile</a>`);
@@ -837,7 +890,7 @@
                 if (run.treeherderLink) links.push(`<a href="${run.treeherderLink}" target="_blank">Job</a>`);
                 const viewLinks = links.length > 0 ? `<span class="view-links">View: ${links.join(' ')}</span>` : '';
 
-                return `<div class="issue-run-item">${jobNameLink} ${viewLinks}</div>`;
+                return `<div class="issue-run-item">${dateStr}${jobNameLink} ${viewLinks}</div>`;
             }).join('');
         }
 
@@ -855,13 +908,15 @@
                 const issueType = issueItem.dataset.issueType;
                 const issueMessage = issueItem.dataset.issueMessage.replace(/&quot;/g, '"');
 
-                runsDiv.innerHTML = getIssueRuns(testId, testPath, issueType, issueMessage);
+                const activeDays = getActiveDays();
+                const activeCells = getActiveCells();
+                runsDiv.innerHTML = getIssueRuns(testId, testPath, issueType, issueMessage, activeDays, activeCells);
                 runsDiv.style.display = 'block';
 
                 // Show per-issue daily rate chart
                 if (chartDiv) {
                     chartDiv.style.display = 'block';
-                    const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage);
+                    const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage, activeCells);
                     if (dailyData) {
                         createIssueMessageChart(`${issueId}-canvas`, dailyData, issueType);
                     }
@@ -1247,9 +1302,24 @@
         }
 
         // Calculate daily rates for a specific issue message (for per-issue chart)
-        function calculateIssueMessageDailyRates(testId, issueType, issueMessage) {
+        function cellKeyForEntry(statusGroup, i) {
+            let jobName;
+            if (statusGroup.jobNameIds) {
+                jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
+            } else if (statusGroup.taskIdIds) {
+                const taskIdIndex = Array.isArray(statusGroup.taskIdIds[i])
+                    ? statusGroup.taskIdIds[i][0] : statusGroup.taskIdIds[i];
+                if (taskIdIndex === undefined) return null;
+                jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+            }
+            if (!jobName) return null;
+            return `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+        }
+
+        function calculateIssueMessageDailyRates(testId, issueType, issueMessage, activeCells) {
             const days = currentData.metadata.days || 21;
             const startTime = currentData.metadata.startTime;
+            const hasCellFilter = activeCells && activeCells.size > 0;
             const dailyData = [];
 
             for (let day = 0; day < days; day++) {
@@ -1277,7 +1347,21 @@
                     for (let i = 0; i < statusGroup.days.length; i++) {
                         day += statusGroup.days[i];
                         if (day < days) {
-                            dailyData[day].totalRuns += getCountAtIndex(statusGroup, i);
+                            if (hasCellFilter) {
+                                if (statusGroup.jobNameIds) {
+                                    const key = cellKeyForEntry(statusGroup, i);
+                                    if (key && activeCells.has(key))
+                                        dailyData[day].totalRuns += getCountAtIndex(statusGroup, i);
+                                } else if (statusGroup.taskIdIds) {
+                                    for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                        const key = `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+                                        if (activeCells.has(key)) dailyData[day].totalRuns++;
+                                    }
+                                }
+                            } else {
+                                dailyData[day].totalRuns += getCountAtIndex(statusGroup, i);
+                            }
                         }
                     }
                 } else if (statusGroup.timestamps) {
@@ -1326,7 +1410,21 @@
                     for (let i = 0; i < statusGroup.days.length; i++) {
                         day += statusGroup.days[i];
                         if (matchesMessage(i) && day < days) {
-                            dailyData[day].count += getCountAtIndex(statusGroup, i);
+                            if (hasCellFilter) {
+                                if (statusGroup.jobNameIds) {
+                                    const key = cellKeyForEntry(statusGroup, i);
+                                    if (key && activeCells.has(key))
+                                        dailyData[day].count += getCountAtIndex(statusGroup, i);
+                                } else if (statusGroup.taskIdIds) {
+                                    for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                        const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
+                                        const key = `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+                                        if (activeCells.has(key)) dailyData[day].count++;
+                                    }
+                                }
+                            } else {
+                                dailyData[day].count += getCountAtIndex(statusGroup, i);
+                            }
                         }
                     }
                 } else if (statusGroup.timestamps) {
@@ -1348,6 +1446,9 @@
         function createIssueMessageChart(canvasId, dailyData, issueType) {
             const canvas = document.getElementById(canvasId);
             if (!canvas || typeof Chart === 'undefined') return;
+
+            const existing = Chart.getChart(canvas);
+            if (existing) existing.destroy();
 
             const labels = dailyData.map(d => d.date);
             const percentages = dailyData.map(d => d.totalRuns > 0 ? (d.count / d.totalRuns * 100) : 0);
@@ -1735,19 +1836,19 @@
 
         function buildIssueFilterData(testId, allIssues) {
             const testGroup = currentData.testRuns[testId];
-            if (!testGroup) return allIssues.map(() => ({ days: new Set(), cells: new Set(), dayCells: new Map() }));
+            if (!testGroup) return allIssues.map(() => ({ days: new Map(), cells: new Map(), dayCells: new Map() }));
 
             const days = currentData.metadata.days || 21;
 
             return allIssues.map(issue => {
-                const result = { days: new Set(), cells: new Set(), dayCells: new Map() };
+                const result = { days: new Map(), cells: new Map(), dayCells: new Map() };
 
-                const addDayCell = (day, cellKey) => {
-                    result.days.add(day);
-                    result.cells.add(cellKey);
-                    let cellSet = result.dayCells.get(day);
-                    if (!cellSet) { cellSet = new Set(); result.dayCells.set(day, cellSet); }
-                    cellSet.add(cellKey);
+                const addDayCell = (day, cellKey, count = 1) => {
+                    result.days.set(day, (result.days.get(day) || 0) + count);
+                    result.cells.set(cellKey, (result.cells.get(cellKey) || 0) + count);
+                    let cellMap = result.dayCells.get(day);
+                    if (!cellMap) { cellMap = new Map(); result.dayCells.set(day, cellMap); }
+                    cellMap.set(cellKey, (cellMap.get(cellKey) || 0) + count);
                 };
 
                 for (let statusId = 0; statusId < testGroup.length; statusId++) {
@@ -1787,7 +1888,7 @@
                                 const jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
                                 const platform = extractPlatform(jobName) || 'unknown';
                                 const variant = extractVariant(jobName);
-                                addDayCell(day, `${variant}|${platform}`);
+                                addDayCell(day, `${variant}|${platform}`, getCountAtIndex(statusGroup, i));
                             }
                         } else if (statusGroup.taskIdIds) {
                             let day = 0;
@@ -2062,53 +2163,87 @@
                 const index = parseInt(item.dataset.issueIndex);
                 const filterInfo = issueFilterData[index];
 
+                const countSpan = item.querySelector('.issue-count');
+                const originalCount = allIssuesGlobal[index].count;
+
                 if (!hasFilter || !filterInfo) {
                     item.classList.remove('issue-hidden');
                     visibleCount++;
-                    // Unhide associated elements
+                    if (countSpan) countSpan.textContent = originalCount;
+                    // Unhide associated elements and refresh expanded runs/chart
                     const issueId = item.dataset.issueId;
                     if (issueId) {
                         const chartEl = document.getElementById(`${issueId}-chart`);
                         const runsEl = document.getElementById(`${issueId}-runs`);
                         if (chartEl) chartEl.classList.remove('issue-hidden');
-                        if (runsEl) runsEl.classList.remove('issue-hidden');
+                        if (runsEl) {
+                            runsEl.classList.remove('issue-hidden');
+                            if (runsEl.style.display !== 'none') {
+                                const testId = parseInt(item.dataset.testId);
+                                const issueType = item.dataset.issueType;
+                                const issueMessage = item.dataset.issueMessage.replace(/&quot;/g, '"');
+                                runsEl.innerHTML = getIssueRuns(
+                                    testId, item.dataset.testPath,
+                                    issueType, issueMessage,
+                                    activeDays, activeCells);
+                                if (chartEl && chartEl.style.display !== 'none') {
+                                    const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage, activeCells);
+                                    if (dailyData) createIssueMessageChart(`${issueId}-canvas`, dailyData, issueType);
+                                }
+                            }
+                        }
                     }
                     return;
                 }
 
-                let visible = false;
+                let filteredCount = 0;
                 const hasDayFilter = activeDays.size > 0;
                 const hasCellFilter = activeCells.size > 0;
 
                 if (hasDayFilter && hasCellFilter) {
-                    // Both active: issue must have occurred on a selected day AND on a selected cell ON THAT SAME DAY
                     for (const day of activeDays) {
                         const cellsOnDay = filterInfo.dayCells.get(day);
                         if (!cellsOnDay) continue;
                         for (const cell of activeCells) {
-                            if (cellsOnDay.has(cell)) { visible = true; break; }
+                            filteredCount += cellsOnDay.get(cell) || 0;
                         }
-                        if (visible) break;
                     }
                 } else if (hasDayFilter) {
                     for (const day of activeDays) {
-                        if (filterInfo.days.has(day)) { visible = true; break; }
+                        filteredCount += filterInfo.days.get(day) || 0;
                     }
                 } else if (hasCellFilter) {
                     for (const cell of activeCells) {
-                        if (filterInfo.cells.has(cell)) { visible = true; break; }
+                        filteredCount += filterInfo.cells.get(cell) || 0;
                     }
                 }
 
+                const visible = filteredCount > 0;
                 item.classList.toggle('issue-hidden', !visible);
                 if (visible) visibleCount++;
+                if (countSpan) countSpan.textContent = visible ? filteredCount : originalCount;
 
                 const issueId = item.dataset.issueId;
                 if (issueId) {
                     const chartEl = document.getElementById(`${issueId}-chart`);
                     const runsEl = document.getElementById(`${issueId}-runs`);
                     if (chartEl) chartEl.classList.toggle('issue-hidden', !visible);
-                    if (runsEl) runsEl.classList.toggle('issue-hidden', !visible);
+                    if (runsEl) {
+                        runsEl.classList.toggle('issue-hidden', !visible);
+                        if (visible && runsEl.style.display !== 'none') {
+                            const testId = parseInt(item.dataset.testId);
+                            const issueType = item.dataset.issueType;
+                            const issueMessage = item.dataset.issueMessage.replace(/&quot;/g, '"');
+                            runsEl.innerHTML = getIssueRuns(
+                                testId, item.dataset.testPath,
+                                issueType, issueMessage,
+                                activeDays, activeCells);
+                            if (chartEl && chartEl.style.display !== 'none') {
+                                const dailyData = calculateIssueMessageDailyRates(testId, issueType, issueMessage, activeCells);
+                                if (dailyData) createIssueMessageChart(`${issueId}-canvas`, dailyData, issueType);
+                            }
+                        }
+                    }
                 }
             });
 
