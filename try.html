@@ -1182,16 +1182,36 @@ self.onmessage = function(e) {
                 failsByJobAndRun.get(t.jobName).get(runKey).add(t.path);
             }
 
+            // Build per-run sets of tests that passed sequential retry
+            // (failed in parallel, then passed when retried sequentially).
+            const seqPassByRun = new Map(); // runKey -> Set<testPath>
+            for (const t of result.timings) {
+                if (t.status !== 'PASS-SEQUENTIAL') continue;
+                const runKey = `${t.taskId}.${t.retryId}`;
+                if (!seqPassByRun.has(runKey)) seqPassByRun.set(runKey, new Set());
+                seqPassByRun.get(runKey).add(t.path);
+            }
+
             for (const t of result.timings) {
                 if (!isFailureStatus(t.status)) { t.intermittent = false; continue; }
 
-                // Case 1: a successful run of the same job exists
+                // Case 1: failed in parallel but passed on sequential retry in the same run
+                if (t.status === 'FAIL-PARALLEL') {
+                    const runKey = `${t.taskId}.${t.retryId}`;
+                    const seqPasses = seqPassByRun.get(runKey);
+                    if (seqPasses && seqPasses.has(t.path)) {
+                        t.intermittent = true;
+                        continue;
+                    }
+                }
+
+                // Case 2: a successful run of the same job exists
                 if (successfulJobNames.has(t.jobName)) {
                     t.intermittent = true;
                     continue;
                 }
 
-                // Case 2: another run of the same job failed on different tests
+                // Case 3: another run of the same job failed on different tests
                 const runs = failsByJobAndRun.get(t.jobName);
                 if (runs && runs.size > 1) {
                     const runKey = `${t.taskId}.${t.retryId}`;
@@ -1292,6 +1312,14 @@ self.onmessage = function(e) {
             }
         }
 
+        // Count sequential retry passes per test path.
+        const seqRetryPassCounts = new Map();
+        for (const t of allTimings) {
+            if (t.status === 'PASS-SEQUENTIAL') {
+                seqRetryPassCounts.set(t.path, (seqRetryPassCounts.get(t.path) || 0) + 1);
+            }
+        }
+
         for (const [, entry] of testMap) {
             const messages = entry.instances
                 .map(i => i.message)
@@ -1300,10 +1328,11 @@ self.onmessage = function(e) {
                 entry.commonMessage = messages[0];
             }
             entry.intermittentCount = entry.instances.filter(i => i.intermittent).length;
-            // Total runs across all job names that ran this test.
-            entry.totalJobRuns = 0;
+            entry.seqRetryPasses = seqRetryPassCounts.get(entry.path) || 0;
+            // Total job count across all job names that ran this test.
+            entry.totalJobs = 0;
             for (const jobName of entry.jobs) {
-                entry.totalJobRuns += jobRunCounts.get(jobName) || 0;
+                entry.totalJobs += jobRunCounts.get(jobName) || 0;
             }
             // Pre-sort for rendering
             entry.sortedPlatforms = sortedPlatforms(entry.platforms);
@@ -1532,9 +1561,22 @@ self.onmessage = function(e) {
             const countClass = test.instances.length >= 5 ? 'high' : test.instances.length >= 2 ? 'medium' : 'low';
 
             html += `<tr class="clickable-row${isExpanded ? ' expanded' : ''}" onclick="toggleTest('${escapeAttr(test.path)}')" title="Click to expand">`;
-            const countText = showJobCount
-                ? `<span title="Failed in ${test.instances.length} of ${test.totalJobRuns} job runs">${test.instances.length}<span class="all-configs">/${test.totalJobRuns}</span></span>`
-                : `${test.instances.length}`;
+            let countText;
+            if (showJobCount) {
+                const failures = test.instances.length;
+                const jobs = test.totalJobs;
+                const runs = jobs + test.seqRetryPasses;
+                const s = n => n > 1 ? 's' : '';
+                let tooltip;
+                if (runs === jobs) {
+                    tooltip = `${failures} failure${s(failures)} out of ${jobs} job${s(jobs)}`;
+                } else {
+                    tooltip = `${failures} failure${s(failures)} out of ${runs} run${s(runs)} across ${jobs} job${s(jobs)}`;
+                }
+                countText = `<span title="${tooltip}">${failures}<span class="all-configs">/${runs}</span></span>`;
+            } else {
+                countText = `${test.instances.length}`;
+            }
             html += `<td class="count-cell ${countClass}">${countText}</td>`;
             html += '<td>';
             for (const s of test.statuses) {
