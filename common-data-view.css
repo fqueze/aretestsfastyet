@@ -354,29 +354,52 @@
     font-size: 13px;
 }
 
+.single-crash .test-name,
+.single-failure .test-name {
+    flex: 0 1 auto;
+    margin-right: 10px;
+}
+
 /* ===== Instance Row Styles ===== */
+
+.instance-table,
+.inline-instance {
+    border-spacing: 0;
+}
+
+.instance-table {
+    margin-left: 70px;
+}
+
+.instance-table td {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
 
 .crash-instance-row,
 .failure-instance-row {
-    border-bottom: 1px solid #eee;
-    display: flex;
-    align-items: center;
-    padding: 4px 10px 4px 70px;
-    min-height: 28px;
-    background: #fafafa;
     cursor: pointer;
 }
 
-.crash-instance-row:hover,
-.failure-instance-row:hover {
+.crash-instance-row:hover td,
+.failure-instance-row:hover td {
     background-color: #e8f4ff;
 }
 
 .crash-job-name,
 .failure-job-name {
-    flex: 1;
     font-family: monospace;
     font-size: 12px;
+}
+
+.crash-job-name a,
+.failure-job-name a {
+    text-decoration: none;
+}
+
+.crash-job-name a:hover,
+.failure-job-name a:hover {
+    text-decoration: underline;
 }
 
 .crash-time,
@@ -401,14 +424,19 @@
 .view-links {
     font-size: 12px;
     word-spacing: 3px;
+    white-space: nowrap;
 }
 
-.view-links > a {
-    color: #007bff;
+.instance-table .view-links,
+.inline-instance .view-links {
+    padding-left: 20px;
+}
+
+.view-links a {
     text-decoration: none;
 }
 
-.view-links > a:hover {
+.view-links a:hover {
     text-decoration: underline;
 }
 

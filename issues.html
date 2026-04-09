@@ -494,25 +494,29 @@
             margin-left: 50px;
             margin-top: 8px;
             margin-bottom: 8px;
-            font-size: 11px;
-            color: #666;
+            font-size: 12px;
         }
 
-        .issue-run-item {
-            padding: 3px 0;
+        .issue-runs table {
+            border-spacing: 0;
         }
 
-        .issue-run-item .view-links {
-            margin-left: 20px;
-            color: black;
+        .issue-runs td {
+            padding-top: 3px;
+            padding-bottom: 3px;
         }
 
-        .issue-run-item a {
-            color: #007bff;
+        .issue-runs .view-links {
+            padding-left: 20px;
+            white-space: nowrap;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .issue-runs a {
             text-decoration: none;
         }
 
-        .issue-run-item a:hover {
+        .issue-runs a:hover {
             text-decoration: underline;
         }
 
@@ -3142,7 +3146,7 @@
         // Get runs for a specific issue
         function getIssueRuns(testId, testPath, issueType, issueMessage) {
             const testGroup = currentData.testRuns[testId];
-            if (!testGroup) return '<div class="issue-run-item">No run data available</div>';
+            if (!testGroup) return '<span>No run data available</span>';
 
             const runs = [];
 
@@ -3169,30 +3173,37 @@
 
                 failStatusIds.forEach(statusId => {
                     const statusGroup = testGroup[statusId];
-                    if (statusGroup) {
-                        forEachMatchingTaskId(statusGroup, (i) => {
+                    if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
                             const messageId = statusGroup.messageIds?.[i];
                             const message = messageId !== null ? currentData.tables.messages[messageId] : null;
-                            return message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE);
-                        }, (taskIdIndex) => {
-                            runs.push(createRunInfo(taskIdIndex, issueType, testPath));
-                        });
+                            if (!(message === issueMessage || (!message && issueMessage === FAILURE_NO_MESSAGE))) continue;
+                            for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, null, day));
+                            }
+                        }
                     }
                 });
             } else if (issueType === 'CRASH') {
                 const crashStatusId = currentData.tables.statuses.indexOf('CRASH');
                 if (crashStatusId !== -1) {
                     const statusGroup = testGroup[crashStatusId];
-                    if (statusGroup) {
-                        forEachMatchingTaskId(statusGroup, (i) => {
+                    if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                        let day = 0;
+                        for (let i = 0; i < statusGroup.days.length; i++) {
+                            day += statusGroup.days[i];
                             const sigId = statusGroup.crashSignatureIds?.[i];
                             const signature = sigId !== null ? currentData.tables.crashSignatures[sigId] : null;
-                            return signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded');
-                        }, (taskIdIndex, i, j) => {
-                            const minidumpData = statusGroup.minidumps?.[i];
-                            const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
-                            runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, minidump));
-                        });
+                            if (!(signature === issueMessage || (!signature && issueMessage === 'Crash signature not recorded'))) continue;
+                            const bucket = statusGroup.taskIdIds[i];
+                            for (let j = 0; j < bucket.length; j++) {
+                                const minidumpData = statusGroup.minidumps?.[i];
+                                const minidump = Array.isArray(minidumpData) ? minidumpData[j] : minidumpData;
+                                runs.push(createRunInfo(bucket[j], issueType, testPath, null, minidump, day));
+                            }
+                        }
                     }
                 }
             } else if (issueType === 'TIMEOUT') {
@@ -3200,23 +3211,29 @@
                 currentData.tables.statuses.forEach((status, statusId) => {
                     if (status && status.startsWith('TIMEOUT')) {
                         const statusGroup = testGroup[statusId];
-                        if (statusGroup) {
-                            forEachTaskId(statusGroup, (taskIdIndex) => {
-                                runs.push(createRunInfo(taskIdIndex, issueType, testPath));
-                            });
+                        if (statusGroup && statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                            let day = 0;
+                            for (let i = 0; i < statusGroup.days.length; i++) {
+                                day += statusGroup.days[i];
+                                for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                                    runs.push(createRunInfo(taskIdIndex, issueType, testPath, null, null, day));
+                                }
+                            }
                         }
                     }
                 });
             }
 
             if (runs.length === 0) {
-                return '<div class="issue-run-item">No matching runs found</div>';
+                return '<span>No matching runs found</span>';
             }
 
-            return runs.map(run => {
+            prepareRunsForDisplay(runs);
+
+            return '<table>' + runs.map(run => {
                 // Make job name a link - crash viewer for crashes, profile for others
                 const mainLink = (run.issueType === 'CRASH' && run.crashLink) ? run.crashLink : run.profileLink;
-                const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${run.jobName}</a>` : run.jobName;
+                const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${escapeHtml(run.jobName)}</a>` : escapeHtml(run.jobName);
 
                 // Don't show duration for skips (they don't run)
                 const showDuration = run.issueType !== 'SKIP' && run.duration !== null && run.duration !== undefined;
@@ -3234,17 +3251,19 @@
                     links.push(`<a href="${run.treeherderLink}" target="_blank">Job</a>`);
                 }
 
-                const viewLinks = links.length > 0 ? `<span class="view-links">View: ${links.join(' ')}</span>` : '';
+                const viewLinks = links.length > 0 ? `View: ${links.join(' ')}` : '';
 
-                return `<div class="issue-run-item">${jobNameLink}${formattedDuration} ${viewLinks}</div>`;
-            }).join('');
+                return `<tr>${run.dateHtml}<td class="run-job-name">${jobNameLink}${formattedDuration}</td><td class="view-links">${viewLinks}</td></tr>`;
+            }).join('') + '</table>';
         }
 
         // Create run info object with link
-        function createRunInfo(taskIdIndex, issueType, testPath, duration = null, minidump = null) {
+        function createRunInfo(taskIdIndex, issueType, testPath, duration = null, minidump = null, dayIndex = null) {
             const taskIdString = currentData.tables.taskIds[taskIdIndex];
             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
             const [taskId, retryId] = taskIdString.split('.');
+
+            const date = dayIndex != null ? new Date((currentData.metadata.startTime + dayIndex * 86400) * 1000).toISOString().split('T')[0] : null;
 
             // Generate profile URL
             const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
@@ -3262,7 +3281,7 @@
             // Generate Treeherder job link
             const treeherderLink = getTreeherderJobUrl({ taskId, retryId }, currentData);
 
-            return { jobName, profileLink, crashLink, taskIdString, duration, issueType, treeherderLink };
+            return { jobName, date, profileLink, crashLink, taskIdString, duration, issueType, treeherderLink };
         }
 
         // Show visual feedback for successful copy

@@ -247,33 +247,30 @@
             margin-left: 50px;
             margin-top: 8px;
             margin-bottom: 8px;
-            font-size: 11px;
-            color: #666;
+            font-size: 12px;
         }
 
-        .issue-run-item {
-            padding: 3px 0;
+        .issue-runs table {
+            border-spacing: 0;
         }
 
-        .issue-run-item .view-links {
-            margin-left: 20px;
-            color: black;
+        .issue-runs td {
+            padding-top: 3px;
+            padding-bottom: 3px;
         }
 
-        .issue-run-item a {
-            color: #007bff;
+        .issue-runs .view-links {
+            padding-left: 20px;
+            white-space: nowrap;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .issue-runs a {
             text-decoration: none;
         }
 
-        .issue-run-item a:hover {
+        .issue-runs a:hover {
             text-decoration: underline;
-        }
-
-        .run-date {
-            color: #888;
-            font-size: 12px;
-            font-family: monospace;
-            margin-right: 8px;
         }
 
         .issue-count {
@@ -785,7 +782,7 @@
 
         function getIssueRuns(testId, testPath, issueType, issueMessage, activeDays, activeCells) {
             const testGroup = currentData.testRuns[testId];
-            if (!testGroup) return '<div class="issue-run-item">No run data available</div>';
+            if (!testGroup) return '<span>No run data available</span>';
 
             const days = currentData.metadata.days || 21;
             const runs = [];
@@ -871,27 +868,23 @@
             }
 
             if (runs.length === 0) {
-                return '<div class="issue-run-item">No matching runs found</div>';
+                return '<span>No matching runs found</span>';
             }
 
-            runs.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            prepareRunsForDisplay(runs);
 
-            let lastDate = null;
-            return runs.map(run => {
+            return '<table>' + runs.map(run => {
                 const mainLink = (run.issueType === 'CRASH' && run.crashLink) ? run.crashLink : run.profileLink;
                 const jobNameLink = mainLink ? `<a href="${mainLink}" target="_blank">${escapeHtml(run.jobName)}</a>` : escapeHtml(run.jobName);
-                const showDate = run.date && run.date !== lastDate;
-                lastDate = run.date;
-                const dateStr = run.date ? `<span class="run-date">${showDate ? run.date : '&nbsp;'.repeat(10)}</span>` : '';
 
                 const links = [];
                 if (run.profileLink) links.push(`<a href="${run.profileLink}" target="_blank">Profile</a>`);
                 if (run.crashLink) links.push(`<a href="${run.crashLink}" target="_blank">Crash</a>`);
                 if (run.treeherderLink) links.push(`<a href="${run.treeherderLink}" target="_blank">Job</a>`);
-                const viewLinks = links.length > 0 ? `<span class="view-links">View: ${links.join(' ')}</span>` : '';
+                const viewLinks = links.length > 0 ? `View: ${links.join(' ')}` : '';
 
-                return `<div class="issue-run-item">${dateStr}${jobNameLink} ${viewLinks}</div>`;
-            }).join('');
+                return `<tr>${run.dateHtml}<td class="run-job-name">${jobNameLink}</td><td class="view-links">${viewLinks}</td></tr>`;
+            }).join('') + '</table>';
         }
 
         // Toggle issue runs expansion

@@ -117,6 +117,18 @@ button.active {
 }
 
 
+.run-date {
+    color: #888;
+    font-size: 12px;
+    font-family: monospace;
+    padding-right: 6px;
+}
+
+.run-job-name {
+    font-family: monospace;
+    font-size: 12px;
+}
+
 @media (max-width: 600px) {
     body {
         padding: 10px 6px;

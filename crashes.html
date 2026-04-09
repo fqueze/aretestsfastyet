@@ -286,10 +286,12 @@
                             const jobNameId = currentData.taskInfo.jobNameIds[taskIdIndex];
                             const jobName = currentData.tables.jobNames[jobNameId];
                             const minidump = minidumpsArray ? minidumpsArray[taskIndex] : null;
+                            const date = new Date(timestamp).toISOString().split('T')[0];
 
                             crashesBySignature.get(signature).push({
                                 jobName,
                                 timestamp,
+                                date,
                                 taskId,
                                 retryId,
                                 minidump
@@ -322,10 +324,12 @@
                         const jobName = currentData.tables.jobNames[jobNameId];
                         const timestamp = decompressedTimestamps[index];
                         const minidump = statusGroup.minidumps[index];
+                        const date = new Date(timestamp).toISOString().split('T')[0];
 
                         crashesBySignature.get(signature).push({
                             jobName,
                             timestamp,
+                            date,
                             taskId,
                             retryId,
                             minidump
@@ -701,9 +705,12 @@
                         const crashUrl = getCrashViewerUrl(crashInstance);
                         html += `<div class="test-row single-crash direct-child" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
                         html += `<div class="test-name">${escapeHtml(pathEntry.dirPath)}/${escapeHtml(testName)}</div>`;
-                        html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
-                        html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                        html += renderCrashLinks(crashInstance, testName, currentData);
+                        html += `<table class="inline-instance"><tr>`;
+                        html += `<td class="run-date">${crashInstance.date || ''}</td>`;
+                        const mainLink = crashUrl || getProfilerUrl(crashInstance, testName);
+                        html += `<td class="crash-job-name"><a href="${mainLink}" target="_blank" onclick="event.stopPropagation();">${escapeHtml(crashInstance.jobName)}</a></td>`;
+                        html += `<td>${renderCrashLinks(crashInstance, testName, currentData)}</td>`;
+                        html += `</tr></table>`;
                         html += '</div>';
                     } else {
                         // Multiple crashes in single test - show test with expand capability
@@ -755,9 +762,12 @@
                     const crashUrl = getCrashViewerUrl(crashInstance);
                     html += `<div class="test-row single-crash" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
                     html += `<div class="test-name">${escapeHtml(test.testName)}</div>`;
-                    html += `<div class="crash-job-name" style="margin-right: 10px;">${escapeHtml(crashInstance.jobName)}</div>`;
-                    html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                    html += renderCrashLinks(crashInstance, test.testName, currentData);
+                    html += `<table class="inline-instance"><tr>`;
+                    html += `<td class="run-date">${crashInstance.date || ''}</td>`;
+                    const mainLink = crashUrl || getProfilerUrl(crashInstance, test.testName);
+                    html += `<td class="crash-job-name"><a href="${mainLink}" target="_blank" onclick="event.stopPropagation();">${escapeHtml(crashInstance.jobName)}</a></td>`;
+                    html += `<td>${renderCrashLinks(crashInstance, test.testName, currentData)}</td>`;
+                    html += `</tr></table>`;
                     html += '</div>';
                 } else {
                     // Multiple crashes - show test with expand capability
@@ -787,17 +797,29 @@
                 html += `</div>`;
             }
 
-            // Sort crash instances by timestamp (most recent first)
-            const crashes = [...testData.crashes].sort((a, b) => b.timestamp - a.timestamp);
+            const crashes = [...testData.crashes];
+            prepareRunsForDisplay(crashes);
 
+            html += '<table class="instance-table">';
             for (const crashInstance of crashes) {
                 const crashUrl = getCrashViewerUrl(crashInstance);
-                html += `<div class="crash-instance-row" data-crash-url="${crashUrl ? escapeAttr(crashUrl) : ''}">`;
-                html += `<div class="crash-job-name">${escapeHtml(crashInstance.jobName)}</div>`;
-                html += `<div class="crash-time">${new Date(crashInstance.timestamp).toLocaleString()}</div>`;
-                html += renderCrashLinks(crashInstance, testName, currentData);
-                html += '</div>';
+                const profilerUrl = getProfilerUrl(crashInstance, testName);
+                const links = [`<a href="${profilerUrl}" target="_blank" onclick="event.stopPropagation();">Profile</a>`];
+                if (crashUrl) {
+                    links.push(`<a href="${crashUrl}" target="_blank" onclick="event.stopPropagation();">Crash</a>`);
+                }
+                const treeherderUrl = getTreeherderJobUrl(crashInstance, currentData);
+                if (treeherderUrl) {
+                    links.push(`<a href="${treeherderUrl}" target="_blank" onclick="event.stopPropagation();">Job</a>`);
+                }
+                const mainLink = crashUrl || profilerUrl;
+                html += `<tr class="crash-instance-row">`;
+                html += crashInstance.dateHtml;
+                html += `<td class="crash-job-name"><a href="${mainLink}" target="_blank">${escapeHtml(crashInstance.jobName)}</a></td>`;
+                html += `<td class="view-links">View: ${links.join(' ')}</td>`;
+                html += '</tr>';
             }
+            html += '</table>';
 
             return html;
         }

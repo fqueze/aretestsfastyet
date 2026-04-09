@@ -477,6 +477,28 @@ function setupClickHandlers(options) {
     });
 }
 
+// ===== Run Item Formatting =====
+
+/**
+ * Sort runs by date descending and add dateHtml property with date grouping.
+ * Each run must have a `date` property (YYYY-MM-DD string or null).
+ * After calling, each run has a `dateHtml` property with the formatted date span.
+ * Dates are only shown on the first occurrence per group.
+ */
+function prepareRunsForDisplay(runs) {
+    runs.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    let lastDate = null;
+    for (const run of runs) {
+        if (!run.date) {
+            run.dateHtml = '<td class="run-date"></td>';
+        } else {
+            const showDate = run.date !== lastDate;
+            lastDate = run.date;
+            run.dateHtml = `<td class="run-date">${showDate ? run.date : ''}</td>`;
+        }
+    }
+}
+
 // ===== Harness Switcher =====
 
 /**
@@ -531,6 +553,7 @@ if (typeof module !== 'undefined' && module.exports) {
         initSortManager,
         initExpandableTree,
         setupClickHandlers,
-        initHarnessSwitcher
+        initHarnessSwitcher,
+        prepareRunsForDisplay
     };
 }
