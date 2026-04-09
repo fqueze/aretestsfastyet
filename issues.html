@@ -3660,6 +3660,8 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
+            initHarnessSwitcher('Issues');
+
             // Initialize issue type filters from checkbox states (in case browser preserved them on reload)
             issueTypeFilters.failures = document.getElementById('filter-failures').checked;
             issueTypeFilters.timeouts = document.getElementById('filter-timeouts').checked;

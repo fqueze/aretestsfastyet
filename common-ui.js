@@ -477,6 +477,45 @@ function setupClickHandlers(options) {
     });
 }
 
+// ===== Harness Switcher =====
+
+/**
+ * Replace the page's h1 with a harness dropdown + suffix text.
+ * @param {string} suffix - Text after the harness name (e.g., "Failures by Message")
+ */
+function initHarnessSwitcher(suffix) {
+    const h1 = document.querySelector('h1');
+    const currentHarness = getHarnessType();
+
+    const select = document.createElement('select');
+    select.className = 'harness-switcher';
+
+    for (const [value, label] of [['xpcshell', 'XPCShell'], ['mochitest', 'Mochitest']]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        if (value === currentHarness) option.selected = true;
+        select.appendChild(option);
+    }
+
+    select.addEventListener('change', function() {
+        const url = new URL(window.location);
+        if (this.value === 'xpcshell') {
+            url.searchParams.delete('kind');
+        } else {
+            url.searchParams.set('kind', this.value);
+        }
+        window.location.href = url.toString();
+    });
+
+    h1.textContent = '';
+    h1.appendChild(select);
+    h1.appendChild(document.createTextNode(' ' + suffix));
+
+    const label = currentHarness === 'mochitest' ? 'Mochitest' : 'XPCShell';
+    document.title = `${label} ${suffix}`;
+}
+
 // Export for use in other modules (if using modules)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -491,6 +530,7 @@ if (typeof module !== 'undefined' && module.exports) {
         initUrlHashManager,
         initSortManager,
         initExpandableTree,
-        setupClickHandlers
+        setupClickHandlers,
+        initHarnessSwitcher
     };
 }
