@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>XPCShell Test Timings</title>
     <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
     <script defer src="shared.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
@@ -3165,6 +3166,8 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
+            initHarnessSwitcher('Test Timings');
+
             // Get references to search elements
             const searchBox = document.getElementById('search-box');
             const clearButton = document.getElementById('search-clear');
