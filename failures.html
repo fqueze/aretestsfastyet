@@ -990,7 +990,7 @@
                 expandedPaths.delete(pathKey);
                 // Remove all following siblings until we hit another path/test-row or higher level
                 let next = clickedRow.nextElementSibling;
-                while (next && (next.classList.contains('test-row') || next.classList.contains('historical-chart') || next.classList.contains('failure-instance-row'))) {
+                while (next && (next.classList.contains('test-row') || next.classList.contains('historical-chart') || next.classList.contains('instance-table'))) {
                     const toRemove = next;
                     next = next.nextElementSibling;
                     toRemove.remove();
@@ -1038,7 +1038,7 @@
                 expandedTests.delete(testKey);
                 // Remove all following siblings until we hit another test-row or higher level
                 let next = clickedRow.nextElementSibling;
-                while (next && (next.classList.contains('historical-chart') || next.classList.contains('failure-instance-row'))) {
+                while (next && (next.classList.contains('historical-chart') || next.classList.contains('instance-table'))) {
                     const toRemove = next;
                     next = next.nextElementSibling;
                     toRemove.remove();
