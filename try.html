@@ -2231,11 +2231,14 @@ self.onmessage = function(e) {
         const json = new TextDecoder().decode(buffer);
         const data = JSON.parse(json);
         const results = [];
-        for (const { path, tryMessages } of tests) {
+        for (const { path, tryMessages, hasTimeout } of tests) {
             const testInfo = findTest(data, path);
             if (!testInfo) { results.push({ path, found: false }); continue; }
             const stats = computeTestStats(data, testInfo.testId);
-            const hasMatchingMessage = stats.failureMessages.some(m => tryMessages.includes(m));
+            // Timeouts don't have messages in the data files, so match by
+            // checking if history also has timeouts for this test.
+            const hasMatchingMessage = stats.failureMessages.some(m => tryMessages.includes(m))
+                || (hasTimeout && stats.timeoutCount > 0);
             // Strip failureMessages to avoid transferring large strings back.
             delete stats.failureMessages;
             results.push({ path, found: true, stats, hasMatchingMessage });
@@ -2258,7 +2261,7 @@ self.onmessage = function(e) {
             };
             worker.addEventListener('message', handler);
             // Convert tryMessages Sets to arrays for structured clone.
-            const testsForWorker = tests.map(t => ({ path: t.path, tryMessages: [...t.tryMessages] }));
+            const testsForWorker = tests.map(t => ({ path: t.path, tryMessages: [...t.tryMessages], hasTimeout: t.hasTimeout }));
             worker.postMessage({ buffer, tests: testsForWorker }, [buffer]);
         });
     }
@@ -2269,10 +2272,12 @@ self.onmessage = function(e) {
         // Build per-test info with try failure messages.
         const testEntries = tests.map(test => {
             const tryMessages = new Set();
+            let hasTimeout = false;
             for (const inst of test.instances) {
                 if (inst.message) tryMessages.add(inst.message);
+                if (inst.status === 'TIMEOUT') hasTimeout = true;
             }
-            return { path: test.path, tryMessages };
+            return { path: test.path, tryMessages, hasTimeout };
         });
 
         // Group tests by chunk file (harness + chunkHex).
