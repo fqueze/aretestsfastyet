@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perma-Fails</title>
+    <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script src="common-test-data.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="icon" href="favicon-orange.svg">
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            gap: 20px;
+        }
+
+        .search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .search-box {
+            padding: 8px 30px 8px 12px;
+            width: 300px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #999;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-clear:hover {
+            color: #666;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+            margin: 0;
+            padding: 0;
+        }
+
+        .summary-bar {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .summary-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 85px;
+        }
+
+        .summary-stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .summary-stat-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .summary-stat-value.fail { color: #d00; }
+        .summary-stat-value.orange { color: #ff8c00; }
+        .summary-stat-value.skip { color: #888; }
+        .summary-stat-value.zero { color: #ccc; }
+        .summary-stat-value.good { color: #28a745; }
+
+        .results-table {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .results-table .sort-header {
+            background: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .sort-header .header-name {
+            flex: 1;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+            padding: 10px 0;
+        }
+
+        .sort-header .header-stats {
+            display: flex;
+            gap: 10px;
+        }
+
+        .sort-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 10px 6px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .sort-button:hover {
+            background-color: #e9ecef;
+        }
+
+        .sort-button.active {
+            color: #007bff;
+            background-color: #e7f3ff;
+        }
+
+        .sort-arrow {
+            font-size: 10px;
+            margin-right: 2px;
+            width: 8px;
+            display: inline-block;
+            text-align: left;
+        }
+
+        .result-row {
+            border-bottom: 1px solid #eee;
+            padding: 6px 10px;
+            display: flex;
+            align-items: flex-start;
+            min-height: 28px;
+            transition: background-color 0.2s;
+        }
+
+        .result-row:hover {
+            background-color: #f5f5f5;
+        }
+
+        .result-row .test-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .result-row .test-name {
+            font-family: monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+
+        .result-row .test-name a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .result-row .test-name a:hover {
+            text-decoration: underline;
+        }
+
+        .result-row .job-list {
+            font-family: monospace;
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+            line-height: 1.5;
+        }
+
+        .result-row .job-tag {
+            display: inline-block;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-right: 4px;
+            margin-bottom: 2px;
+            font-weight: bold;
+        }
+
+        .job-tag.perma {
+            background-color: #dc3545;
+            color: #fff;
+        }
+
+        .job-tag.high {
+            background-color: #ff8c00;
+            color: #fff;
+        }
+
+        .job-tag.medium {
+            background-color: #ffc107;
+            color: #000;
+        }
+
+        .job-tag.low-runs {
+            opacity: 0.5;
+        }
+
+        .job-tag.skipped {
+            background-color: #adb5bd;
+            color: #fff;
+            text-decoration: line-through;
+        }
+
+        .result-row .row-stats {
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .stat-cell {
+            min-width: 65px;
+            text-align: right;
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-cell.fail { color: #d00; font-weight: bold; }
+        .stat-cell.orange { color: #ff8c00; font-weight: bold; }
+        .stat-cell.skip { color: #888; }
+        .stat-cell.zero { color: #ccc; }
+        .stat-cell.good { color: #28a745; }
+
+        .component-line {
+            font-size: 11px;
+            color: #888;
+            margin-top: 1px;
+        }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 6px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .result-row:hover .action-button {
+            opacity: 1;
+        }
+
+        .action-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .section-label {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+            padding: 12px 10px 4px;
+            background: #f0f0f0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .explanation {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px 20px;
+            margin: 0 0 20px;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .explanation strong {
+            color: #000;
+        }
+
+        .explanation code {
+            background-color: #e9ecef;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-row label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .issue-badge {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-right: 4px;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+
+        .badge-fail { background-color: #ff8c00; color: #fff; }
+        .badge-crash { background-color: #dc3545; color: #fff; }
+        .badge-timeout { background-color: #ffc107; color: #000; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Perma-Fails</h1>
+
+        <div class="controls">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span id="status-text" class="status-text">Loading data...</span>
+            </div>
+            <div class="search-container">
+                <input type="text" class="search-box" id="search-box" placeholder="Search tests, jobs, or components...">
+                <button class="search-clear" id="search-clear" title="Clear search">×</button>
+            </div>
+        </div>
+
+        <div class="explanation">
+            <strong>Perma-fails</strong> are tests that fail 100% of the time on specific jobs &mdash; they should be skipped.
+            This page also lists tests with failure rates above 50%.
+            <div class="filter-row" style="margin-top: 8px;">
+                <strong>Include:</strong>
+                <label><input type="checkbox" id="filter-failures" checked onchange="recomputeAndRender()"> Failures</label>
+                <label><input type="checkbox" id="filter-timeouts" checked onchange="recomputeAndRender()"> Timeouts</label>
+                <label><input type="checkbox" id="filter-crashes" checked onchange="recomputeAndRender()"> Crashes</label>
+            </div>
+        </div>
+
+        <div id="summary-bar" class="summary-bar" style="display: none;"></div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="results-container" style="display: none;">
+            <div class="results-table" id="results-table"></div>
+        </div>
+
+        <div id="no-data" class="no-data" style="display: none;">
+            No data available.
+        </div>
+    </div>
+
+    <script>
+        // Per-test job breakdowns, keyed by fullPath.
+        // Each value: { fullPath, testName, component, cells: { "variant|platform": {variant, platform, passes, failures, timeouts, crashes, skips} } }
+        let testBreakdowns = {};
+        let permaFailEntries = [];    // Computed list of perma-fail/high-fail entries
+        let metadataInfo = '';        // Date range text from data
+        let sortField = 'worstRate';
+        let sortDirection = 'desc';
+        let searchQuery = '';
+
+        // ---- Data computation ----
+
+        // Extract display variant from a full job name (same logic as test.html)
+        // e.g. "test-linux1804-64-asan/opt-xpcshell-1" -> "asan-xpcshell"
+        //      "test-linux1804-64/opt-xpcshell-1" -> "opt-xpcshell"
+        function extractVariant(jobName) {
+            const slashIdx = jobName.indexOf('/');
+            let variant = slashIdx !== -1 ? jobName.substring(slashIdx + 1) : jobName;
+            variant = variant.replace(/-\d+$/, '');
+            if (slashIdx !== -1) {
+                const prefix = jobName.substring(0, slashIdx);
+                const sanitizerMatch = prefix.match(/-(asan|tsan|ubsan|msan|hwasan|ccov)$/);
+                if (sanitizerMatch) {
+                    variant = variant.replace(/^[^-]+/, sanitizerMatch[1]);
+                }
+            }
+            return variant;
+        }
+
+        // Compute per-job breakdown for a test, grouped by variant|platform.
+        // Works with chunk data files which have jobNameIds on PASS entries
+        // and taskIdIds on FAIL/CRASH/TIMEOUT entries.
+        // Each cell also tracks latestRunDay and latestSkipDay so we can
+        // detect tests that were recently skip-if'd (failures in older days,
+        // only skips in recent days).
+        function calculateJobBreakdown(data, testId) {
+            const cells = {};
+            const testGroup = data.testRuns[testId];
+            if (!testGroup) return cells;
+            const totalDays = data.metadata.days || 21;
+
+            const ensureCell = (rawJobName) => {
+                const variant = extractVariant(rawJobName);
+                // Skip confirm-failures jobs: human-triggered, not regularly scheduled.
+                if (variant.endsWith('-cf')) return null;
+                const platform = extractPlatform(rawJobName) || 'unknown';
+                const key = `${variant}|${platform}`;
+                if (!cells[key]) cells[key] = { variant, platform, passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, latestRunDay: -1, latestSkipDay: -1 };
+                return cells[key];
+            };
+
+            for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                const statusGroup = testGroup[statusId];
+                if (!statusGroup) continue;
+
+                const status = data.tables.statuses[statusId];
+                const isSkip = status === 'SKIP';
+                const isCrash = status === 'CRASH';
+                const isTimeout = status && status.startsWith('TIMEOUT');
+                const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL', 'OK', 'UNKNOWN'].includes(status);
+
+                const addToCell = (rawJobName, count, day) => {
+                    const cell = ensureCell(rawJobName);
+                    if (!cell) return;
+                    if (isSkip) {
+                        cell.skips += count;
+                        if (day > cell.latestSkipDay) cell.latestSkipDay = day;
+                    } else {
+                        if (isCrash) cell.crashes += count;
+                        else if (isTimeout) cell.timeouts += count;
+                        else if (isFail) cell.failures += count;
+                        else cell.passes += count;
+                        if (day > cell.latestRunDay) cell.latestRunDay = day;
+                    }
+                };
+
+                // Chunk data: PASS/SKIP have jobNameIds + durations/counts;
+                // FAIL/CRASH/TIMEOUT have taskIdIds (bucketed or flat).
+                if (statusGroup.jobNameIds) {
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.jobNameIds.length; i++) {
+                        if (statusGroup.days) day += statusGroup.days[i];
+                        if (isSkip) {
+                            const messageId = statusGroup.messageIds?.[i];
+                            const msg = messageId !== null && messageId !== undefined ? data.tables.messages[messageId] : null;
+                            if (msg?.startsWith('run-if')) continue;
+                        }
+                        const jobName = data.tables.jobNames[statusGroup.jobNameIds[i]];
+                        addToCell(jobName, getCountAtIndex(statusGroup, i), day);
+                    }
+                } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
+                    let day = 0;
+                    for (let i = 0; i < statusGroup.taskIdIds.length; i++) {
+                        day += statusGroup.days[i];
+                        for (const taskIdIndex of statusGroup.taskIdIds[i]) {
+                            const jobName = data.tables.jobNames[data.taskInfo.jobNameIds[taskIdIndex]];
+                            addToCell(jobName, 1, day);
+                        }
+                    }
+                } else if (statusGroup.taskIdIds) {
+                    for (const taskIdIndex of statusGroup.taskIdIds) {
+                        const jobName = data.tables.jobNames[data.taskInfo.jobNameIds[taskIdIndex]];
+                        addToCell(jobName, 1, 0);
+                    }
+                }
+            }
+            return cells;
+        }
+
+        // Get active issue type filters
+        function getFilters() {
+            return {
+                failures: document.getElementById('filter-failures').checked,
+                timeouts: document.getElementById('filter-timeouts').checked,
+                crashes: document.getElementById('filter-crashes').checked,
+            };
+        }
+
+        // Compute failure rate for a cell given filters
+        function cellFailureRate(cellData, filters) {
+            const issues = (filters.failures ? cellData.failures : 0) +
+                           (filters.timeouts ? cellData.timeouts : 0) +
+                           (filters.crashes ? cellData.crashes : 0);
+            const total = cellData.passes + cellData.failures + cellData.timeouts + cellData.crashes;
+            return { issues, total, rate: total > 0 ? issues / total : 0 };
+        }
+
+        // Format a cell key for display: "asan-xpcshell / linux"
+        function formatCellName(cellData) {
+            return `${cellData.variant} / ${cellData.platform}`;
+        }
+
+        // Process a single chunk file: extract per-test job breakdowns and store them.
+        // The chunk data object can be GC'd after this returns.
+        function processChunk(data, issueTestPaths) {
+            for (let testId = 0; testId < data.testRuns.length; testId++) {
+                const testGroup = data.testRuns[testId];
+                if (!testGroup) continue;
+
+                const dirPath = data.tables.testPaths[data.testInfo.testPathIds[testId]];
+                const testName = data.tables.testNames[data.testInfo.testNameIds[testId]];
+                const fullPath = dirPath ? `${dirPath}/${testName}` : testName;
+
+                // Skip tests that have no issues (from the small issues file)
+                if (issueTestPaths && !issueTestPaths.has(fullPath)) continue;
+
+                const componentId = data.testInfo.componentIds ? data.testInfo.componentIds[testId] : null;
+                const component = (componentId !== null && data.tables.components) ? data.tables.components[componentId] : null;
+
+                const cells = calculateJobBreakdown(data, testId);
+                testBreakdowns[fullPath] = { fullPath, testName, component, cells };
+            }
+        }
+
+        // Threshold below which a job tag is shown dimmed.
+        const LOW_RUNS_THRESHOLD = 10;
+
+        // Compute perma-fail and high-fail entries from stored breakdowns.
+        // Called after all chunks are processed, and again when filters change.
+        function computeEntries() {
+            const keys = Object.keys(testBreakdowns);
+            if (keys.length === 0) return [];
+
+            const filters = getFilters();
+            const entries = [];
+
+            for (const fullPath of keys) {
+                const { testName, component, cells } = testBreakdowns[fullPath];
+
+                const permaJobs = [];
+                const highFailJobs = [];
+                const skippedJobs = [];
+                let worstRate = 0;
+                let totalRuns = 0;
+                let totalIssues = 0;
+
+                for (const [key, cellData] of Object.entries(cells)) {
+                    const { issues, total, rate } = cellFailureRate(cellData, filters);
+
+                    // Already-skipped detection:
+                    // 1. Zero runs but has skips → fully skipped now.
+                    // 2. Had issues, but the latest skip is more recent than the
+                    //    latest actual run → someone added a skip-if since then.
+                    if (cellData.skips > 0 &&
+                        (total === 0 || (issues > 0 && cellData.latestSkipDay > cellData.latestRunDay))) {
+                        skippedJobs.push({ cellKey: key, variant: cellData.variant, platform: cellData.platform, skips: cellData.skips, data: cellData });
+                        continue;
+                    }
+
+                    if (total === 0) continue;
+
+                    totalRuns += total;
+                    totalIssues += issues;
+
+                    if (rate > worstRate) worstRate = rate;
+
+                    if (rate === 1) {
+                        permaJobs.push({ cellKey: key, variant: cellData.variant, platform: cellData.platform, issues, total, rate, data: cellData });
+                    } else if (rate > 0.5) {
+                        highFailJobs.push({ cellKey: key, variant: cellData.variant, platform: cellData.platform, issues, total, rate, data: cellData });
+                    }
+                }
+
+                if (permaJobs.length === 0 && highFailJobs.length === 0) continue;
+
+                permaJobs.sort((a, b) => b.total - a.total);
+                highFailJobs.sort((a, b) => b.rate - a.rate || b.total - a.total);
+                skippedJobs.sort((a, b) => b.skips - a.skips);
+
+                const overallRate = totalRuns > 0 ? totalIssues / totalRuns : 0;
+
+                entries.push({
+                    fullPath,
+                    testName,
+                    component,
+                    permaJobs,
+                    highFailJobs,
+                    skippedJobs,
+                    worstRate,
+                    overallRate,
+                    totalRuns,
+                    totalIssues,
+                    permaJobCount: permaJobs.length,
+                    allFailingJobs: [...permaJobs, ...highFailJobs],
+                });
+            }
+
+            return entries;
+        }
+
+        // ---- Sorting ----
+
+        function getSortArrow(field) {
+            if (sortField !== field) return '<span class="sort-arrow"></span>';
+            return `<span class="sort-arrow">${sortDirection === 'asc' ? '\u25B2' : '\u25BC'}</span>`;
+        }
+
+        function changeSortOrder(field) {
+            if (sortField === field) {
+                sortDirection = sortDirection === 'desc' ? 'asc' : 'desc';
+            } else {
+                sortField = field;
+                sortDirection = 'desc';
+            }
+            renderResults();
+        }
+
+        // ---- Rendering ----
+
+        function renderSummary() {
+            const el = document.getElementById('summary-bar');
+            const permaTests = permaFailEntries.filter(e => e.permaJobs.length > 0).length;
+            const highFailTests = permaFailEntries.filter(e => e.highFailJobs.length > 0 && e.permaJobs.length === 0).length;
+            const totalPermaJobs = permaFailEntries.reduce((s, e) => s + e.permaJobs.length, 0);
+            const alreadySkippedJobs = permaFailEntries.reduce((s, e) => s + e.skippedJobs.length, 0);
+
+            let html = '';
+            html += renderSummaryStat('Perma-fail tests', permaTests, permaTests > 0 ? 'fail' : 'good');
+            html += renderSummaryStat('Perma-fail jobs', totalPermaJobs, totalPermaJobs > 0 ? 'fail' : 'good');
+            html += renderSummaryStat('>50% fail tests', highFailTests, highFailTests > 0 ? 'orange' : 'good');
+            html += renderSummaryStat('Already skipped', alreadySkippedJobs, alreadySkippedJobs > 0 ? 'skip' : 'zero');
+            html += renderSummaryStat('Total listed', permaFailEntries.length, '');
+
+            el.innerHTML = html;
+            el.style.display = 'flex';
+        }
+
+        function renderSummaryStat(label, value, cssClass) {
+            const cls = cssClass ? ` ${cssClass}` : '';
+            return `<div class="summary-stat"><span class="summary-stat-value${cls}">${formatNumber(value)}</span><span class="summary-stat-label">${label}</span></div>`;
+        }
+
+        function renderResults() {
+            const container = document.getElementById('results-container');
+            const table = document.getElementById('results-table');
+
+            // Filter by search
+            let entries = permaFailEntries;
+            if (searchQuery) {
+                const q = searchQuery.toLowerCase();
+                entries = entries.filter(e =>
+                    e.fullPath.toLowerCase().includes(q) ||
+                    (e.component && e.component.toLowerCase().includes(q)) ||
+                    e.allFailingJobs.some(j => j.variant.toLowerCase().includes(q) || j.platform.toLowerCase().includes(q)) ||
+                    e.skippedJobs.some(j => j.variant.toLowerCase().includes(q) || j.platform.toLowerCase().includes(q))
+                );
+            }
+
+            // Sort
+            const dir = sortDirection === 'asc' ? 1 : -1;
+            entries = entries.slice().sort((a, b) => {
+                let cmp = 0;
+                switch (sortField) {
+                    case 'worstRate': cmp = a.worstRate - b.worstRate; break;
+                    case 'overallRate': cmp = a.overallRate - b.overallRate; break;
+                    case 'totalRuns': cmp = a.totalRuns - b.totalRuns; break;
+                    case 'totalIssues': cmp = a.totalIssues - b.totalIssues; break;
+                    case 'permaJobCount': cmp = a.permaJobCount - b.permaJobCount; break;
+                    case 'testName': cmp = a.fullPath.localeCompare(b.fullPath); break;
+                    default: cmp = a.worstRate - b.worstRate;
+                }
+                return cmp * dir;
+            });
+
+            if (entries.length === 0) {
+                table.innerHTML = '<div class="no-data">No tests match the current filters.</div>';
+                container.style.display = 'block';
+                return;
+            }
+
+            // Build sort header
+            const activeClass = (f) => sortField === f ? ' active' : '';
+            let html = `<div class="sort-header">`;
+            html += `<span class="header-name">Test</span>`;
+            html += `<div class="header-stats">`;
+            html += `<button class="sort-button${activeClass('worstRate')}" onclick="changeSortOrder('worstRate')" style="min-width:75px">${getSortArrow('worstRate')}Worst %</button>`;
+            html += `<button class="sort-button${activeClass('overallRate')}" onclick="changeSortOrder('overallRate')" style="min-width:75px">${getSortArrow('overallRate')}Overall %</button>`;
+            html += `<button class="sort-button${activeClass('permaJobCount')}" onclick="changeSortOrder('permaJobCount')" style="min-width:65px">${getSortArrow('permaJobCount')}Perma</button>`;
+            html += `<button class="sort-button${activeClass('totalIssues')}" onclick="changeSortOrder('totalIssues')" style="min-width:65px">${getSortArrow('totalIssues')}Issues</button>`;
+            html += `<button class="sort-button${activeClass('totalRuns')}" onclick="changeSortOrder('totalRuns')" style="min-width:65px">${getSortArrow('totalRuns')}Runs</button>`;
+            html += `</div></div>`;
+
+            // Render entries
+            for (const entry of entries) {
+                const testPageUrl = `test.html?test=${encodeURIComponent(entry.fullPath)}`;
+                const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${entry.fullPath}`;
+
+                html += `<div class="result-row">`;
+                html += `<div class="test-info">`;
+                html += `<div class="test-name"><a href="${testPageUrl}" target="_blank">${escapeHtml(entry.fullPath)}</a>`;
+                html += `<a href="${searchfoxUrl}" class="action-button" target="_blank" title="Open in Searchfox">🔍</a>`;
+                html += `</div>`;
+                if (entry.component) {
+                    html += `<div class="component-line">${escapeHtml(entry.component)}</div>`;
+                }
+
+                // Job tags (variant / platform)
+                html += `<div class="job-list">`;
+                for (const j of entry.permaJobs) {
+                    const pct = (j.rate * 100).toFixed(0);
+                    const displayName = `${j.variant} / ${j.platform}`;
+                    const issueBreakdown = formatIssueBreakdown(j.data);
+                    const lowRuns = j.total < LOW_RUNS_THRESHOLD ? ' low-runs' : '';
+                    const runsLabel = j.total < LOW_RUNS_THRESHOLD ? ` (${j.total} runs)` : '';
+                    html += `<span class="job-tag perma${lowRuns}" title="${escapeAttr(displayName)}: ${j.issues}/${j.total} runs (${pct}%)${issueBreakdown}">${escapeHtml(displayName)} ${pct}%${runsLabel}</span>`;
+                }
+                for (const j of entry.highFailJobs) {
+                    const pct = (j.rate * 100).toFixed(1);
+                    const tagClass = j.rate >= 0.8 ? 'high' : 'medium';
+                    const displayName = `${j.variant} / ${j.platform}`;
+                    const issueBreakdown = formatIssueBreakdown(j.data);
+                    const lowRuns = j.total < LOW_RUNS_THRESHOLD ? ' low-runs' : '';
+                    const runsLabel = j.total < LOW_RUNS_THRESHOLD ? ` (${j.total} runs)` : '';
+                    html += `<span class="job-tag ${tagClass}${lowRuns}" title="${escapeAttr(displayName)}: ${j.issues}/${j.total} runs (${pct}%)${issueBreakdown}">${escapeHtml(displayName)} ${pct}%${runsLabel}</span>`;
+                }
+                for (const j of entry.skippedJobs) {
+                    const displayName = `${j.variant} / ${j.platform}`;
+                    html += `<span class="job-tag skipped" title="${escapeAttr(displayName)}: already skipped (${j.skips} skips, 0 runs)">${escapeHtml(displayName)} skipped</span>`;
+                }
+                html += `</div>`;
+
+                html += `</div>`; // .test-info
+
+                // Stats columns
+                const worstPct = (entry.worstRate * 100).toFixed(1);
+                const overallPct = (entry.overallRate * 100).toFixed(1);
+                const worstClass = entry.worstRate === 1 ? 'fail' : (entry.worstRate >= 0.8 ? 'orange' : '');
+                const overallClass = entry.overallRate >= 0.5 ? 'fail' : (entry.overallRate >= 0.2 ? 'orange' : '');
+
+                html += `<div class="row-stats">`;
+                html += `<div class="stat-cell ${worstClass}">${worstPct}%</div>`;
+                html += `<div class="stat-cell ${overallClass}">${overallPct}%</div>`;
+                html += `<div class="stat-cell ${entry.permaJobCount > 0 ? 'fail' : 'zero'}">${entry.permaJobCount}</div>`;
+                html += `<div class="stat-cell ${entry.totalIssues > 0 ? 'orange' : 'zero'}">${formatNumber(entry.totalIssues)}</div>`;
+                html += `<div class="stat-cell">${formatNumber(entry.totalRuns)}</div>`;
+                html += `</div>`;
+
+                html += `</div>`; // .result-row
+            }
+
+            table.innerHTML = html;
+            container.style.display = 'block';
+        }
+
+        function formatIssueBreakdown(jobData) {
+            const parts = [];
+            if (jobData.failures > 0) parts.push(`${jobData.failures} failures`);
+            if (jobData.timeouts > 0) parts.push(`${jobData.timeouts} timeouts`);
+            if (jobData.crashes > 0) parts.push(`${jobData.crashes} crashes`);
+            if (parts.length === 0) return '';
+            return '\n' + parts.join(', ');
+        }
+
+        // ---- Search ----
+
+        let searchTimeout = null;
+        function onSearchInput() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchQuery = document.getElementById('search-box').value.trim();
+                const clearBtn = document.getElementById('search-clear');
+                clearBtn.style.display = searchQuery ? 'flex' : 'none';
+                renderResults();
+            }, 300);
+        }
+
+        function clearSearch() {
+            document.getElementById('search-box').value = '';
+            searchQuery = '';
+            document.getElementById('search-clear').style.display = 'none';
+            renderResults();
+        }
+
+        // ---- Console API ----
+        // Expose computed data for programmatic access from the browser console.
+
+        // Get a flat array of all perma-fail entries (same as the page displays).
+        // Each entry has: fullPath, component, permaJobs[], highFailJobs[], worstRate, overallRate, totalRuns, totalIssues.
+        function getPermaFails() {
+            return permaFailEntries.filter(e => e.permaJobs.length > 0);
+        }
+
+        // Get all tests with >50% failure rate (but not 100%).
+        function getHighFailTests() {
+            return permaFailEntries.filter(e => e.highFailJobs.length > 0);
+        }
+
+        // Get all entries (both perma and high-fail).
+        function getAllEntries() {
+            return permaFailEntries;
+        }
+
+        // Get a text summary suitable for pasting into a bug or spreadsheet.
+        function getSummaryText() {
+            const lines = [];
+            for (const e of getPermaFails()) {
+                const jobs = e.permaJobs.map(j => `${j.variant} / ${j.platform}`).join(', ');
+                lines.push(`${e.fullPath}\t100%\t${jobs}`);
+            }
+            for (const e of permaFailEntries) {
+                for (const j of e.highFailJobs) {
+                    lines.push(`${e.fullPath}\t${(j.rate * 100).toFixed(1)}%\t${j.variant} / ${j.platform}`);
+                }
+            }
+            return lines.join('\n');
+        }
+
+        // Get skip-if annotations that could be added to manifest files to skip perma-fails.
+        function getSkipAnnotations() {
+            const annotations = [];
+            for (const e of getPermaFails()) {
+                for (const j of e.permaJobs) {
+                    annotations.push({
+                        test: e.fullPath,
+                        variant: j.variant,
+                        platform: j.platform,
+                        runs: j.total,
+                        component: e.component,
+                    });
+                }
+            }
+            return annotations;
+        }
+
+        // Get tests that have jobs already skipped (skip-only, zero runs).
+        function getAlreadySkipped() {
+            return permaFailEntries.filter(e => e.skippedJobs.length > 0);
+        }
+
+        // Get data grouped by component.
+        function getByComponent() {
+            const byComponent = {};
+            for (const e of permaFailEntries) {
+                const comp = e.component || 'Unknown';
+                if (!byComponent[comp]) byComponent[comp] = [];
+                byComponent[comp].push(e);
+            }
+            return byComponent;
+        }
+
+        // ---- Main ----
+
+        function recomputeAndRender() {
+            permaFailEntries = computeEntries();
+            renderSummary();
+            renderResults();
+        }
+
+        async function loadData() {
+            const statusText = document.getElementById('status-text');
+
+            try {
+                const harness = getHarnessType();
+
+                // Step 1: Load the small issues file to find which tests have issues
+                statusText.textContent = 'Loading issue index...';
+                const issuesResponse = await fetchData(`${harness}-issues.json`);
+                if (!issuesResponse.ok) {
+                    throw new Error('Issues data not available');
+                }
+                const issuesData = await issuesResponse.json();
+
+                // Extract date info from the issues file metadata
+                if (issuesData.metadata) {
+                    const days = issuesData.metadata.days || 21;
+                    if (issuesData.metadata.startDate && issuesData.metadata.endDate) {
+                        metadataInfo = `${days} days (${issuesData.metadata.startDate} to ${issuesData.metadata.endDate})`;
+                    }
+                }
+
+                // Build set of test paths that have any failure/timeout/crash,
+                // and determine which chunk indices contain them.
+                const issueTestPaths = new Set();
+                const neededChunks = new Set();
+                for (let testId = 0; testId < issuesData.testRuns.length; testId++) {
+                    const testGroup = issuesData.testRuns[testId];
+                    if (!testGroup) continue;
+
+                    let hasIssue = false;
+                    for (let statusId = 0; statusId < testGroup.length; statusId++) {
+                        const sg = testGroup[statusId];
+                        if (!sg) continue;
+                        const status = issuesData.tables.statuses[statusId];
+                        if (status && (status.startsWith('FAIL') || status.startsWith('TIMEOUT') || status === 'CRASH')) {
+                            hasIssue = true;
+                            break;
+                        }
+                    }
+                    if (!hasIssue) continue;
+
+                    const dirPath = issuesData.tables.testPaths[issuesData.testInfo.testPathIds[testId]];
+                    const testName = issuesData.tables.testNames[issuesData.testInfo.testNameIds[testId]];
+                    const fullPath = dirPath ? `${dirPath}/${testName}` : testName;
+                    issueTestPaths.add(fullPath);
+                    neededChunks.add(getChunkIndex(fullPath));
+                }
+
+                // Free the issues data
+                const chunkIndices = Array.from(neededChunks).sort((a, b) => a - b);
+                const totalChunks = chunkIndices.length;
+                statusText.textContent = `Loading ${totalChunks} chunk files...`;
+
+                // Step 2: Fetch, parse, process, and discard chunk files.
+                // Keep 2 fetches ahead so the main thread always has a
+                // ready response to parse, without excessive allocator
+                // contention from too many parallel fetches.
+                const pending = [];
+                for (let j = 0; j < Math.min(3, chunkIndices.length); j++) {
+                    const h = chunkIndices[j].toString(16).padStart(2, '0');
+                    pending.push(fetchData(`${harness}-${h}.json`));
+                }
+                for (let i = 0; i < chunkIndices.length; i++) {
+                    statusText.textContent = `Processing chunk ${i + 1}/${totalChunks}...`;
+
+                    const response = await pending[i];
+                    // Refill the pipeline: start fetching i+3 while we parse i.
+                    const next = i + 3;
+                    if (next < chunkIndices.length) {
+                        const h = chunkIndices[next].toString(16).padStart(2, '0');
+                        pending.push(fetchData(`${harness}-${h}.json`));
+                    }
+
+                    if (!response.ok) continue;
+                    const chunkData = await response.json();
+                    processChunk(chunkData, issueTestPaths);
+                    // chunkData is now unreferenced and eligible for GC
+                }
+
+                statusText.textContent = metadataInfo || 'Data loaded';
+
+                // Set favicon
+                setFavicon('#dc3545');
+
+                // Compute and render
+                recomputeAndRender();
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+                document.getElementById('no-data').style.display = 'block';
+                statusText.textContent = 'Error';
+            }
+        }
+
+        // Set up search
+        document.getElementById('search-box').addEventListener('input', onSearchInput);
+        document.getElementById('search-clear').addEventListener('click', clearSearch);
+
+        // Set up harness switcher
+        initHarnessSwitcher('Perma-Fails');
+
+        // Load data
+        loadData();
+    </script>
+</body>
+</html>
