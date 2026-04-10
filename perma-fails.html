@@ -416,7 +416,7 @@
         // Per-test job breakdowns, keyed by fullPath.
         // Each value: { fullPath, testName, component, cells: { "variant|platform": {variant, platform, passes, failures, timeouts, crashes, skips} } }
         let testBreakdowns = {};
-        let permaFailEntries = [];    // Computed list of perma-fail/high-fail entries
+        let pfEntries = [];    // Computed list of perma-fail/high-fail entries
         let metadataInfo = '';        // Date range text from data
         let sortField = 'worstRate';
         let sortDirection = 'desc';
@@ -745,17 +745,17 @@
 
         function renderSummary() {
             const el = document.getElementById('summary-bar');
-            const permaTests = permaFailEntries.filter(e => e.permaJobs.length > 0).length;
-            const highFailTests = permaFailEntries.filter(e => e.highFailJobs.length > 0 && e.permaJobs.length === 0).length;
-            const totalPermaJobs = permaFailEntries.reduce((s, e) => s + e.permaJobs.length, 0);
-            const alreadySkippedJobs = permaFailEntries.reduce((s, e) => s + e.skippedJobs.length, 0);
+            const permaTests = pfEntries.filter(e => e.permaJobs.length > 0).length;
+            const highFailTests = pfEntries.filter(e => e.highFailJobs.length > 0 && e.permaJobs.length === 0).length;
+            const totalPermaJobs = pfEntries.reduce((s, e) => s + e.permaJobs.length, 0);
+            const alreadySkippedJobs = pfEntries.reduce((s, e) => s + e.skippedJobs.length, 0);
 
             let html = '';
             html += renderSummaryStat('Perma-fail tests', permaTests, permaTests > 0 ? 'fail' : 'good');
             html += renderSummaryStat('Perma-fail jobs', totalPermaJobs, totalPermaJobs > 0 ? 'fail' : 'good');
             html += renderSummaryStat('>50% fail tests', highFailTests, highFailTests > 0 ? 'orange' : 'good');
             html += renderSummaryStat('Already skipped', alreadySkippedJobs, alreadySkippedJobs > 0 ? 'skip' : 'zero');
-            html += renderSummaryStat('Total listed', permaFailEntries.length, '');
+            html += renderSummaryStat('Total listed', pfEntries.length, '');
 
             el.innerHTML = html;
             el.style.display = 'flex';
@@ -771,7 +771,7 @@
             const table = document.getElementById('results-table');
 
             // Filter by search
-            let entries = permaFailEntries;
+            let entries = pfEntries;
             if (searchQuery) {
                 const q = searchQuery.toLowerCase();
                 entries = entries.filter(e =>
@@ -926,30 +926,25 @@
         // ---- Console API ----
         // Expose computed data for programmatic access from the browser console.
 
-        // Get a flat array of all perma-fail entries (same as the page displays).
-        // Each entry has: fullPath, component, permaJobs[], highFailJobs[], worstRate, overallRate, totalRuns, totalIssues.
         function getPermaFails() {
-            return permaFailEntries.filter(e => e.permaJobs.length > 0);
+            return pfEntries.filter(e => e.permaJobs.length > 0);
         }
 
-        // Get all tests with >50% failure rate (but not 100%).
         function getHighFailTests() {
-            return permaFailEntries.filter(e => e.highFailJobs.length > 0);
+            return pfEntries.filter(e => e.highFailJobs.length > 0);
         }
 
-        // Get all entries (both perma and high-fail).
         function getAllEntries() {
-            return permaFailEntries;
+            return pfEntries;
         }
 
-        // Get a text summary suitable for pasting into a bug or spreadsheet.
         function getSummaryText() {
             const lines = [];
             for (const e of getPermaFails()) {
                 const jobs = e.permaJobs.map(j => formatCellName(j)).join(', ');
                 lines.push(`${e.fullPath}\t100%\t${jobs}`);
             }
-            for (const e of permaFailEntries) {
+            for (const e of pfEntries) {
                 for (const j of e.highFailJobs) {
                     lines.push(`${e.fullPath}\t${(j.rate * 100).toFixed(1)}%\t${formatCellName(j)}`);
                 }
@@ -957,7 +952,6 @@
             return lines.join('\n');
         }
 
-        // Get skip-if annotations that could be added to manifest files to skip perma-fails.
         function getSkipAnnotations() {
             const annotations = [];
             for (const e of getPermaFails()) {
@@ -974,15 +968,13 @@
             return annotations;
         }
 
-        // Get tests that have jobs already skipped (skip-only, zero runs).
         function getAlreadySkipped() {
-            return permaFailEntries.filter(e => e.skippedJobs.length > 0);
+            return pfEntries.filter(e => e.skippedJobs.length > 0);
         }
 
-        // Get data grouped by component.
         function getByComponent() {
             const byComponent = {};
-            for (const e of permaFailEntries) {
+            for (const e of pfEntries) {
                 const comp = e.component || 'Unknown';
                 if (!byComponent[comp]) byComponent[comp] = [];
                 byComponent[comp].push(e);
@@ -990,10 +982,66 @@
             return byComponent;
         }
 
+        function logEntries(list) {
+            console.table(list.map(e => ({
+                test: e.fullPath,
+                component: e.component || '',
+                permaJobs: e.permaJobs.map(j => formatCellName(j)).join(', '),
+                highFailJobs: e.highFailJobs.map(j => `${formatCellName(j)} (${(j.rate * 100).toFixed(0)}%)`).join(', '),
+                worstRate: (e.worstRate * 100).toFixed(0) + '%',
+                totalRuns: e.totalRuns,
+            })));
+        }
+
+        Object.defineProperty(window, 'permaFails', { get() {
+            const list = getPermaFails();
+            logEntries(list);
+            return list;
+        }});
+
+        Object.defineProperty(window, 'frequentFails', { get() {
+            const list = getHighFailTests().filter(e => e.permaJobs.length === 0);
+            logEntries(list);
+            return list;
+        }});
+
+        window.formatForPrompt = function(list) {
+            if (!Array.isArray(list)) list = getPermaFails();
+            return list.map(e => {
+                const jobs = [...e.permaJobs, ...e.highFailJobs];
+                const configs = jobs.map(j => {
+                    const name = formatCellName(j);
+                    return j.rate < 1 ? `${name} (${(j.rate * 100).toFixed(0)}%)` : name;
+                });
+                let line = e.fullPath + ' permafails';
+                if (configs.length) line += ' on ' + configs.join(', ');
+
+                return line;
+            }).join('\n');
+        };
+
+        function logConsoleAPI() {
+            console.log(
+                '%cConsole API available',
+                'font-weight: bold; font-size: 14px; color: #2563eb'
+            );
+            console.log(
+                `%c  permaFails%c    — tests failing 100% on at least one job\n` +
+                `%c  frequentFails%c — tests failing >50% but not 100%\n\n` +
+                `    Each entry: { fullPath, component, permaJobs[], highFailJobs[],\n` +
+                `                  worstRate, overallRate, totalRuns, totalIssues }\n` +
+                `    Also logs a console.table() for quick viewing.\n\n` +
+                `  formatForPrompt(list) — pretty-prints for use as a Claude prompt\n\n` +
+                `  Example: copy(formatForPrompt(permaFails))`,
+                'color: #059669; font-weight: bold', 'color: inherit',
+                'color: #059669; font-weight: bold', 'color: inherit'
+            );
+        }
+
         // ---- Main ----
 
         function recomputeAndRender() {
-            permaFailEntries = computeEntries();
+            pfEntries = computeEntries();
             renderSummary();
             renderResults();
         }
@@ -1088,6 +1136,7 @@
 
                 // Compute and render
                 recomputeAndRender();
+                logConsoleAPI();
 
             } catch (error) {
                 console.error('Error loading data:', error);
