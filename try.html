@@ -1388,9 +1388,9 @@ self.onmessage = function(e) {
         const container = document.getElementById('revisions-container');
         if (!revisions.length) { container.innerHTML = ''; return; }
 
-        // Show revisions in reverse (oldest first), skip the try commit itself (first in array = tip).
+        // Skip the try commit itself (first in array = tip); keep newest-first like Treeherder.
         const displayRevs = currentRepo === 'try' && revisions.length > 1
-            ? revisions.slice(1).reverse() : revisions;
+            ? revisions.slice(1) : revisions;
 
         const hgRepoPath = { 'mozilla-central': 'mozilla-central', 'autoland': 'integration/autoland', 'try': 'try' }[currentRepo] || currentRepo;
         let html = '<div class="revisions-list">';
@@ -1399,8 +1399,9 @@ self.onmessage = function(e) {
             const comment = rev.comments.split('\n')[0];
             const hgUrl = `https://hg.mozilla.org/${hgRepoPath}/rev/${rev.revision}`;
             html += `<div><a class="rev-hash" href="${escapeAttr(hgUrl)}" target="_blank">${shortHash}</a> `;
-            html += `<span class="rev-comment">${escapeHtml(comment)}</span>`;
-            html += `<span class="rev-author"> — ${escapeHtml(rev.author)}</span>`;
+            html += `<span class="rev-comment">${linkifyBugNumbers(comment)}</span>`;
+            const authorName = rev.author.replace(/ <[^>]+>$/, '');
+            html += `<span class="rev-author" title="${escapeAttr(rev.author)}"> — ${escapeHtml(authorName)}</span>`;
             html += '</div>';
         }
         html += '</div>';
@@ -1408,7 +1409,7 @@ self.onmessage = function(e) {
 
         // Update heading and tab title with repo name and commit message.
         const repoLabel = currentRepo.charAt(0).toUpperCase() + currentRepo.slice(1);
-        const mainRev = displayRevs[displayRevs.length - 1] || revisions[0];
+        const mainRev = displayRevs[0] || revisions[0];
         const commitMsg = mainRev?.comments?.split('\n')[0];
         document.getElementById('page-heading').textContent =
             repoLabel + ' Push Results';
@@ -1766,6 +1767,14 @@ self.onmessage = function(e) {
         return cleanFailureSummary(lines)
             .map(l => l.replace(/^(PROCESS-CRASH \| )[0-9a-f-]{36} \| /, '$1'))
             .join('\n');
+    }
+
+    function linkifyBugNumbers(text) {
+        return escapeHtml(text).replace(
+            /\b(bug )(\d{4,})\b/gi,
+            (_, prefix, id) =>
+                `<a href="https://bugzilla.mozilla.org/show_bug.cgi?id=${id}" target="_blank" onclick="event.stopPropagation()">${prefix}${id}</a>`
+        );
     }
 
     function linkifyCrashIds(line, job) {
