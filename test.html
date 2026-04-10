@@ -542,6 +542,10 @@
         let dailyRateDataGlobal = null;
         let testIdGlobal = null;
 
+        // Display mapping state (computed once after data loads)
+        let swrCollapseMap = {};    // swrVariant -> baseVariant
+        let platformCollapseMap = {}; // detailedPlatform -> displayPlatform
+
         // Format duration in milliseconds to human readable
         function formatDurationMs(ms, hasData = true) {
             if (!hasData || ms === 0) {
@@ -590,6 +594,98 @@
                 }
             }
             return variant;
+        }
+
+        // Extract platform with bitness detail (e.g. "windows-32", "windows-64", "mac-aarch64")
+        function extractDetailedPlatform(name) {
+            const base = extractPlatform(name) || 'unknown';
+            if (base === 'unknown' || base === 'android') return base;
+            const slashIdx = name.indexOf('/');
+            const prefix = slashIdx !== -1 ? name.substring(0, slashIdx) : name;
+            if (/-aarch64(?:-|$)/.test(prefix)) return `${base}-aarch64`;
+            if (/-32(?:-|$)/.test(prefix)) return `${base}-32`;
+            if (/-64(?:-|$)/.test(prefix) || /-x86_64(?:-|$)/.test(prefix)) return `${base}-64`;
+            return base;
+        }
+
+        // Map jobName → display variant (with swr collapse applied)
+        function displayVariant(jobName) {
+            const variant = extractVariant(jobName);
+            return swrCollapseMap[variant] || variant;
+        }
+
+        // Map jobName → display platform (with 32/64 merge applied)
+        function displayPlatform(jobName) {
+            const dp = extractDetailedPlatform(jobName);
+            return platformCollapseMap[dp] || dp;
+        }
+
+        // Compute display mappings: swr collapse and platform 32/64 merge decisions.
+        // Reuses calculateJobNameBreakdown to avoid duplicating the data iteration.
+        function computeDisplayMappings(testId) {
+            swrCollapseMap = {};
+            platformCollapseMap = {};
+            const jobs = calculateJobNameBreakdown(testId);
+            if (Object.keys(jobs).length === 0) return;
+
+            // Re-aggregate per-jobName counts into variant × detailedPlatform
+            const outcomes = {};
+            for (const [jobName, c] of Object.entries(jobs)) {
+                const variant = extractVariant(jobName);
+                const dp = extractDetailedPlatform(jobName);
+                if (!outcomes[variant]) outcomes[variant] = {};
+                if (!outcomes[variant][dp]) outcomes[variant][dp] = {passes:0, failures:0, timeouts:0, crashes:0, skips:0};
+                const o = outcomes[variant][dp];
+                o.passes += c.passes; o.failures += c.failures;
+                o.timeouts += c.timeouts; o.crashes += c.crashes; o.skips += c.skips;
+            }
+
+            // SWR collapse: merge linux-only -swr variants into their base variant
+            for (const swrV of Object.keys(outcomes).filter(v => /-swr(?:-|$)/.test(v))) {
+                const dps = Object.keys(outcomes[swrV]);
+                if (!dps.every(p => p.startsWith('linux'))) continue;
+                const baseV = swrV.replace(/-swr(?=-|$)/, '');
+                if (!outcomes[baseV]) continue;
+                swrCollapseMap[swrV] = baseV;
+                for (const [dp, data] of Object.entries(outcomes[swrV])) {
+                    if (!outcomes[baseV][dp]) { outcomes[baseV][dp] = data; }
+                    else {
+                        const b = outcomes[baseV][dp];
+                        b.passes += data.passes; b.failures += data.failures;
+                        b.timeouts += data.timeouts; b.crashes += data.crashes; b.skips += data.skips;
+                    }
+                }
+                delete outcomes[swrV];
+            }
+
+            // Platform 32/64 merge: group detailed platforms by base OS
+            const basePlatformGroups = {};
+            for (const v of Object.values(outcomes))
+                for (const dp of Object.keys(v)) {
+                    const base = dp.replace(/-(32|64|aarch64)$/, '');
+                    if (!basePlatformGroups[base]) basePlatformGroups[base] = new Set();
+                    basePlatformGroups[base].add(dp);
+                }
+
+            for (const [base, subSet] of Object.entries(basePlatformGroups)) {
+                const subs = [...subSet];
+                if (subs.length <= 1) { platformCollapseMap[subs[0]] = base; continue; }
+                // Keep split only if some variant has different outcome types across sub-platforms
+                let hasDifferences = false;
+                for (const platformData of Object.values(outcomes)) {
+                    const sigs = subs.map(sp => {
+                        const d = platformData[sp];
+                        if (!d) return 'absent';
+                        const total = d.passes + d.failures + d.timeouts + d.crashes;
+                        if (total === 0) return d.skips > 0 ? 'skip' : 'absent';
+                        return (d.passes > 0 ? 'p' : '') + (d.failures > 0 ? 'f' : '') +
+                               (d.timeouts > 0 ? 't' : '') + (d.crashes > 0 ? 'c' : '');
+                    });
+                    const nonAbsent = sigs.filter(s => s !== 'absent');
+                    if (new Set(nonAbsent).size > 1) { hasDifferences = true; break; }
+                }
+                for (const sp of subs) platformCollapseMap[sp] = hasDifferences ? sp : base;
+            }
         }
 
         // Detect harness type from test file name
@@ -774,8 +870,8 @@
 
             if (!hasCellFilter) return true;
             const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-            const platform = extractPlatform(jobName) || 'unknown';
-            const variant = extractVariant(jobName);
+            const platform = displayPlatform(jobName);
+            const variant = displayVariant(jobName);
             const cellKey = `${variant}|${platform}`;
             return activeCells.has(cellKey);
         }
@@ -1306,7 +1402,7 @@
                 jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
             }
             if (!jobName) return null;
-            return `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+            return `${displayVariant(jobName)}|${displayPlatform(jobName)}`;
         }
 
         function calculateIssueMessageDailyRates(testId, issueType, issueMessage, activeCells) {
@@ -1348,7 +1444,7 @@
                                 } else if (statusGroup.taskIdIds) {
                                     for (const taskIdIndex of statusGroup.taskIdIds[i]) {
                                         const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                                        const key = `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+                                        const key = `${displayVariant(jobName)}|${displayPlatform(jobName)}`;
                                         if (activeCells.has(key)) dailyData[day].totalRuns++;
                                     }
                                 }
@@ -1411,7 +1507,7 @@
                                 } else if (statusGroup.taskIdIds) {
                                     for (const taskIdIndex of statusGroup.taskIdIds[i]) {
                                         const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                                        const key = `${extractVariant(jobName)}|${extractPlatform(jobName) || 'unknown'}`;
+                                        const key = `${displayVariant(jobName)}|${displayPlatform(jobName)}`;
                                         if (activeCells.has(key)) dailyData[day].count++;
                                     }
                                 }
@@ -1518,8 +1614,8 @@
         function buildCellDurationMap(perJobDurations) {
             const map = {};
             for (const [jobName, durations] of Object.entries(perJobDurations)) {
-                const platform = extractPlatform(jobName) || 'unknown';
-                const variant = extractVariant(jobName);
+                const platform = displayPlatform(jobName);
+                const variant = displayVariant(jobName);
                 const key = `${variant}|${platform}`;
                 if (!map[key]) map[key] = [];
                 map[key].push(...durations);
@@ -1791,8 +1887,8 @@
                                 if (msg?.startsWith('run-if')) continue;
                             }
                             const jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
-                            const platform = extractPlatform(jobName) || 'unknown';
-                            const variant = extractVariant(jobName);
+                            const platform = displayPlatform(jobName);
+                            const variant = displayVariant(jobName);
                             addCount(ensureCell(day, `${variant}|${platform}`), getCountAtIndex(statusGroup, i));
                         }
                     } else if (statusGroup.taskIdIds) {
@@ -1802,8 +1898,8 @@
                             if (day >= days) continue;
                             for (const taskIdIndex of statusGroup.taskIdIds[i]) {
                                 const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                                const platform = extractPlatform(jobName) || 'unknown';
-                                const variant = extractVariant(jobName);
+                                const platform = displayPlatform(jobName);
+                                const variant = displayVariant(jobName);
                                 addCount(ensureCell(day, `${variant}|${platform}`), 1);
                             }
                         }
@@ -1817,8 +1913,8 @@
                         if (day >= days) continue;
                         const taskIdIndex = statusGroup.taskIdIds[i];
                         const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                        const platform = extractPlatform(jobName) || 'unknown';
-                        const variant = extractVariant(jobName);
+                        const platform = displayPlatform(jobName);
+                        const variant = displayVariant(jobName);
                         addCount(ensureCell(day, `${variant}|${platform}`), 1);
                     }
                 }
@@ -1879,8 +1975,8 @@
                                 day += statusGroup.days[i];
                                 if (day >= days || !matchesEntry(i)) continue;
                                 const jobName = currentData.tables.jobNames[statusGroup.jobNameIds[i]];
-                                const platform = extractPlatform(jobName) || 'unknown';
-                                const variant = extractVariant(jobName);
+                                const platform = displayPlatform(jobName);
+                                const variant = displayVariant(jobName);
                                 addDayCell(day, `${variant}|${platform}`, getCountAtIndex(statusGroup, i));
                             }
                         } else if (statusGroup.taskIdIds) {
@@ -1890,8 +1986,8 @@
                                 if (day >= days || !matchesEntry(i)) continue;
                                 for (const taskIdIndex of statusGroup.taskIdIds[i]) {
                                     const jobName = currentData.tables.jobNames[currentData.taskInfo.jobNameIds[taskIdIndex]];
-                                    const platform = extractPlatform(jobName) || 'unknown';
-                                    const variant = extractVariant(jobName);
+                                    const platform = displayPlatform(jobName);
+                                    const variant = displayVariant(jobName);
                                     addDayCell(day, `${variant}|${platform}`);
                                 }
                             }
@@ -2548,8 +2644,8 @@
             const variants = {};
             const platformSet = new Set();
             for (const [jobName, counts] of jobEntries) {
-                const platform = extractPlatform(jobName) || 'unknown';
-                const variant = extractVariant(jobName);
+                const platform = displayPlatform(jobName);
+                const variant = displayVariant(jobName);
                 platformSet.add(platform);
                 if (!variants[variant]) variants[variant] = {};
                 if (!variants[variant][platform]) {
@@ -2566,6 +2662,12 @@
                 }
             }
 
+            const platformNames = {
+                'android': 'Android', 'linux': 'Linux', 'windows': 'Windows', 'mac': 'macOS',
+                'windows-32': 'Win 32', 'windows-64': 'Win 64',
+                'mac-64': 'macOS x64', 'mac-aarch64': 'macOS ARM',
+                'linux-32': 'Linux 32', 'linux-64': 'Linux 64',
+            };
             const platforms = Array.from(platformSet).sort();
 
             let html = `<div class="section">`;
@@ -2581,7 +2683,7 @@
             html += `<table class="platform-table job-table">`;
             html += `<thead><tr><th>Job</th>`;
             for (const platform of platforms) {
-                html += `<th>${escapeHtml(platform)}</th>`;
+                html += `<th>${escapeHtml(platformNames[platform] || platform)}</th>`;
             }
             html += `</tr></thead><tbody>`;
 
@@ -2767,6 +2869,9 @@
                     document.getElementById('status-line').style.color = '#dc3545';
                     return;
                 }
+
+                // Compute display mappings (swr collapse, platform 32/64 merge)
+                computeDisplayMappings(testInfo.testId);
 
                 // Compute stats
                 const stats = computeTestStats(currentData, testInfo.testId);
