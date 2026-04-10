@@ -190,6 +190,8 @@
             font-family: monospace;
             font-size: 13px;
             word-break: break-all;
+            display: flex;
+            align-items: baseline;
         }
 
         .result-row .test-name a {
@@ -272,7 +274,8 @@
         .component-line {
             font-size: 11px;
             color: #888;
-            margin-top: 1px;
+            margin-left: auto;
+            white-space: nowrap;
         }
 
         .action-button {
@@ -822,10 +825,10 @@
                 html += `<div class="test-info">`;
                 html += `<div class="test-name"><a href="${testPageUrl}" target="_blank">${escapeHtml(entry.fullPath)}</a>`;
                 html += `<a href="${searchfoxUrl}" class="action-button" target="_blank" title="Open in Searchfox">🔍</a>`;
-                html += `</div>`;
                 if (entry.component) {
-                    html += `<div class="component-line">${escapeHtml(entry.component)}</div>`;
+                    html += `<span class="component-line">${escapeHtml(entry.component)}</span>`;
                 }
+                html += `</div>`;
 
                 // Job tags (variant / platform)
                 html += `<div class="job-list">`;
