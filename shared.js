@@ -59,6 +59,24 @@ function extractPlatform(name) {
     return platform;
 }
 
+function extractDetailedPlatform(name) {
+    const base = extractPlatform(name) || 'unknown';
+    if (base === 'unknown' || base === 'android') return base;
+    const slashIdx = name.indexOf('/');
+    const prefix = slashIdx !== -1 ? name.substring(0, slashIdx) : name;
+    if (/-aarch64(?:-|$)/.test(prefix)) return `${base}-aarch64`;
+    if (/-32(?:-|$)/.test(prefix)) return `${base}-32`;
+    if (/-64(?:-|$)/.test(prefix) || /-x86_64(?:-|$)/.test(prefix)) return `${base}-64`;
+    return base;
+}
+
+const platformDisplayNames = {
+    'android': 'Android', 'linux': 'Linux', 'windows': 'Windows', 'mac': 'macOS',
+    'windows-32': 'Win 32', 'windows-64': 'Win 64',
+    'mac-64': 'macOS x64', 'mac-aarch64': 'macOS ARM',
+    'linux-32': 'Linux 32', 'linux-64': 'Linux 64',
+};
+
 function formatDurationS(totalSeconds) {
     if (totalSeconds >= 3600) {
         const hours = Math.floor(totalSeconds / 3600);

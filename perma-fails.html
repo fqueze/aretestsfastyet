@@ -448,7 +448,7 @@
                 const variant = extractVariant(rawJobName);
                 // Skip confirm-failures jobs: human-triggered, not regularly scheduled.
                 if (variant.endsWith('-cf')) return null;
-                const platform = extractPlatform(rawJobName) || 'unknown';
+                const platform = extractDetailedPlatform(rawJobName);
                 const key = `${variant}|${platform}`;
                 if (!cells[key]) cells[key] = { variant, platform, passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, latestRunDay: -1, latestSkipDay: -1 };
                 return cells[key];
@@ -530,9 +530,9 @@
             return { issues, total, rate: total > 0 ? issues / total : 0 };
         }
 
-        // Format a cell key for display: "asan-xpcshell / linux"
+        // Format a cell key for display: "asan-xpcshell / Linux"
         function formatCellName(cellData) {
-            return `${cellData.variant} / ${cellData.platform}`;
+            return `${cellData.variant} / ${platformDisplayNames[cellData.platform] || cellData.platform}`;
         }
 
         // Process a single chunk file: extract per-test job breakdowns and store them.
@@ -554,6 +554,83 @@
 
                 const cells = calculateJobBreakdown(data, testId);
                 testBreakdowns[fullPath] = { fullPath, testName, component, cells };
+            }
+        }
+
+        // Post-process all test breakdowns: collapse linux-only swr variants
+        // into their base variant, and merge sub-platforms (32/64/aarch64) when
+        // they have the same outcome types.
+        function postProcessBreakdowns() {
+            for (const breakdown of Object.values(testBreakdowns)) {
+                const cells = breakdown.cells;
+
+                // SWR collapse: merge linux-only -swr variants into base
+                for (const key of Object.keys(cells)) {
+                    const cell = cells[key];
+                    if (!/-swr(?:-|$)/.test(cell.variant)) continue;
+                    if (!cell.platform.startsWith('linux')) continue;
+                    // Check that NO cell with this swr variant exists on non-linux
+                    const hasNonLinux = Object.values(cells).some(
+                        c => c.variant === cell.variant && !c.platform.startsWith('linux'));
+                    if (hasNonLinux) continue;
+                    const baseVariant = cell.variant.replace(/-swr(?=-|$)/, '');
+                    const baseKey = `${baseVariant}|${cell.platform}`;
+                    if (!cells[baseKey]) continue;
+                    const base = cells[baseKey];
+                    base.passes += cell.passes; base.failures += cell.failures;
+                    base.timeouts += cell.timeouts; base.crashes += cell.crashes;
+                    base.skips += cell.skips;
+                    base.latestRunDay = Math.max(base.latestRunDay, cell.latestRunDay);
+                    base.latestSkipDay = Math.max(base.latestSkipDay, cell.latestSkipDay);
+                    delete cells[key];
+                }
+
+                // Platform merge: group cells by (variant, basePlatform)
+                const groups = {};
+                for (const [key, cell] of Object.entries(cells)) {
+                    const basePlatform = cell.platform.replace(/-(32|64|aarch64)$/, '');
+                    const gk = `${cell.variant}|${basePlatform}`;
+                    if (!groups[gk]) groups[gk] = [];
+                    groups[gk].push(key);
+                }
+                for (const subs of Object.values(groups)) {
+                    if (subs.length <= 1) {
+                        // Single sub-platform: normalize to base name
+                        const cell = cells[subs[0]];
+                        const basePlatform = cell.platform.replace(/-(32|64|aarch64)$/, '');
+                        if (cell.platform !== basePlatform) {
+                            const newKey = `${cell.variant}|${basePlatform}`;
+                            cell.platform = basePlatform;
+                            if (subs[0] !== newKey) { cells[newKey] = cell; delete cells[subs[0]]; }
+                        }
+                        continue;
+                    }
+                    // Check if all sub-platforms have the same outcome signature
+                    const sig = (c) => {
+                        const total = c.passes + c.failures + c.timeouts + c.crashes;
+                        if (total === 0) return c.skips > 0 ? 'skip' : 'absent';
+                        return (c.passes > 0 ? 'p' : '') + (c.failures > 0 ? 'f' : '') +
+                               (c.timeouts > 0 ? 't' : '') + (c.crashes > 0 ? 'c' : '');
+                    };
+                    const sigs = subs.map(k => sig(cells[k]));
+                    const nonAbsent = sigs.filter(s => s !== 'absent');
+                    if (new Set(nonAbsent).size > 1) continue; // Different outcomes: keep split
+                    // Same outcomes: merge into first, using base platform name
+                    const target = cells[subs[0]];
+                    const basePlatform = target.platform.replace(/-(32|64|aarch64)$/, '');
+                    for (let i = 1; i < subs.length; i++) {
+                        const src = cells[subs[i]];
+                        target.passes += src.passes; target.failures += src.failures;
+                        target.timeouts += src.timeouts; target.crashes += src.crashes;
+                        target.skips += src.skips;
+                        target.latestRunDay = Math.max(target.latestRunDay, src.latestRunDay);
+                        target.latestSkipDay = Math.max(target.latestSkipDay, src.latestSkipDay);
+                        delete cells[subs[i]];
+                    }
+                    target.platform = basePlatform;
+                    const newKey = `${target.variant}|${basePlatform}`;
+                    if (subs[0] !== newKey) { cells[newKey] = target; delete cells[subs[0]]; }
+                }
             }
         }
 
@@ -743,7 +820,7 @@
                 html += `<div class="job-list">`;
                 for (const j of entry.permaJobs) {
                     const pct = (j.rate * 100).toFixed(0);
-                    const displayName = `${j.variant} / ${j.platform}`;
+                    const displayName = formatCellName(j);
                     const issueBreakdown = formatIssueBreakdown(j.data);
                     const lowRuns = j.total < LOW_RUNS_THRESHOLD ? ' low-runs' : '';
                     const runsLabel = j.total < LOW_RUNS_THRESHOLD ? ` (${j.total} runs)` : '';
@@ -752,14 +829,14 @@
                 for (const j of entry.highFailJobs) {
                     const pct = (j.rate * 100).toFixed(1);
                     const tagClass = j.rate >= 0.8 ? 'high' : 'medium';
-                    const displayName = `${j.variant} / ${j.platform}`;
+                    const displayName = formatCellName(j);
                     const issueBreakdown = formatIssueBreakdown(j.data);
                     const lowRuns = j.total < LOW_RUNS_THRESHOLD ? ' low-runs' : '';
                     const runsLabel = j.total < LOW_RUNS_THRESHOLD ? ` (${j.total} runs)` : '';
                     html += `<span class="job-tag ${tagClass}${lowRuns}" title="${escapeAttr(displayName)}: ${j.issues}/${j.total} runs (${pct}%)${issueBreakdown}">${escapeHtml(displayName)} ${pct}%${runsLabel}</span>`;
                 }
                 for (const j of entry.skippedJobs) {
-                    const displayName = `${j.variant} / ${j.platform}`;
+                    const displayName = formatCellName(j);
                     html += `<span class="job-tag skipped" title="${escapeAttr(displayName)}: already skipped (${j.skips} skips, 0 runs)">${escapeHtml(displayName)} skipped</span>`;
                 }
                 html += `</div>`;
@@ -839,12 +916,12 @@
         function getSummaryText() {
             const lines = [];
             for (const e of getPermaFails()) {
-                const jobs = e.permaJobs.map(j => `${j.variant} / ${j.platform}`).join(', ');
+                const jobs = e.permaJobs.map(j => formatCellName(j)).join(', ');
                 lines.push(`${e.fullPath}\t100%\t${jobs}`);
             }
             for (const e of permaFailEntries) {
                 for (const j of e.highFailJobs) {
-                    lines.push(`${e.fullPath}\t${(j.rate * 100).toFixed(1)}%\t${j.variant} / ${j.platform}`);
+                    lines.push(`${e.fullPath}\t${(j.rate * 100).toFixed(1)}%\t${formatCellName(j)}`);
                 }
             }
             return lines.join('\n');
@@ -972,6 +1049,9 @@
                 }
 
                 statusText.textContent = metadataInfo || 'Data loaded';
+
+                // Collapse swr variants and merge same-outcome sub-platforms
+                postProcessBreakdowns();
 
                 // Set favicon
                 setFavicon('#dc3545');

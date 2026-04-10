@@ -596,18 +596,6 @@
             return variant;
         }
 
-        // Extract platform with bitness detail (e.g. "windows-32", "windows-64", "mac-aarch64")
-        function extractDetailedPlatform(name) {
-            const base = extractPlatform(name) || 'unknown';
-            if (base === 'unknown' || base === 'android') return base;
-            const slashIdx = name.indexOf('/');
-            const prefix = slashIdx !== -1 ? name.substring(0, slashIdx) : name;
-            if (/-aarch64(?:-|$)/.test(prefix)) return `${base}-aarch64`;
-            if (/-32(?:-|$)/.test(prefix)) return `${base}-32`;
-            if (/-64(?:-|$)/.test(prefix) || /-x86_64(?:-|$)/.test(prefix)) return `${base}-64`;
-            return base;
-        }
-
         // Map jobName → display variant (with swr collapse applied)
         function displayVariant(jobName) {
             const variant = extractVariant(jobName);
@@ -2662,12 +2650,6 @@
                 }
             }
 
-            const platformNames = {
-                'android': 'Android', 'linux': 'Linux', 'windows': 'Windows', 'mac': 'macOS',
-                'windows-32': 'Win 32', 'windows-64': 'Win 64',
-                'mac-64': 'macOS x64', 'mac-aarch64': 'macOS ARM',
-                'linux-32': 'Linux 32', 'linux-64': 'Linux 64',
-            };
             const platforms = Array.from(platformSet).sort();
 
             let html = `<div class="section">`;
@@ -2683,7 +2665,7 @@
             html += `<table class="platform-table job-table">`;
             html += `<thead><tr><th>Job</th>`;
             for (const platform of platforms) {
-                html += `<th>${escapeHtml(platformNames[platform] || platform)}</th>`;
+                html += `<th>${escapeHtml(platformDisplayNames[platform] || platform)}</th>`;
             }
             html += `</tr></thead><tbody>`;
 
