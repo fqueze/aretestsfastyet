@@ -244,6 +244,12 @@
             text-decoration: line-through;
         }
 
+        .skip-summary {
+            font-size: 11px;
+            color: #888;
+            cursor: default;
+        }
+
         .result-row .row-stats {
             display: flex;
             gap: 10px;
@@ -450,7 +456,7 @@
                 if (variant.endsWith('-cf')) return null;
                 const platform = extractDetailedPlatform(rawJobName);
                 const key = `${variant}|${platform}`;
-                if (!cells[key]) cells[key] = { variant, platform, passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, latestRunDay: -1, latestSkipDay: -1 };
+                if (!cells[key]) cells[key] = { variant, platform, passes: 0, failures: 0, timeouts: 0, crashes: 0, skips: 0, latestRunDay: -1, latestSkipDay: -1, skipMessages: new Set() };
                 return cells[key];
             };
 
@@ -464,12 +470,13 @@
                 const isTimeout = status && status.startsWith('TIMEOUT');
                 const isFail = status && !status.startsWith('PASS') && !status.startsWith('TIMEOUT') && !['SKIP', 'CRASH', 'EXPECTED-FAIL', 'OK', 'UNKNOWN'].includes(status);
 
-                const addToCell = (rawJobName, count, day) => {
+                const addToCell = (rawJobName, count, day, skipMessage) => {
                     const cell = ensureCell(rawJobName);
                     if (!cell) return;
                     if (isSkip) {
                         cell.skips += count;
                         if (day > cell.latestSkipDay) cell.latestSkipDay = day;
+                        if (skipMessage) cell.skipMessages.add(skipMessage);
                     } else {
                         if (isCrash) cell.crashes += count;
                         else if (isTimeout) cell.timeouts += count;
@@ -485,13 +492,15 @@
                     let day = 0;
                     for (let i = 0; i < statusGroup.jobNameIds.length; i++) {
                         if (statusGroup.days) day += statusGroup.days[i];
+                        let skipMsg = null;
                         if (isSkip) {
                             const messageId = statusGroup.messageIds?.[i];
                             const msg = messageId !== null && messageId !== undefined ? data.tables.messages[messageId] : null;
                             if (msg?.startsWith('run-if')) continue;
+                            skipMsg = msg;
                         }
                         const jobName = data.tables.jobNames[statusGroup.jobNameIds[i]];
-                        addToCell(jobName, getCountAtIndex(statusGroup, i), day);
+                        addToCell(jobName, getCountAtIndex(statusGroup, i), day, skipMsg);
                     }
                 } else if (statusGroup.taskIdIds && statusGroup.days !== undefined) {
                     let day = 0;
@@ -582,6 +591,7 @@
                     base.skips += cell.skips;
                     base.latestRunDay = Math.max(base.latestRunDay, cell.latestRunDay);
                     base.latestSkipDay = Math.max(base.latestSkipDay, cell.latestSkipDay);
+                    for (const m of cell.skipMessages) base.skipMessages.add(m);
                     delete cells[key];
                 }
 
@@ -625,6 +635,7 @@
                         target.skips += src.skips;
                         target.latestRunDay = Math.max(target.latestRunDay, src.latestRunDay);
                         target.latestSkipDay = Math.max(target.latestSkipDay, src.latestSkipDay);
+                        for (const m of src.skipMessages) target.skipMessages.add(m);
                         delete cells[subs[i]];
                     }
                     target.platform = basePlatform;
@@ -835,9 +846,25 @@
                     const runsLabel = j.total < LOW_RUNS_THRESHOLD ? ` (${j.total} runs)` : '';
                     html += `<span class="job-tag ${tagClass}${lowRuns}" title="${escapeAttr(displayName)}: ${j.issues}/${j.total} runs (${pct}%)${issueBreakdown}">${escapeHtml(displayName)} ${pct}%${runsLabel}</span>`;
                 }
-                for (const j of entry.skippedJobs) {
-                    const displayName = formatCellName(j);
-                    html += `<span class="job-tag skipped" title="${escapeAttr(displayName)}: already skipped (${j.skips} skips, 0 runs)">${escapeHtml(displayName)} skipped</span>`;
+                if (entry.skippedJobs.length > 0) {
+                    // Group jobs sharing the exact same set of skip rules.
+                    const groups = new Map();
+                    for (const j of entry.skippedJobs) {
+                        const msgs = [...j.data.skipMessages]
+                            .map(m => m.replace(/^skip-if:\s*/, ''))
+                            .sort();
+                        const key = msgs.join('\0');
+                        if (!groups.has(key)) groups.set(key, { jobs: [], msgs });
+                        groups.get(key).jobs.push(formatCellName(j));
+                    }
+                    const tooltipLines = [];
+                    for (const { jobs, msgs } of groups.values()) {
+                        if (tooltipLines.length > 0) tooltipLines.push('');
+                        for (const job of jobs) tooltipLines.push(job);
+                        for (const msg of msgs) tooltipLines.push('  ' + msg);
+                    }
+                    const count = entry.skippedJobs.length;
+                    html += `<span class="skip-summary" title="${escapeAttr(tooltipLines.join('\n'))}">already skipped for ${count} job kind${count !== 1 ? 's' : ''}</span>`;
                 }
                 html += `</div>`;
 
