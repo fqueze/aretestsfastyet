@@ -17,15 +17,7 @@ async function fetchFromCI(indexName, filename) {
         return fetch(`${cached}${filename}`);
     }
     const repository = window.location.hostname === 'fqueze.github.io' ? 'try' : 'mozilla-central';
-    let prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.latest.source.test-info-${indexName}/artifacts/public/`;
-
-    // Temporary workaround for the broken mochitest-timings job that ran on mozilla-central on April 9.
-    const mochiPrefix = "gecko.v2.mozilla-central.latest.source.test-info-mochitest-timings";
-    const knownGoodMochiPrefix = "gecko.v2.mozilla-central.pushdate.2026.04.07.latest.source.test-info-mochitest-timings";
-    if (prefix.includes(mochiPrefix)) {
-        prefix = prefix.replace(mochiPrefix, knownGoodMochiPrefix);
-    }
-
+    const prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.latest.source.test-info-${indexName}/artifacts/public/`;
     const response = await fetch(`${prefix}${filename}`);
     // Cache the resolved base URL from the final (redirected) URL.
     if (response.ok && response.url) {
