@@ -121,6 +121,15 @@ function computeTestStats(data, testId) {
             }
         } else if (isCrash) {
             crashCount += runCount;
+            // Collect crash signatures
+            if (statusGroup.crashSignatureIds && data.tables.crashSignatures) {
+                for (const sigId of statusGroup.crashSignatureIds) {
+                    if (sigId !== null && sigId !== undefined) {
+                        const sig = data.tables.crashSignatures[sigId];
+                        if (sig) failureMessages.push(sig);
+                    }
+                }
+            }
         } else if (isTimeout) {
             timeoutCount += runCount;
         } else if (status === 'UNKNOWN') {

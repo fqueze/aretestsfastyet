@@ -1343,6 +1343,17 @@ self.onmessage = function(e) {
             if (messages.length > 0 && messages.every(m => m === messages[0])) {
                 entry.commonMessage = messages[0];
             }
+            // For crashes, show the common crash signature on the summary line
+            // when all crash instances share the same signature.
+            if (!entry.commonMessage) {
+                const crashSigs = entry.instances
+                    .map(i => i.crashSignature)
+                    .filter(Boolean);
+                if (crashSigs.length > 0 && crashSigs.length === entry.instances.length &&
+                    crashSigs.every(s => s === crashSigs[0])) {
+                    entry.commonMessage = crashSigs[0];
+                }
+            }
             entry.intermittentCount = entry.instances.filter(i => i.intermittent).length;
             entry.seqRetryPasses = seqRetryPassCounts.get(entry.path) || 0;
             // Total job count across all job names that ran this test.
@@ -2240,14 +2251,15 @@ self.onmessage = function(e) {
         const json = new TextDecoder().decode(buffer);
         const data = JSON.parse(json);
         const results = [];
-        for (const { path, tryMessages, hasTimeout } of tests) {
+        for (const { path, tryMessages, hasTimeout, hasCrash } of tests) {
             const testInfo = findTest(data, path);
             if (!testInfo) { results.push({ path, found: false }); continue; }
             const stats = computeTestStats(data, testInfo.testId);
-            // Timeouts don't have messages in the data files, so match by
-            // checking if history also has timeouts for this test.
+            // Timeouts and crashes don't always have messages in the data files,
+            // so also match by checking if history has the same status type.
             const hasMatchingMessage = stats.failureMessages.some(m => tryMessages.includes(m))
-                || (hasTimeout && stats.timeoutCount > 0);
+                || (hasTimeout && stats.timeoutCount > 0)
+                || (hasCrash && stats.crashCount > 0);
             // Strip failureMessages to avoid transferring large strings back.
             delete stats.failureMessages;
             results.push({ path, found: true, stats, hasMatchingMessage });
@@ -2270,7 +2282,7 @@ self.onmessage = function(e) {
             };
             worker.addEventListener('message', handler);
             // Convert tryMessages Sets to arrays for structured clone.
-            const testsForWorker = tests.map(t => ({ path: t.path, tryMessages: [...t.tryMessages], hasTimeout: t.hasTimeout }));
+            const testsForWorker = tests.map(t => ({ path: t.path, tryMessages: [...t.tryMessages], hasTimeout: t.hasTimeout, hasCrash: t.hasCrash }));
             worker.postMessage({ buffer, tests: testsForWorker }, [buffer]);
         });
     }
@@ -2282,11 +2294,14 @@ self.onmessage = function(e) {
         const testEntries = tests.map(test => {
             const tryMessages = new Set();
             let hasTimeout = false;
+            let hasCrash = false;
             for (const inst of test.instances) {
                 if (inst.message) tryMessages.add(inst.message);
+                if (inst.crashSignature) tryMessages.add(inst.crashSignature);
                 if (inst.status === 'TIMEOUT') hasTimeout = true;
+                if (inst.status === 'CRASH') hasCrash = true;
             }
-            return { path: test.path, tryMessages, hasTimeout };
+            return { path: test.path, tryMessages, hasTimeout, hasCrash };
         });
 
         // Group tests by chunk file (harness + chunkHex).
