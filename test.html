@@ -2774,15 +2774,166 @@
                 const contentEl = document.getElementById('content');
                 contentEl.innerHTML = `<div class="test-header">` +
                     `<h1>Test Info</h1>` +
-                    `<form action="test.html" method="get" style="margin-top: 12px;">` +
+                    `<form id="test-form" action="test.html" method="get" style="margin-top: 12px;">` +
                     `<label for="test-input" style="font-size: 14px; color: #555;">Enter test path:</label>` +
-                    `<div style="display: flex; gap: 8px; margin-top: 6px;">` +
-                    `<input id="test-input" name="test" type="text" placeholder="e.g. browser/components/.../browser_foo.js" ` +
-                    `style="flex: 1; padding: 8px 10px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;">` +
+                    `<div style="position: relative; display: flex; gap: 8px; margin-top: 6px;">` +
+                    `<div style="flex: 1; position: relative;">` +
+                    `<input id="test-input" name="test" type="text" autocomplete="off" placeholder="e.g. browser/components/.../browser_foo.js" ` +
+                    `style="width: 100%; padding: 8px 10px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">` +
+                    `<div id="ac-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 300px; overflow-y: auto; ` +
+                    `background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 10; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"></div>` +
+                    `</div>` +
                     `<button type="submit" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">Go</button>` +
-                    `</div></form></div>`;
+                    `</div></form>` +
+                    `<div id="test-list-status" style="margin-top: 6px; font-size: 12px; color: #888;">Loading test list...</div>` +
+                    `</div>`;
                 contentEl.style.display = 'block';
                 document.getElementById('test-input').focus();
+
+                let allTests = [];
+                const input = document.getElementById('test-input');
+                const dropdown = document.getElementById('ac-dropdown');
+                const form = document.getElementById('test-form');
+                let selectedIdx = -1;
+
+                function navigate(path) {
+                    window.location.href = `test.html?test=${encodeURIComponent(path)}`;
+                }
+
+                function highlightMatches(text, terms) {
+                    const bold = new Uint8Array(text.length);
+                    const lower = text.toLowerCase();
+                    for (const term of terms) {
+                        let pos = 0;
+                        while ((pos = lower.indexOf(term, pos)) !== -1) {
+                            for (let i = pos; i < pos + term.length; i++) bold[i] = 1;
+                            pos++;
+                        }
+                    }
+                    let html = '', inBold = false;
+                    for (let i = 0; i < text.length; i++) {
+                        if (bold[i] && !inBold) { html += '<b>'; inBold = true; }
+                        if (!bold[i] && inBold) { html += '</b>'; inBold = false; }
+                        const c = text[i];
+                        html += c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : c;
+                    }
+                    if (inBold) html += '</b>';
+                    return html;
+                }
+
+                function showMatches() {
+                    const query = input.value.toLowerCase();
+                    if (!query || !allTests.length) {
+                        dropdown.style.display = 'none';
+                        selectedIdx = -1;
+                        return;
+                    }
+                    const terms = query.split(/\s+/).filter(t => t);
+                    const matches = [];
+                    for (const t of allTests) {
+                        const lower = t.toLowerCase();
+                        if (terms.every(term => lower.includes(term))) {
+                            matches.push(t);
+                            if (matches.length >= 50) break;
+                        }
+                    }
+                    if (!matches.length) {
+                        dropdown.style.display = 'none';
+                        selectedIdx = -1;
+                        return;
+                    }
+                    selectedIdx = -1;
+                    dropdown.innerHTML = matches.map((m, i) =>
+                        `<div class="ac-item" data-idx="${i}" style="padding: 6px 10px; font-family: monospace; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${highlightMatches(m, terms)}</div>`
+                    ).join('');
+                    dropdown.style.display = 'block';
+                }
+
+                function updateSelection() {
+                    const items = dropdown.querySelectorAll('.ac-item');
+                    items.forEach((el, i) => {
+                        el.style.background = i === selectedIdx ? '#007bff' : '';
+                        el.style.color = i === selectedIdx ? 'white' : '';
+                    });
+                    if (selectedIdx >= 0 && items[selectedIdx]) {
+                        items[selectedIdx].scrollIntoView({block: 'nearest'});
+                    }
+                }
+
+                input.addEventListener('input', showMatches);
+
+                input.addEventListener('keydown', e => {
+                    const items = dropdown.querySelectorAll('.ac-item');
+                    if (!items.length || dropdown.style.display === 'none') return;
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+                        updateSelection();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        selectedIdx = Math.max(selectedIdx - 1, 0);
+                        updateSelection();
+                    } else if (e.key === 'Enter' && selectedIdx >= 0) {
+                        e.preventDefault();
+                        navigate(items[selectedIdx].textContent);
+                    } else if (e.key === 'Escape') {
+                        dropdown.style.display = 'none';
+                        selectedIdx = -1;
+                    }
+                });
+
+                dropdown.addEventListener('mousedown', e => {
+                    const item = e.target.closest('.ac-item');
+                    if (item) {
+                        e.preventDefault();
+                        navigate(item.textContent);
+                    }
+                });
+
+                dropdown.addEventListener('mouseover', e => {
+                    const item = e.target.closest('.ac-item');
+                    if (item) {
+                        selectedIdx = parseInt(item.dataset.idx);
+                        updateSelection();
+                    }
+                });
+
+                input.addEventListener('blur', () => {
+                    setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+                });
+                input.addEventListener('focus', () => {
+                    if (input.value) showMatches();
+                });
+
+                // Fetch test lists from both harnesses in parallel
+                Promise.all([
+                    fetchData('xpcshell-issues.json').then(r => r.ok ? r.json() : null),
+                    fetchData('mochitest-issues.json').then(r => r.ok ? r.json() : null),
+                ]).then(([xpcshellData, mochitestData]) => {
+                    const testSet = new Set();
+                    for (const data of [xpcshellData, mochitestData]) {
+                        if (!data || !data.tables || !data.testInfo) continue;
+                        const {testPaths: paths, testNames: names} = data.tables;
+                        const {testPathIds, testNameIds} = data.testInfo;
+                        for (let i = 0; i < testPathIds.length; i++) {
+                            const dir = paths[testPathIds[i]];
+                            const name = names[testNameIds[i]];
+                            testSet.add(dir ? `${dir}/${name}` : name);
+                        }
+                    }
+                    allTests = [...testSet].sort();
+                    const statusEl = document.getElementById('test-list-status');
+                    if (statusEl) {
+                        statusEl.textContent = `${allTests.length.toLocaleString()} tests available for autocomplete`;
+                    }
+                    if (input.value) showMatches();
+                }).catch(() => {
+                    const statusEl = document.getElementById('test-list-status');
+                    if (statusEl) {
+                        statusEl.textContent = 'Could not load test list for autocomplete.';
+                    }
+                });
+
                 return;
             }
 
