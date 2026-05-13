@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speedometer 3 Noise</title>
+    <link rel="icon" href="favicon-orange.svg">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .revision-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .revision-input input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 380px;
+            font-family: monospace;
+        }
+        .revision-input input:focus {
+            outline: none;
+            border-color: #0060df;
+            box-shadow: 0 0 0 2px rgba(0, 96, 223, 0.2);
+        }
+
+        #status {
+            color: #666;
+            font-size: 13px;
+        }
+        #status.error-text {
+            color: #c00;
+        }
+
+        .intro {
+            color: #666;
+            font-size: 13px;
+            margin: 10px 0 0;
+            line-height: 1.5;
+        }
+        .intro code {
+            background: #f0f0f0;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .summary {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .summary h2 {
+            margin-top: 0;
+        }
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .summary-table th,
+        .summary-table td {
+            padding: 8px 12px;
+            text-align: right;
+            border-bottom: 1px solid #f0f0f0;
+            font-variant-numeric: tabular-nums;
+        }
+        .summary-table th:first-child,
+        .summary-table td:first-child {
+            text-align: left;
+        }
+        .summary-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            text-align: left;
+        }
+        .summary-table .platform-swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        .chart-container {
+            min-height: 0;
+            padding: 10px 15px;
+        }
+        .chart-container > div[id^="chart-"] {
+            height: 360px;
+        }
+
+        .warnings {
+            background: #fee;
+            color: #c00;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            display: none;
+        }
+        .warnings ul {
+            margin: 4px 0 0 0;
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Speedometer 3 Noise</h1>
+
+        <div class="controls">
+            <div class="revision-input">
+                <label for="revision-input">Revision:</label>
+                <input type="text" id="revision-input" placeholder="Enter a try revision (40-char hex, Treeherder URL, or repo:rev)" autofocus>
+                <button id="load-btn" onclick="loadRevision()">Load</button>
+                <span id="status"></span>
+            </div>
+            <p class="intro">
+                Pulls every Speedometer&nbsp;3 task on the push (including retriggers) and plots its
+                per-iteration timings. Recognizes both the cloud
+                <code>mochitest-browser-speedometer3</code> variant and the hardware
+                <code>*-browsertime-benchmark-firefox-speedometer3</code> variant — use a
+                <code>repo:revision</code> prefix (e.g. <code>autoland:abc…</code>) to pull from a
+                non-try push. Each dot is one Speedometer&nbsp;3 iteration; the horizontal bar is the
+                per-run mean. Color encodes platform; lighter shades distinguish retriggers within
+                the same platform.
+            </p>
+        </div>
+
+        <div id="warnings" class="warnings"></div>
+
+        <div class="summary" id="summarySection" style="display:none;">
+            <h2 id="summary">Per-Platform Summary</h2>
+            <div id="summaryBody"></div>
+        </div>
+
+        <div class="charts-grid" id="chartsGrid">
+            <!-- Charts inserted by JS, one per subtest. -->
+        </div>
+    </div>
+
+    <script>
+    'use strict';
+
+    const TC_BASE = 'https://firefox-ci-tc.services.mozilla.com';
+    const TH_BASE = 'https://treeherder.mozilla.org';
+    const LS_PREFIX = 'sp3-artifact-v2:';
+
+    // Two flavors of SP3 jobs we know how to read:
+    //  - cloud mochitest: `mochitest-browser-speedometer3`, artifact is the
+    //    per-subtest timings_ms JSON I added at public/test_info/speedometer3.json.
+    //  - hardware browsertime/raptor: jobs whose name contains
+    //    `browsertime-benchmark-firefox-speedometer3`. Their artifact is the
+    //    standard perfherder-data.json (suites[0].subtests[].replicates).
+    const JOB_FLAVORS = [
+        {
+            kind: 'mochitest',
+            match: jobName => jobName.includes('mochitest-browser-speedometer3'),
+            artifactPath: 'public/test_info/speedometer3.json',
+            parse: parseMochitestArtifact,
+        },
+        {
+            // Desktop: ...browsertime-benchmark-firefox-speedometer3
+            // Android: ...browsertime-benchmark-speedometer3-mobile-fenix (and
+            // variants for Geckoview / Chrome that we don't want, hence the
+            // explicit "speedometer3-mobile-fenix" check rather than a bare
+            // "speedometer3" substring that would also catch comparison runs).
+            kind: 'browsertime',
+            match: jobName =>
+                jobName.includes('browsertime-benchmark-firefox-speedometer3') ||
+                jobName.includes('browsertime-firefox-speedometer3') ||
+                jobName.includes('browsertime-benchmark-speedometer3-mobile-fenix'),
+            artifactPath: 'public/test_info/perfherder-data.json',
+            parse: parsePerfherderArtifact,
+        },
+    ];
+
+    function jobFlavor(jobName) {
+        return JOB_FLAVORS.find(f => f.match(jobName)) || null;
+    }
+
+    // Platform colors match shared.js / builds.html conventions. We color by
+    // the platform family (windows/mac/linux/android) but label charts with the
+    // detailed name Treeherder shows in its UI (e.g. "macOS 15 AArch64
+    // Shippable") so users see exactly the variant they clicked on.
+    const PLATFORM_COLORS = {
+        windows: '#ff7f0e', // orange
+        mac:     '#9467bd', // purple
+        linux:   '#1f77b4', // blue
+        android: '#2ca02c', // green
+    };
+    const PLATFORM_ORDER = ['windows', 'mac', 'linux', 'android'];
+
+    // Map a Treeherder `platform` slug + `platform_option` to the display
+    // string Treeherder itself shows in the job-type column. Treeherder's UI
+    // uses a fixed lookup table for this; we mirror the entries we care about
+    // for SP3 jobs and fall back to a "slugified" rendering for unknowns.
+    const TH_PLATFORM_LABELS = {
+        'linux2404-64':          'Linux 24.04',
+        'linux2404-64-shippable':'Linux 24.04 Shippable',
+        'linux2404-64-nightlyasrelease': 'Linux 24.04 NightlyAsRelease',
+        'macosx1470':            'macOS 14.70',
+        'macosx1470-shippable':  'macOS 14.70 Shippable',
+        'macosx1470-nightlyasrelease': 'macOS 14.70 NightlyAsRelease',
+        'macosx1500-aarch64':    'macOS 15 AArch64',
+        'macosx1500-aarch64-shippable': 'macOS 15 AArch64 Shippable',
+        'windows11-64-24h2':     'Windows 11 24H2',
+        'windows11-64-24h2-shippable': 'Windows 11 24H2 Shippable',
+        'windows11-64-24h2-nightlyasrelease': 'Windows 11 24H2 NightlyAsRelease',
+        'windows11-64-24h2-ref-hw': 'Windows 11 24H2 Ref HW',
+        'windows11-64-24h2-ref-hw-shippable': 'Windows 11 24H2 Ref HW Shippable',
+        'android-hw-p6-13-0-aarch64': 'Android 13.0 Pixel6 AArch64',
+        'android-hw-p6-13-0-aarch64-shippable': 'Android 13.0 Pixel6 AArch64 Shippable',
+        'android-hw-a55-14-0-aarch64': 'Android 14.0 Galaxy A55 AArch64',
+        'android-hw-a55-14-0-aarch64-shippable': 'Android 14.0 Galaxy A55 AArch64 Shippable',
+        'android-hw-s24-14-0-aarch64': 'Android 14.0 Galaxy S24 AArch64',
+        'android-hw-s24-14-0-aarch64-shippable': 'Android 14.0 Galaxy S24 AArch64 Shippable',
+    };
+
+    // Compose the Treeherder-style display string for a (platform, option) pair.
+    // Treeherder appends an option suffix (e.g. "opt", "debug") that we want to
+    // preserve, but the "opt" option is conventionally hidden in the UI.
+    function detailedPlatformLabel(platform, platformOption) {
+        if (!platform) return 'Unknown';
+        const combined = platformOption && platformOption !== 'opt'
+            ? `${platform}-${platformOption}`
+            : platform;
+        if (TH_PLATFORM_LABELS[combined]) return TH_PLATFORM_LABELS[combined];
+        // Fall back to the table entry for the bare platform if the
+        // option-combined key isn't known, then re-append the option.
+        if (TH_PLATFORM_LABELS[platform]) {
+            const base = TH_PLATFORM_LABELS[platform];
+            return platformOption && platformOption !== 'opt'
+                ? `${base} ${platformOption}`
+                : base;
+        }
+        // Last resort: hand back the raw slug so we never silently mislabel.
+        return combined;
+    }
+
+    let currentRepo = 'try';
+
+    // ----- UI helpers -----
+
+    function setStatus(text, isError = false) {
+        const el = document.getElementById('status');
+        el.textContent = text;
+        el.className = isError ? 'error-text' : '';
+    }
+
+    function showWarnings(warnings) {
+        const el = document.getElementById('warnings');
+        if (!warnings.length) {
+            el.style.display = 'none';
+            return;
+        }
+        el.style.display = 'block';
+        el.innerHTML = `<strong>Warnings:</strong><ul>${
+            warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')
+        }</ul>`;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    // ----- Revision parsing (matches try.html) -----
+
+    function extractRevision(input) {
+        input = input.trim();
+        const prefixMatch = input.match(/^([a-z][\w-]*):(.+)$/i);
+        if (prefixMatch) {
+            currentRepo = prefixMatch[1];
+            input = prefixMatch[2].trim();
+        } else {
+            currentRepo = 'try';
+        }
+        if (/^[a-f0-9]{40}$/i.test(input)) return input;
+        if (/^[a-f0-9]{12}$/i.test(input)) return input;
+        try {
+            const url = new URL(input);
+            const repo = url.searchParams.get('repo');
+            if (repo) currentRepo = repo;
+            const rev = url.searchParams.get('revision');
+            if (rev) return rev;
+        } catch {}
+        const hgMatch = input.match(/hg\.mozilla\.org\/([^/]+(?:\/[^/]+)*)\/rev\/([a-f0-9]+)$/i);
+        if (hgMatch) {
+            const repoMap = {
+                'mozilla-central': 'mozilla-central',
+                'integration/autoland': 'autoland',
+                'try': 'try',
+            };
+            const repoPath = hgMatch[1];
+            currentRepo = repoMap[repoPath] || repoPath.split('/').pop();
+            return hgMatch[2];
+        }
+        return input;
+    }
+
+    // ----- Treeherder + Taskcluster -----
+
+    async function fetchPushId(revision) {
+        const url = `${TH_BASE}/api/project/${currentRepo}/push/?full=true&count=10&revision=${revision}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`Failed to look up revision on Treeherder (HTTP ${resp.status})`);
+        }
+        const data = await resp.json();
+        if (!data.results || data.results.length === 0) {
+            throw new Error(`No push found for revision ${revision} on ${currentRepo}`);
+        }
+        return data.results[0].id;
+    }
+
+    // Pull every SP3 job (mochitest or browsertime) on this push, paginated.
+    // Each job is tagged with its detected flavor so we know which artifact to
+    // fetch and how to parse it later.
+    async function fetchSp3Jobs(pushId) {
+        const jobs = [];
+        let url = `${TH_BASE}/api/jobs/?push_id=${pushId}`;
+        let propertyNames = null;
+
+        while (url) {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`Failed to fetch jobs (HTTP ${resp.status})`);
+            const data = await resp.json();
+            if (!propertyNames) propertyNames = data.job_property_names || [];
+
+            const idx = name => propertyNames.indexOf(name);
+            const jobTypeNameIdx = idx('job_type_name');
+            const taskIdIdx = idx('task_id');
+            const retryIdIdx = idx('retry_id');
+            const stateIdx = idx('state');
+            const resultIdx = idx('result');
+            const platformIdx = idx('platform');
+            const platformOptionIdx = idx('platform_option');
+
+            for (const row of (data.results || [])) {
+                const jobName = row[jobTypeNameIdx];
+                if (!jobName) continue;
+                const flavor = jobFlavor(jobName);
+                if (!flavor) continue;
+                jobs.push({
+                    jobName,
+                    flavor,
+                    taskId: row[taskIdIdx],
+                    retryId: row[retryIdIdx] || 0,
+                    state: row[stateIdx],
+                    result: row[resultIdx],
+                    platform: platformIdx >= 0 ? row[platformIdx] : null,
+                    platformOption: platformOptionIdx >= 0 ? row[platformOptionIdx] : null,
+                });
+            }
+
+            url = data.next;
+        }
+        return jobs;
+    }
+
+    function platformFromJobName(jobName) {
+        // SP3 jobs run on windows / macos / linux only. Use the
+        // shared extractPlatform (shared.js) which yields windows/mac/linux/...
+        return extractPlatform(jobName);
+    }
+
+    // Cache artifacts in localStorage — they're immutable.
+    async function fetchArtifact(taskId, retryId, artifactPath, warnings) {
+        const cacheKey = `${LS_PREFIX}${taskId}.${retryId}:${artifactPath}`;
+        try {
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch (e) { /* fall through */ }
+
+        const url = `${TC_BASE}/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/${artifactPath}`;
+        try {
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                warnings.push(`Task ${taskId}.${retryId}: HTTP ${resp.status} fetching ${artifactPath}`);
+                return null;
+            }
+            const data = await resp.json();
+            try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (e) {}
+            return data;
+        } catch (e) {
+            warnings.push(`Task ${taskId}.${retryId}: ${e.message}`);
+            return null;
+        }
+    }
+
+    // ----- Artifact parsers — both normalize to { subtests: { name -> { timings_ms: [...] } } } -----
+
+    // Mochitest artifact (what `mochitest-browser-speedometer3` produces):
+    //   { subtests: { "TodoMVC-React-Complex-DOM": { timings_ms: [...] }, ... } }
+    // Already in the right shape; return as-is.
+    function parseMochitestArtifact(raw) {
+        if (!raw || typeof raw.subtests !== 'object') return null;
+        return { subtests: raw.subtests };
+    }
+
+    // Perfherder artifact (what raptor/browsertime jobs upload):
+    //   { suites: [{ name: "speedometer3", subtests: [{ name: "X/total", replicates: [...] }, ...] }] }
+    // We pick the speedometer3 suite, strip the "/total" suffix from each subtest
+    // name, and drop non-subtest aggregates (cpuTime, score).
+    function parsePerfherderArtifact(raw) {
+        if (!raw || !Array.isArray(raw.suites)) return null;
+        const suite = raw.suites.find(s => s.name === 'speedometer3');
+        if (!suite || !Array.isArray(suite.subtests)) return null;
+
+        const subtests = {};
+        for (const st of suite.subtests) {
+            if (!st.name || !Array.isArray(st.replicates)) continue;
+            if (st.unit && st.unit !== 'ms') continue; // skip score/cpuTime
+            // Subtest names like "TodoMVC-React-Complex-DOM/total" align with
+            // mochitest names once we strip the "/total".
+            const name = st.name.endsWith('/total')
+                ? st.name.slice(0, -'/total'.length)
+                : st.name;
+            subtests[name] = { timings_ms: st.replicates.slice() };
+        }
+        if (!Object.keys(subtests).length) return null;
+        return { subtests };
+    }
+
+    // ----- Stats helpers -----
+
+    function mean(arr) {
+        if (!arr.length) return 0;
+        let s = 0;
+        for (const v of arr) s += v;
+        return s / arr.length;
+    }
+    function stddev(arr) {
+        if (arr.length < 2) return 0;
+        const m = mean(arr);
+        let s = 0;
+        for (const v of arr) s += (v - m) * (v - m);
+        return Math.sqrt(s / (arr.length - 1));
+    }
+
+    function shadeColor(hex, t) {
+        const m = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+        if (!m) return hex;
+        const [r, g, b] = [m[1], m[2], m[3]].map(c => parseInt(c, 16));
+        const blend = c => Math.round(c + (255 - c) * t);
+        return `rgb(${blend(r)},${blend(g)},${blend(b)})`;
+    }
+
+    // ----- Rendering -----
+
+    function renderSummary(runs) {
+        const section = document.getElementById('summarySection');
+        section.style.display = 'block';
+
+        // Per-platform: count runs, total iterations, and the average
+        // coefficient of variation (stddev/mean) across all subtests.
+        // CV is comparable across subtests despite differing magnitudes.
+        const subtestNames = new Set();
+        for (const r of runs) {
+            for (const name of Object.keys(r.data.subtests || {})) {
+                subtestNames.add(name);
+            }
+        }
+
+        // Split by (detailed platform, kind) — pooling mochitest+browsertime
+        // would mask the signal the user is here for, and pooling
+        // "Linux 24.04 Shippable" with "Linux 24.04 NightlyAsRelease" would
+        // do the same across build variants. If only one kind is present
+        // for a row, the kind column is the only row, which is fine.
+        const KIND_LABEL = { mochitest: 'mochitest', browsertime: 'browsertime' };
+        const KIND_ORDER = ['mochitest', 'browsertime'];
+
+        // Collect the unique detailed platforms in a stable order: group by
+        // family (PLATFORM_ORDER), then alphabetical inside each family.
+        const platformsByFamily = {};
+        for (const fam of PLATFORM_ORDER) platformsByFamily[fam] = new Set();
+        for (const r of runs) {
+            (platformsByFamily[r.family] ||= new Set()).add(r.detailedPlatform);
+        }
+
+        const rows = [];
+        for (const fam of PLATFORM_ORDER) {
+            const detailed = [...(platformsByFamily[fam] || [])].sort();
+            for (const dp of detailed) {
+                for (const kind of KIND_ORDER) {
+                    const group = runs.filter(r =>
+                        r.family === fam && r.detailedPlatform === dp && r.kind === kind);
+                    if (!group.length) continue;
+
+                    const cvs = [];
+                    let iterCount = 0;
+                    for (const subtest of subtestNames) {
+                        const pooled = [];
+                        for (const r of group) {
+                            const s = r.data.subtests?.[subtest];
+                            if (s && Array.isArray(s.timings_ms)) pooled.push(...s.timings_ms);
+                        }
+                        if (pooled.length >= 2) {
+                            const m = mean(pooled);
+                            if (m > 0) cvs.push(stddev(pooled) / m);
+                            iterCount += pooled.length;
+                        }
+                    }
+                    const avgCv = cvs.length ? mean(cvs) : null;
+
+                    rows.push(`
+                        <tr>
+                            <td><span class="platform-swatch" style="background:${PLATFORM_COLORS[fam]}"></span>${escapeHtml(dp)}</td>
+                            <td>${KIND_LABEL[kind]}</td>
+                            <td>${group.length}</td>
+                            <td>${iterCount.toLocaleString()}</td>
+                            <td>${avgCv !== null ? (avgCv * 100).toFixed(2) + '%' : '—'}</td>
+                        </tr>
+                    `);
+                }
+            }
+        }
+
+        document.getElementById('summaryBody').innerHTML = `
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th>Platform</th>
+                        <th>Job kind</th>
+                        <th style="text-align:right">Runs</th>
+                        <th style="text-align:right">Iterations</th>
+                        <th style="text-align:right" title="Coefficient of variation (stddev/mean) per subtest, averaged across subtests. Lower = less noisy.">Mean CV across subtests</th>
+                    </tr>
+                </thead>
+                <tbody>${rows.join('')}</tbody>
+            </table>
+        `;
+    }
+
+    function renderCharts(runs) {
+        // Build x-axis categories. Stable order: walk families in
+        // PLATFORM_ORDER, then each detailed platform name within a family
+        // alphabetically, then mochitest before browsertime. Multiple runs of
+        // the same (detailed platform, kind) become separate columns with
+        // progressively paler shades. Treeherder returns jobs newest-first;
+        // reverse so column #1 is the original (oldest) run.
+        const categories = [];
+        const KIND_LABELS = { mochitest: 'mochitest', browsertime: 'browsertime' };
+        const KIND_ORDER = ['mochitest', 'browsertime'];
+
+        const platformsByFamily = {};
+        for (const fam of PLATFORM_ORDER) platformsByFamily[fam] = new Set();
+        for (const r of runs) {
+            (platformsByFamily[r.family] ||= new Set()).add(r.detailedPlatform);
+        }
+
+        for (const fam of PLATFORM_ORDER) {
+            const detailed = [...(platformsByFamily[fam] || [])].sort();
+            for (const dp of detailed) {
+                const dpRuns = runs.filter(r => r.family === fam && r.detailedPlatform === dp);
+                const kindsHere = KIND_ORDER.filter(k => dpRuns.some(r => r.kind === k));
+                for (const kind of kindsHere) {
+                    const kindRuns = dpRuns.filter(r => r.kind === kind);
+                    kindRuns.reverse();
+                    kindRuns.forEach((r, idx) => {
+                        const t = kindRuns.length > 1 ? (idx / (kindRuns.length - 1)) * 0.5 : 0;
+                        // Only annotate the kind in the column label when both
+                        // kinds are present for this detailed platform —
+                        // otherwise it's redundant noise.
+                        const kindSuffix = kindsHere.length > 1 ? ` ${KIND_LABELS[kind]}` : '';
+                        const replicateSuffix = kindRuns.length > 1 ? ` #${idx + 1}` : '';
+                        categories.push({
+                            family: fam,
+                            detailedPlatform: dp,
+                            kind,
+                            taskId: r.taskId,
+                            retryId: r.retryId,
+                            label: `${dp}${kindSuffix}${replicateSuffix}`,
+                            color: shadeColor(PLATFORM_COLORS[fam], t),
+                        });
+                    });
+                }
+            }
+        }
+
+        const subtestNames = new Set();
+        for (const r of runs) {
+            for (const name of Object.keys(r.data.subtests || {})) {
+                subtestNames.add(name);
+            }
+        }
+        const sortedSubtests = [...subtestNames].sort();
+
+        const grid = document.getElementById('chartsGrid');
+        grid.innerHTML = '';
+
+        sortedSubtests.forEach((subtest, chartIdx) => {
+            const chartDiv = document.createElement('div');
+            chartDiv.className = 'chart-container';
+            const plotId = `chart-${chartIdx}`;
+            chartDiv.innerHTML = `<div id="${plotId}"></div>`;
+            grid.appendChild(chartDiv);
+
+            const traces = [];
+            const meanShapes = [];
+
+            categories.forEach((cat, catIdx) => {
+                const run = runs.find(r =>
+                    r.family === cat.family &&
+                    r.detailedPlatform === cat.detailedPlatform &&
+                    r.kind === cat.kind &&
+                    r.taskId === cat.taskId &&
+                    r.retryId === cat.retryId
+                );
+                if (!run) return;
+                const s = run.data.subtests?.[subtest];
+                if (!s || !Array.isArray(s.timings_ms) || !s.timings_ms.length) return;
+
+                const timings = s.timings_ms;
+                const xVals = timings.map(() => catIdx + (Math.random() - 0.5) * 0.4);
+                const m = mean(timings);
+
+                traces.push({
+                    x: xVals,
+                    y: timings,
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: cat.label,
+                    marker: {
+                        color: cat.color,
+                        size: 5,
+                        opacity: 0.65,
+                        line: { width: 0 },
+                    },
+                    customdata: timings.map(() => ({
+                        // taskId / retryId / name are read by addClickHandler
+                        // in shared.js to open the resource-usage profile.
+                        taskId: cat.taskId,
+                        retryId: cat.retryId,
+                        name: run.jobName,
+                        platform: cat.detailedPlatform,
+                        kind: cat.kind,
+                        mean: m.toFixed(2),
+                        n: timings.length,
+                    })),
+                    hovertemplate:
+                        `<b>${subtest}</b><br>` +
+                        `Platform: %{customdata.platform}<br>` +
+                        `Kind: %{customdata.kind}<br>` +
+                        `Task: %{customdata.taskId}<br>` +
+                        `Iteration: %{y:.2f} ms<br>` +
+                        `Run mean: %{customdata.mean} ms (n=%{customdata.n})<br>` +
+                        `<i>Click to view profile</i>` +
+                        `<extra></extra>`,
+                    showlegend: false,
+                });
+
+                // Horizontal mean line — drawn as a shape so it sits behind
+                // the markers and doesn't clutter the legend.
+                meanShapes.push({
+                    type: 'line',
+                    xref: 'x', yref: 'y',
+                    x0: catIdx - 0.35, x1: catIdx + 0.35,
+                    y0: m, y1: m,
+                    line: { color: cat.color, width: 2 },
+                    layer: 'above',
+                });
+            });
+
+            if (!traces.length) {
+                chartDiv.innerHTML = `<h3 style="margin:8px 0 0 8px;color:#555">${subtest}</h3>
+                    <div style="padding:20px;color:#999">No data for this subtest in the loaded runs.</div>`;
+                return;
+            }
+
+            const layout = {
+                title: { text: subtest, font: { size: 14 } },
+                xaxis: {
+                    tickmode: 'array',
+                    tickvals: categories.map((_, i) => i),
+                    ticktext: categories.map(c => c.label),
+                    tickfont: { size: 11 },
+                    range: [-0.6, categories.length - 0.4],
+                    zeroline: false,
+                    showgrid: false,
+                },
+                yaxis: { title: 'ms', rangemode: 'tozero', zeroline: false },
+                shapes: meanShapes,
+                hovermode: 'closest',
+                showlegend: false,
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 13, color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                    },
+                },
+                margin: { l: 60, r: 30, t: 40, b: 60 },
+            };
+
+            Plotly.newPlot(plotId, traces, layout, {
+                responsive: true,
+                displayModeBar: false,
+            });
+
+            // Open the job's resource-usage profile in profiler.firefox.com
+            // when a dot is clicked (shared.js handles cursor + alt-key for
+            // TaskCluster Tools).
+            addClickHandler(plotId);
+        });
+    }
+
+    // ----- Top-level flow -----
+
+    async function loadRevision() {
+        const input = document.getElementById('revision-input').value;
+        const revision = extractRevision(input);
+        if (!revision) {
+            setStatus('Please enter a revision.', true);
+            return;
+        }
+
+        const url = new URL(window.location);
+        url.searchParams.set('rev', revision);
+        if (currentRepo !== 'try') {
+            url.searchParams.set('repo', currentRepo);
+        } else {
+            url.searchParams.delete('repo');
+        }
+        window.history.replaceState(null, '', url);
+
+        document.getElementById('load-btn').disabled = true;
+        document.getElementById('summarySection').style.display = 'none';
+        document.getElementById('chartsGrid').innerHTML = '';
+        showWarnings([]);
+
+        try {
+            setStatus('Looking up push on Treeherder…');
+            const pushId = await fetchPushId(revision);
+
+            setStatus('Fetching jobs…');
+            const sp3Jobs = await fetchSp3Jobs(pushId);
+
+            // Only completed, successful jobs have a usable artifact.
+            const usable = sp3Jobs.filter(j =>
+                j.state === 'completed' && j.result === 'success'
+            );
+            if (!usable.length) {
+                const total = sp3Jobs.length;
+                if (!total) {
+                    setStatus(`No Speedometer 3 jobs found on this push.`, true);
+                } else {
+                    setStatus(`Found ${total} Speedometer 3 job(s), but none completed successfully.`, true);
+                }
+                return;
+            }
+
+            setStatus(`Fetching ${usable.length} SP3 artifact(s)…`);
+            const warnings = [];
+            const fetches = usable.map(async j => {
+                const raw = await fetchArtifact(j.taskId, j.retryId, j.flavor.artifactPath, warnings);
+                if (!raw) return null;
+                const parsed = j.flavor.parse(raw);
+                if (!parsed) {
+                    warnings.push(`Task ${j.taskId}.${j.retryId}: ${j.flavor.artifactPath} did not contain recognizable SP3 data.`);
+                    return null;
+                }
+                return {
+                    family: platformFromJobName(j.jobName), // for color: windows/mac/linux/android
+                    detailedPlatform: detailedPlatformLabel(j.platform, j.platformOption),
+                    platformSlug: j.platform || '(unknown)',
+                    kind: j.flavor.kind,
+                    taskId: j.taskId,
+                    retryId: j.retryId,
+                    jobName: j.jobName,
+                    data: parsed,
+                };
+            });
+            const runs = (await Promise.all(fetches)).filter(Boolean);
+
+            // Drop runs whose platform family isn't one we color for.
+            const knownRuns = runs.filter(r => PLATFORM_COLORS[r.family]);
+            for (const r of runs) {
+                if (!PLATFORM_COLORS[r.family]) {
+                    warnings.push(`Unrecognized platform family "${r.family}" in job ${r.jobName} (${r.taskId}); skipping.`);
+                }
+            }
+
+            showWarnings(warnings);
+
+            if (!knownRuns.length) {
+                setStatus('No artifacts could be loaded — see warnings above.', true);
+                return;
+            }
+
+            renderSummary(knownRuns);
+            renderCharts(knownRuns);
+            setStatus(`Loaded ${knownRuns.length} run(s) from push.`);
+        } catch (e) {
+            console.error(e);
+            setStatus(e.message, true);
+        } finally {
+            document.getElementById('load-btn').disabled = false;
+        }
+    }
+
+    setupWindowResize();
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const params = new URLSearchParams(window.location.search);
+        const rev = params.get('rev');
+        const repo = params.get('repo');
+        if (rev) {
+            const prefix = repo && repo !== 'try' ? repo + ':' : '';
+            document.getElementById('revision-input').value = prefix + rev;
+            loadRevision();
+        }
+        document.getElementById('revision-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') loadRevision();
+        });
+    });
+    </script>
+</body>
+</html>
