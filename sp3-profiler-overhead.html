@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speedometer 3 Profiler Overhead</title>
+    <link rel="icon" href="favicon-orange.svg">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        .revision-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .revision-input input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 380px;
+            font-family: monospace;
+        }
+        .revision-input input:focus {
+            outline: none;
+            border-color: #0060df;
+            box-shadow: 0 0 0 2px rgba(0, 96, 223, 0.2);
+        }
+
+        #status {
+            color: #666;
+            font-size: 13px;
+        }
+        #status.error-text {
+            color: #c00;
+        }
+
+        .intro {
+            color: #666;
+            font-size: 13px;
+            margin: 10px 0 0;
+            line-height: 1.5;
+        }
+        .intro code {
+            background: #f0f0f0;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .summary {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .summary h2 {
+            margin-top: 0;
+        }
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .summary-table th,
+        .summary-table td {
+            padding: 8px 12px;
+            text-align: right;
+            border-bottom: 1px solid #f0f0f0;
+            font-variant-numeric: tabular-nums;
+        }
+        .summary-table th:first-child,
+        .summary-table td:first-child {
+            text-align: left;
+        }
+        .summary-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            text-align: left;
+        }
+        .summary-table .platform-swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        .summary-table td.overhead-pos { color: #b30000; font-weight: 600; }
+        .summary-table td.overhead-neg { color: #007a00; }
+        .summary-table tbody tr {
+            cursor: pointer;
+        }
+        .summary-table tbody tr:hover {
+            background: #f4f8ff;
+        }
+
+        .chart-container {
+            min-height: 0;
+            padding: 10px 15px;
+        }
+        .chart-container > div[id^="chart-"] {
+            height: 360px;
+        }
+
+        .warnings {
+            background: #fee;
+            color: #c00;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            display: none;
+        }
+        .warnings ul {
+            margin: 4px 0 0 0;
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Speedometer 3 Profiler Overhead</h1>
+
+        <div class="controls">
+            <div class="revision-input">
+                <label for="revision-input">Revision:</label>
+                <input type="text" id="revision-input" placeholder="Enter a revision (40-char hex, Treeherder URL, or repo:rev)" autofocus>
+                <button id="load-btn" onclick="loadRevision()">Load</button>
+                <span id="status"></span>
+            </div>
+            <p class="intro">
+                Loads each <code>browsertime-benchmark-firefox-speedometer3</code> task's
+                <code>profile_resource-usage.json</code> artifact and reads the
+                per-iteration Speedometer&nbsp;3 scores the test itself prints (one
+                <code>"score": &#123; … "mean": &lt;N&gt; &#125;</code> JSON block per
+                iteration, where the <code>mean</code> field is the iteration's
+                runs/min score). The profiled iteration is the one whose score block is
+                emitted after <code>profiler.start</code>. Time overhead is reported as
+                <code>baseline_mean_score / profiled_score − 1</code> — i.e. how much
+                longer the profiled iteration took per Speedometer run, relative to the
+                mean of the other iterations. Mochitest SP3 jobs are intentionally
+                skipped since they don't produce a profiled iteration. Click any row or
+                chart bar to open the task's resource-usage profile in profiler.firefox.com;
+                alt-click opens the TaskCluster Tools view instead.
+            </p>
+        </div>
+
+        <div id="warnings" class="warnings"></div>
+
+        <div class="summary" id="summarySection" style="display:none;">
+            <h2 id="summary">Per-Task Overhead</h2>
+            <div id="summaryBody"></div>
+        </div>
+
+        <div class="charts-grid" id="chartsGrid">
+            <!-- One chart per task, inserted by JS. -->
+        </div>
+    </div>
+
+    <script>
+    'use strict';
+
+    const TC_BASE = 'https://firefox-ci-tc.services.mozilla.com';
+    const TH_BASE = 'https://treeherder.mozilla.org';
+    // Profile artifacts are large (multi-MB). localStorage caps at ~5MB total,
+    // so we don't cache the raw profile there — only the extracted per-cycle
+    // numbers, which are tiny.
+    // Bumped each time the reduced-profile shape changes so stale cached
+    // entries don't survive across page revisions.
+    //  v1: cycle duration from measure.start/measure.stop (page load only)
+    //  v2: cycle duration from wallclock-measurement marker pair
+    //  v3: per-cycle SP3 score read directly from the test's own JSON output
+    const LS_PREFIX = 'sp3-overhead-v3:';
+
+    // We only handle hardware browsertime/raptor SP3 jobs — they're the ones
+    // that run a profiled last cycle. The mochitest cloud variant doesn't.
+    function isSp3BrowsertimeJob(jobName) {
+        return (
+            jobName.includes('browsertime-benchmark-firefox-speedometer3') ||
+            jobName.includes('browsertime-firefox-speedometer3')
+        );
+    }
+
+    // Same color/order conventions as sp3-noise.html so the two pages feel
+    // like a set.
+    const PLATFORM_COLORS = {
+        windows: '#ff7f0e',
+        mac:     '#9467bd',
+        linux:   '#1f77b4',
+        android: '#2ca02c',
+    };
+    const PLATFORM_ORDER = ['windows', 'mac', 'linux', 'android'];
+
+    const TH_PLATFORM_LABELS = {
+        'linux2404-64':          'Linux 24.04',
+        'linux2404-64-shippable':'Linux 24.04 Shippable',
+        'linux2404-64-nightlyasrelease': 'Linux 24.04 NightlyAsRelease',
+        'macosx1470':            'macOS 14.70',
+        'macosx1470-shippable':  'macOS 14.70 Shippable',
+        'macosx1470-nightlyasrelease': 'macOS 14.70 NightlyAsRelease',
+        'macosx1500-aarch64':    'macOS 15 AArch64',
+        'macosx1500-aarch64-shippable': 'macOS 15 AArch64 Shippable',
+        'windows11-64-24h2':     'Windows 11 24H2',
+        'windows11-64-24h2-shippable': 'Windows 11 24H2 Shippable',
+        'windows11-64-24h2-nightlyasrelease': 'Windows 11 24H2 NightlyAsRelease',
+        'windows11-64-24h2-ref-hw': 'Windows 11 24H2 Ref HW',
+        'windows11-64-24h2-ref-hw-shippable': 'Windows 11 24H2 Ref HW Shippable',
+        // Push 1915548 used a couple of older slug spellings the table above
+        // doesn't cover; add them here so the table stays accurate.
+        'macosx1470-64-shippable': 'macOS 14.70 Shippable',
+        'macosx1470-64-nightlyasrelease': 'macOS 14.70 NightlyAsRelease',
+        'windows11-64-24h2-hw-ref-shippable': 'Windows 11 24H2 Ref HW Shippable',
+    };
+
+    function detailedPlatformLabel(platform, platformOption) {
+        if (!platform) return 'Unknown';
+        const combined = platformOption && platformOption !== 'opt'
+            ? `${platform}-${platformOption}`
+            : platform;
+        if (TH_PLATFORM_LABELS[combined]) return TH_PLATFORM_LABELS[combined];
+        if (TH_PLATFORM_LABELS[platform]) {
+            const base = TH_PLATFORM_LABELS[platform];
+            return platformOption && platformOption !== 'opt'
+                ? `${base} ${platformOption}`
+                : base;
+        }
+        return combined;
+    }
+
+    let currentRepo = 'try';
+
+    // ----- UI helpers -----
+
+    function setStatus(text, isError = false) {
+        const el = document.getElementById('status');
+        el.textContent = text;
+        el.className = isError ? 'error-text' : '';
+    }
+
+    function showWarnings(warnings) {
+        const el = document.getElementById('warnings');
+        if (!warnings.length) {
+            el.style.display = 'none';
+            return;
+        }
+        el.style.display = 'block';
+        el.innerHTML = `<strong>Warnings:</strong><ul>${
+            warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')
+        }</ul>`;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    // ----- Revision parsing (matches try.html / sp3-noise.html) -----
+
+    function extractRevision(input) {
+        input = input.trim();
+        const prefixMatch = input.match(/^([a-z][\w-]*):(.+)$/i);
+        if (prefixMatch) {
+            currentRepo = prefixMatch[1];
+            input = prefixMatch[2].trim();
+        } else {
+            currentRepo = 'try';
+        }
+        if (/^[a-f0-9]{40}$/i.test(input)) return input;
+        if (/^[a-f0-9]{12}$/i.test(input)) return input;
+        try {
+            const url = new URL(input);
+            const repo = url.searchParams.get('repo');
+            if (repo) currentRepo = repo;
+            const rev = url.searchParams.get('revision');
+            if (rev) return rev;
+        } catch {}
+        const hgMatch = input.match(/hg\.mozilla\.org\/([^/]+(?:\/[^/]+)*)\/rev\/([a-f0-9]+)$/i);
+        if (hgMatch) {
+            const repoMap = {
+                'mozilla-central': 'mozilla-central',
+                'integration/autoland': 'autoland',
+                'try': 'try',
+            };
+            const repoPath = hgMatch[1];
+            currentRepo = repoMap[repoPath] || repoPath.split('/').pop();
+            return hgMatch[2];
+        }
+        return input;
+    }
+
+    // ----- Treeherder + Taskcluster -----
+
+    async function fetchPushId(revision) {
+        const url = `${TH_BASE}/api/project/${currentRepo}/push/?full=true&count=10&revision=${revision}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`Failed to look up revision on Treeherder (HTTP ${resp.status})`);
+        }
+        const data = await resp.json();
+        if (!data.results || data.results.length === 0) {
+            throw new Error(`No push found for revision ${revision} on ${currentRepo}`);
+        }
+        return data.results[0].id;
+    }
+
+    async function fetchSp3Jobs(pushId) {
+        const jobs = [];
+        let url = `${TH_BASE}/api/jobs/?push_id=${pushId}`;
+        let propertyNames = null;
+
+        while (url) {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`Failed to fetch jobs (HTTP ${resp.status})`);
+            const data = await resp.json();
+            if (!propertyNames) propertyNames = data.job_property_names || [];
+
+            const idx = name => propertyNames.indexOf(name);
+            const jobTypeNameIdx = idx('job_type_name');
+            const taskIdIdx = idx('task_id');
+            const retryIdIdx = idx('retry_id');
+            const stateIdx = idx('state');
+            const resultIdx = idx('result');
+            const platformIdx = idx('platform');
+            const platformOptionIdx = idx('platform_option');
+
+            for (const row of (data.results || [])) {
+                const jobName = row[jobTypeNameIdx];
+                if (!jobName || !isSp3BrowsertimeJob(jobName)) continue;
+                jobs.push({
+                    jobName,
+                    taskId: row[taskIdIdx],
+                    retryId: row[retryIdIdx] || 0,
+                    state: row[stateIdx],
+                    result: row[resultIdx],
+                    platform: platformIdx >= 0 ? row[platformIdx] : null,
+                    platformOption: platformOptionIdx >= 0 ? row[platformOptionIdx] : null,
+                });
+            }
+
+            url = data.next;
+        }
+        return jobs;
+    }
+
+    // ----- Profile parsing -----
+
+    // Pull the per-iteration Speedometer 3 scores out of a profile_resource-
+    // usage.json. Returns { cycles: [{ score }], profiledCycleIdx, machine }
+    // or null if the profile doesn't carry the test-printed JSON output.
+    //
+    // The Speedometer 3 test prints its full JSON result block to the
+    // browsertime stdout at the end of every iteration. mach captures that
+    // stdout line by line and turns each line into an Event-named Text
+    // marker on thread 0. Per iteration the relevant fragment looks like:
+    //
+    //     "score": {
+    //       "formattedDelta": "0.43",
+    //       "formattedMean": "12.4",
+    //       …
+    //       "mean": 12.411018728947294
+    //     },
+    //
+    // The `mean` field is the iteration's official Speedometer 3 score
+    // (runs/minute, higher = faster) — the same number perfherder records
+    // for the unprofiled iterations. Reading it directly is the only way to
+    // get the score for the profiled iteration, since browsertime omits
+    // that one from perfherder-data.json.
+    //
+    // The profiled iteration is identified as the first score block whose
+    // opener time comes after the `profiler.start` test marker. (The score
+    // is printed during browsertime teardown, which happens a fraction of a
+    // second after `profiler.stop`, so a strictly-inside check would miss
+    // it.)
+    function extractCycles(profile) {
+        if (!profile || !profile.threads || !profile.threads[0]) return null;
+        const thread = profile.threads[0];
+        const m = thread.markers;
+        const sa = thread.stringArray;
+        if (!m || !sa || !m.length) return null;
+
+        const eventNameId = sa.indexOf('Event');
+        const testNameId = sa.indexOf('test');
+        if (eventNameId < 0) return null;
+
+        // Collect every Event-named Text marker in (time, original-index)
+        // order. Many markers share a startTime (Plotly-resolution floats are
+        // microsecond-coarse and the test prints a JSON block in a single
+        // burst), so we tie-break on the original marker index to preserve
+        // emission order — otherwise the block opener and the `mean` line
+        // can swap places.
+        const events = [];
+        let profilerStart = null;
+        for (let i = 0; i < m.length; i++) {
+            const data = m.data[i];
+            if (!data || data.type !== 'Text' || typeof data.text !== 'string') continue;
+            if (m.name[i] === eventNameId) {
+                events.push({ time: m.startTime[i], idx: i, text: data.text });
+            } else if (m.name[i] === testNameId) {
+                if (data.text === 'profiler.start') {
+                    profilerStart = m.startTime[i];
+                }
+            }
+        }
+        events.sort((a, b) => a.time - b.time || a.idx - b.idx);
+
+        // Walk events: for each line that strips to '"score": {' (the cycle
+        // summary's opener), scan ahead a bounded number of lines to find
+        // the '"mean":' value line. Bound is generous (50) but small enough
+        // that we don't wander into the next cycle if a marker is missing.
+        const meanRe = /^"mean":\s*([0-9]*\.?[0-9]+)\s*,?\s*$/;
+        const cycles = [];
+        for (let k = 0; k < events.length; k++) {
+            if (events[k].text.trim() !== '"score": {') continue;
+            const openerTime = events[k].time;
+            const end = Math.min(k + 50, events.length);
+            for (let kk = k + 1; kk < end; kk++) {
+                const line = events[kk].text.trim();
+                const mt = meanRe.exec(line);
+                if (mt) {
+                    cycles.push({ time: openerTime, score: parseFloat(mt[1]) });
+                    break;
+                }
+                if (line === '},') break;
+            }
+        }
+        if (!cycles.length) return null;
+
+        let profiledCycleIdx = -1;
+        if (profilerStart !== null) {
+            for (let i = 0; i < cycles.length; i++) {
+                if (cycles[i].time >= profilerStart) {
+                    profiledCycleIdx = i;
+                    break;
+                }
+            }
+        }
+
+        const machine = {
+            logicalCPUs: profile.meta?.logicalCPUs ?? null,
+            physicalCPUs: profile.meta?.physicalCPUs ?? null,
+            mainMemoryGB: profile.meta?.mainMemory
+                ? +(profile.meta.mainMemory / (1024 * 1024 * 1024)).toFixed(1)
+                : null,
+        };
+
+        return { cycles, profiledCycleIdx, machine };
+    }
+
+    // Fetch the resource-usage profile and reduce it to the per-cycle numbers
+    // we care about. We cache the *reduced* result in localStorage (a handful
+    // of numbers per task), never the raw multi-MB profile.
+    async function fetchAndReduceProfile(taskId, retryId, warnings) {
+        const cacheKey = `${LS_PREFIX}${taskId}.${retryId}`;
+        try {
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch (e) { /* fall through */ }
+
+        const url = `${TC_BASE}/api/queue/v1/task/${taskId}/runs/${retryId}` +
+                    `/artifacts/public/test_info/profile_resource-usage.json`;
+        let profile;
+        try {
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                warnings.push(`Task ${taskId}.${retryId}: HTTP ${resp.status} fetching profile_resource-usage.json`);
+                return null;
+            }
+            profile = await resp.json();
+        } catch (e) {
+            warnings.push(`Task ${taskId}.${retryId}: ${e.message}`);
+            return null;
+        }
+
+        const reduced = extractCycles(profile);
+        if (!reduced) {
+            warnings.push(`Task ${taskId}.${retryId}: profile_resource-usage.json has no recognizable Speedometer 3 score blocks`);
+            return null;
+        }
+
+        try { localStorage.setItem(cacheKey, JSON.stringify(reduced)); } catch (e) {}
+        return reduced;
+    }
+
+    // ----- Stats helpers -----
+
+    function mean(arr) {
+        if (!arr.length) return 0;
+        let s = 0;
+        for (const v of arr) s += v;
+        return s / arr.length;
+    }
+    function stddev(arr) {
+        if (arr.length < 2) return 0;
+        const m = mean(arr);
+        let s = 0;
+        for (const v of arr) s += (v - m) * (v - m);
+        return Math.sqrt(s / (arr.length - 1));
+    }
+
+    // Per-run overhead from SP3 scores. The score is runs/minute (higher =
+    // faster), so the per-iteration time is proportional to 1/score and the
+    // time overhead the profiler introduces is `baseline_mean_score /
+    // profiled_score - 1`. Returns null if we don't have a profiled cycle.
+    function computeOverhead(reduced) {
+        const { cycles, profiledCycleIdx } = reduced;
+        if (profiledCycleIdx < 0) return null;
+        const profiled = cycles[profiledCycleIdx];
+        const baselines = cycles.filter((_, i) => i !== profiledCycleIdx).map(c => c.score);
+        if (!baselines.length) return null;
+        const baselineMean = mean(baselines);
+        const baselineSd = stddev(baselines);
+        return {
+            profiledScore: profiled.score,
+            baselineMean,
+            baselineSd,
+            baselineCount: baselines.length,
+            // Positive = profiling slowed the run down. score=runs/min, so a
+            // lower profiled score → longer per-run time → positive overhead.
+            overheadFraction: baselineMean / profiled.score - 1,
+        };
+    }
+
+    // ----- Rendering -----
+
+    function platformFromJobName(jobName) {
+        return extractPlatform(jobName);
+    }
+
+    function fmtScore(s) {
+        // Score is runs/minute, typically 5–60. Three significant figures
+        // keeps the table aligned without losing precision on noisy values.
+        return s.toFixed(3);
+    }
+
+    function renderSummary(runs) {
+        const section = document.getElementById('summarySection');
+        section.style.display = 'block';
+
+        // Stable order: platform family, then detailed platform alphabetically,
+        // then task id for repeatability across retriggers.
+        const sorted = runs.slice().sort((a, b) => {
+            const fa = PLATFORM_ORDER.indexOf(a.family);
+            const fb = PLATFORM_ORDER.indexOf(b.family);
+            if (fa !== fb) return fa - fb;
+            if (a.detailedPlatform !== b.detailedPlatform) {
+                return a.detailedPlatform.localeCompare(b.detailedPlatform);
+            }
+            return a.taskId.localeCompare(b.taskId);
+        });
+
+        const rows = sorted.map(r => {
+            const o = r.overhead;
+            const overheadCell = o
+                ? `<td class="${o.overheadFraction >= 0 ? 'overhead-pos' : 'overhead-neg'}">${(o.overheadFraction * 100).toFixed(2)}%</td>`
+                : `<td>—</td>`;
+            const profiledCell = o ? fmtScore(o.profiledScore) : '—';
+            const baselineCell = o
+                ? `${fmtScore(o.baselineMean)} <span style="color:#999">± ${fmtScore(o.baselineSd)}</span>`
+                : '—';
+            // Row is clickable end-to-end (handler attached below). Stash
+            // identifiers in data-* so the handler doesn't need a per-row
+            // closure.
+            return `
+                <tr data-task-id="${escapeHtml(r.taskId)}" data-retry-id="${r.retryId}" data-job-name="${escapeHtml(r.jobName)}" title="Open resource-usage profile (alt-click for TaskCluster Tools)">
+                    <td><span class="platform-swatch" style="background:${PLATFORM_COLORS[r.family] || '#888'}"></span>${escapeHtml(r.detailedPlatform)}</td>
+                    <td style="font-family:monospace;font-size:12px">${escapeHtml(r.taskId)}</td>
+                    <td>${r.reduced.cycles.length}</td>
+                    <td>${baselineCell}</td>
+                    <td>${profiledCell}</td>
+                    ${overheadCell}
+                </tr>
+            `;
+        }).join('');
+
+        document.getElementById('summaryBody').innerHTML = `
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th>Platform</th>
+                        <th>Task</th>
+                        <th style="text-align:right">Iterations</th>
+                        <th style="text-align:right" title="Mean ± stddev of Speedometer 3 score across unprofiled iterations (runs/min)">Baseline score</th>
+                        <th style="text-align:right" title="Speedometer 3 score of the profiled iteration (runs/min)">Profiled score</th>
+                        <th style="text-align:right" title="baseline_mean_score / profiled_score − 1 (positive = profiling made each Speedometer run take longer)">Time overhead</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+
+        // One delegated handler on the tbody for row clicks. Alt-click routes
+        // to TaskCluster Tools (mirrors addClickHandler in shared.js).
+        document.querySelector('#summaryBody tbody').addEventListener('click', e => {
+            const tr = e.target.closest('tr[data-task-id]');
+            if (!tr) return;
+            openProfile(
+                tr.dataset.taskId,
+                parseInt(tr.dataset.retryId, 10) || 0,
+                tr.dataset.jobName,
+                e.altKey
+            );
+        });
+    }
+
+    function renderCharts(runs) {
+        const grid = document.getElementById('chartsGrid');
+        grid.innerHTML = '';
+
+        const sorted = runs.slice().sort((a, b) => {
+            const fa = PLATFORM_ORDER.indexOf(a.family);
+            const fb = PLATFORM_ORDER.indexOf(b.family);
+            if (fa !== fb) return fa - fb;
+            if (a.detailedPlatform !== b.detailedPlatform) {
+                return a.detailedPlatform.localeCompare(b.detailedPlatform);
+            }
+            return a.taskId.localeCompare(b.taskId);
+        });
+
+        sorted.forEach((run, idx) => {
+            const chartDiv = document.createElement('div');
+            chartDiv.className = 'chart-container';
+            const plotId = `chart-${idx}`;
+            chartDiv.innerHTML = `<div id="${plotId}"></div>`;
+            grid.appendChild(chartDiv);
+
+            const cycles = run.reduced.cycles;
+            const profiledIdx = run.reduced.profiledCycleIdx;
+            const color = PLATFORM_COLORS[run.family] || '#888';
+
+            const xs = cycles.map((_, i) => i + 1);
+            const ys = cycles.map(c => c.score);
+            const colors = cycles.map((_, i) => i === profiledIdx ? '#c00' : color);
+            const labels = cycles.map((_, i) =>
+                i === profiledIdx ? `iteration ${i + 1} (profiled)` : `iteration ${i + 1}`);
+
+            const o = run.overhead;
+            const title = o
+                ? `${run.detailedPlatform} — time overhead ${(o.overheadFraction * 100).toFixed(2)}%`
+                : `${run.detailedPlatform} — no profiled iteration detected`;
+
+            const traces = [{
+                x: xs,
+                y: ys,
+                type: 'bar',
+                marker: { color: colors },
+                text: ys.map(v => v.toFixed(2)),
+                textposition: 'outside',
+                cliponaxis: false,
+                hovertemplate:
+                    `<b>%{customdata.label}</b><br>` +
+                    `Score: %{y:.3f} runs/min<br>` +
+                    `<i>Click to view resource-usage profile</i>` +
+                    `<extra></extra>`,
+                // Per-bar customdata includes taskId/retryId/name so the
+                // shared addClickHandler() can route the click to the right
+                // profile (alt-key opens TaskCluster Tools).
+                customdata: labels.map(label => ({
+                    label,
+                    taskId: run.taskId,
+                    retryId: run.retryId,
+                    name: run.jobName,
+                })),
+                showlegend: false,
+            }];
+
+            const shapes = [];
+            if (o) {
+                // Baseline mean as a horizontal reference line so the eye can
+                // catch the relative size of the profiled-iteration delta.
+                shapes.push({
+                    type: 'line',
+                    xref: 'paper', yref: 'y',
+                    x0: 0, x1: 1,
+                    y0: o.baselineMean, y1: o.baselineMean,
+                    line: { color: '#888', width: 1, dash: 'dash' },
+                });
+            }
+
+            const layout = {
+                title: { text: title, font: { size: 13 } },
+                xaxis: {
+                    tickmode: 'array',
+                    tickvals: xs,
+                    ticktext: labels.map((_, i) => `#${i + 1}`),
+                    tickfont: { size: 11 },
+                    zeroline: false,
+                    showgrid: false,
+                },
+                yaxis: {
+                    title: 'Speedometer 3 score (runs/min)',
+                    rangemode: 'tozero',
+                    zeroline: false,
+                },
+                shapes,
+                hovermode: 'closest',
+                showlegend: false,
+                hoverlabel: {
+                    bgcolor: '#2a2a2a',
+                    bordercolor: '#2a2a2a',
+                    font: {
+                        size: 13, color: 'white',
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                    },
+                },
+                margin: { l: 70, r: 20, t: 40, b: 40 },
+            };
+
+            Plotly.newPlot(plotId, traces, layout, {
+                responsive: true,
+                displayModeBar: false,
+            });
+
+            // Same click→open-profile behavior as sp3-noise.html, including
+            // alt-key support for TaskCluster Tools.
+            addClickHandler(plotId);
+        });
+    }
+
+    // ----- Top-level flow -----
+
+    async function loadRevision() {
+        const input = document.getElementById('revision-input').value;
+        const revision = extractRevision(input);
+        if (!revision) {
+            setStatus('Please enter a revision.', true);
+            return;
+        }
+
+        const url = new URL(window.location);
+        url.searchParams.set('rev', revision);
+        if (currentRepo !== 'try') {
+            url.searchParams.set('repo', currentRepo);
+        } else {
+            url.searchParams.delete('repo');
+        }
+        window.history.replaceState(null, '', url);
+
+        document.getElementById('load-btn').disabled = true;
+        document.getElementById('summarySection').style.display = 'none';
+        document.getElementById('chartsGrid').innerHTML = '';
+        showWarnings([]);
+
+        try {
+            setStatus('Looking up push on Treeherder…');
+            const pushId = await fetchPushId(revision);
+
+            setStatus('Fetching jobs…');
+            const sp3Jobs = await fetchSp3Jobs(pushId);
+
+            const usable = sp3Jobs.filter(j =>
+                j.state === 'completed' && j.result === 'success'
+            );
+            if (!usable.length) {
+                const total = sp3Jobs.length;
+                if (!total) {
+                    setStatus(`No browsertime Speedometer 3 jobs found on this push.`, true);
+                } else {
+                    setStatus(`Found ${total} SP3 browsertime job(s), but none completed successfully.`, true);
+                }
+                return;
+            }
+
+            setStatus(`Fetching ${usable.length} resource-usage profile(s)…`);
+            const warnings = [];
+            const fetches = usable.map(async j => {
+                const reduced = await fetchAndReduceProfile(j.taskId, j.retryId, warnings);
+                if (!reduced) return null;
+                const overhead = computeOverhead(reduced);
+                if (!overhead) {
+                    warnings.push(`Task ${j.taskId}.${j.retryId}: no profiled iteration detected (profiler.start/stop markers missing or unpaired).`);
+                }
+                return {
+                    family: platformFromJobName(j.jobName),
+                    detailedPlatform: detailedPlatformLabel(j.platform, j.platformOption),
+                    taskId: j.taskId,
+                    retryId: j.retryId,
+                    jobName: j.jobName,
+                    reduced,
+                    overhead,
+                };
+            });
+            const runs = (await Promise.all(fetches)).filter(Boolean);
+
+            const knownRuns = runs.filter(r => PLATFORM_COLORS[r.family]);
+            for (const r of runs) {
+                if (!PLATFORM_COLORS[r.family]) {
+                    warnings.push(`Unrecognized platform family "${r.family}" in job ${r.jobName} (${r.taskId}); skipping.`);
+                }
+            }
+
+            showWarnings(warnings);
+
+            if (!knownRuns.length) {
+                setStatus('No profiles could be loaded — see warnings above.', true);
+                return;
+            }
+
+            renderSummary(knownRuns);
+            renderCharts(knownRuns);
+
+            const withOverhead = knownRuns.filter(r => r.overhead).length;
+            setStatus(`Loaded ${knownRuns.length} run(s); ${withOverhead} with a detectable profiled iteration.`);
+        } catch (e) {
+            console.error(e);
+            setStatus(e.message, true);
+        } finally {
+            document.getElementById('load-btn').disabled = false;
+        }
+    }
+
+    setupWindowResize();
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const params = new URLSearchParams(window.location.search);
+        const rev = params.get('rev');
+        const repo = params.get('repo');
+        if (rev) {
+            const prefix = repo && repo !== 'try' ? repo + ':' : '';
+            document.getElementById('revision-input').value = prefix + rev;
+            loadRevision();
+        }
+        document.getElementById('revision-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') loadRevision();
+        });
+    });
+    </script>
+</body>
+</html>
