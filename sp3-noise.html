@@ -399,38 +399,49 @@
         }
     }
 
-    // ----- Artifact parsers — both normalize to { subtests: { name -> { timings_ms: [...] } } } -----
+    // ----- Artifact parsers — both normalize to { subtests: { name -> { timings_ms: [...] } }, browserCycles } -----
+    //
+    // `browserCycles` is the number of times the browser was relaunched and
+    // SP3 was run end-to-end (browsertime concept; for mochitest it's null).
+    // When non-null, the subtest timings array is cycle-major: the first
+    // `timings_ms.length / browserCycles` entries belong to cycle 1, etc.
 
     // Mochitest artifact (what `mochitest-browser-speedometer3` produces):
     //   { subtests: { "TodoMVC-React-Complex-DOM": { timings_ms: [...] }, ... } }
-    // Already in the right shape; return as-is.
+    // Already in the right shape; return as-is. Mochitest doesn't relaunch
+    // the browser between SP3 iterations, so there's no cycle concept.
     function parseMochitestArtifact(raw) {
         if (!raw || typeof raw.subtests !== 'object') return null;
-        return { subtests: raw.subtests };
+        return { subtests: raw.subtests, browserCycles: null };
     }
 
     // Perfherder artifact (what raptor/browsertime jobs upload):
-    //   { suites: [{ name: "speedometer3", subtests: [{ name: "X/total", replicates: [...] }, ...] }] }
-    // We pick the speedometer3 suite, strip the "/total" suffix from each subtest
-    // name, and drop non-subtest aggregates (cpuTime, score).
+    //   { suites: [{ name: "speedometer3", replicates: [...cycleScores...],
+    //                subtests: [{ name: "X/total", replicates: [...iterations...] }, ...] }] }
+    // The suite-level `replicates` length equals the number of browser
+    // cycles; each subtest's `replicates` is cycle-major (cycle 1 first,
+    // then cycle 2, ...). We pick the speedometer3 suite, strip "/total"
+    // from each subtest name, and drop non-subtest aggregates (cpuTime,
+    // score) so the names line up with the mochitest artifact.
     function parsePerfherderArtifact(raw) {
         if (!raw || !Array.isArray(raw.suites)) return null;
         const suite = raw.suites.find(s => s.name === 'speedometer3');
         if (!suite || !Array.isArray(suite.subtests)) return null;
 
+        const browserCycles = Array.isArray(suite.replicates) && suite.replicates.length
+            ? suite.replicates.length : null;
+
         const subtests = {};
         for (const st of suite.subtests) {
             if (!st.name || !Array.isArray(st.replicates)) continue;
             if (st.unit && st.unit !== 'ms') continue; // skip score/cpuTime
-            // Subtest names like "TodoMVC-React-Complex-DOM/total" align with
-            // mochitest names once we strip the "/total".
             const name = st.name.endsWith('/total')
                 ? st.name.slice(0, -'/total'.length)
                 : st.name;
             subtests[name] = { timings_ms: st.replicates.slice() };
         }
         if (!Object.keys(subtests).length) return null;
-        return { subtests };
+        return { subtests, browserCycles };
     }
 
     // ----- Stats helpers -----
@@ -626,6 +637,42 @@
                 const xVals = timings.map(() => catIdx + (Math.random() - 0.5) * 0.4);
                 const m = mean(timings);
 
+                // Derive cycle / replicate-within-cycle for browsertime runs
+                // (cycle-major array layout). Mochitest has no cycle concept,
+                // so we just report the 1-based replicate index.
+                const cycles = run.data.browserCycles;
+                const perCycle = cycles && timings.length % cycles === 0
+                    ? timings.length / cycles : null;
+
+                const customdata = timings.map((_, i) => {
+                    const base = {
+                        // taskId / retryId / name are read by addClickHandler
+                        // in shared.js to open the resource-usage profile.
+                        taskId: cat.taskId,
+                        retryId: cat.retryId,
+                        name: run.jobName,
+                        platform: cat.detailedPlatform,
+                        kind: cat.kind,
+                        mean: m.toFixed(2),
+                        n: timings.length,
+                        replicate: i + 1,
+                    };
+                    if (perCycle) {
+                        base.cycle = Math.floor(i / perCycle) + 1;
+                        base.replicateInCycle = (i % perCycle) + 1;
+                        base.cyclesTotal = cycles;
+                        base.replicatesPerCycle = perCycle;
+                    }
+                    return base;
+                });
+
+                // Build hovertemplate. Browsertime gets an extra "Cycle X/N
+                // (replicate Y/M)" line; mochitest just shows "Replicate X/N".
+                const replicateLine = perCycle
+                    ? `Cycle: %{customdata.cycle}/%{customdata.cyclesTotal} ` +
+                      `(replicate %{customdata.replicateInCycle}/%{customdata.replicatesPerCycle})<br>`
+                    : `Replicate: %{customdata.replicate}/%{customdata.n}<br>`;
+
                 traces.push({
                     x: xVals,
                     y: timings,
@@ -638,22 +685,13 @@
                         opacity: 0.65,
                         line: { width: 0 },
                     },
-                    customdata: timings.map(() => ({
-                        // taskId / retryId / name are read by addClickHandler
-                        // in shared.js to open the resource-usage profile.
-                        taskId: cat.taskId,
-                        retryId: cat.retryId,
-                        name: run.jobName,
-                        platform: cat.detailedPlatform,
-                        kind: cat.kind,
-                        mean: m.toFixed(2),
-                        n: timings.length,
-                    })),
+                    customdata,
                     hovertemplate:
                         `<b>${subtest}</b><br>` +
                         `Platform: %{customdata.platform}<br>` +
                         `Kind: %{customdata.kind}<br>` +
                         `Task: %{customdata.taskId}<br>` +
+                        replicateLine +
                         `Iteration: %{y:.2f} ms<br>` +
                         `Run mean: %{customdata.mean} ms (n=%{customdata.n})<br>` +
                         `<i>Click to view profile</i>` +
