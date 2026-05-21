@@ -542,8 +542,9 @@
         let dailyRateDataGlobal = null;
         let testIdGlobal = null;
 
-        // Display mapping state (computed once after data loads)
-        let swrCollapseMap = {};    // swrVariant -> baseVariant
+        // Display mapping state (computed once after data loads). variantCollapseMap holds
+        // all variant→base entries from any collapse step; displayVariant chases the chain.
+        let variantCollapseMap = {};
         let platformCollapseMap = {}; // detailedPlatform -> displayPlatform
 
         // Format duration in milliseconds to human readable
@@ -581,6 +582,7 @@
 
         // Extract display variant from a full job name
         // e.g. "test-linux1804-64-asan/opt-xpcshell-1" -> "asan-xpcshell"
+        //      "test-linux1804-64-artifact/opt-xpcshell-1" -> "artifact-opt-xpcshell"
         //      "test-linux1804-64/opt-xpcshell-1" -> "opt-xpcshell"
         function extractVariant(jobName) {
             const slashIdx = jobName.indexOf('/');
@@ -592,14 +594,22 @@
                 if (sanitizerMatch) {
                     variant = variant.replace(/^[^-]+/, sanitizerMatch[1]);
                 }
+                // Artifact builds use prebuilt binaries; tests can perma-fail on them
+                // while passing on regular builds. Surface them as a distinct variant
+                // (prepended, not replaced, since opt and debug artifact builds both exist).
+                if (/-artifact(?:-|$)/.test(prefix)) {
+                    variant = 'artifact-' + variant;
+                }
             }
             return variant;
         }
 
-        // Map jobName → display variant (with swr collapse applied)
+        // Map jobName → display variant by chasing the collapse chain in variantCollapseMap
+        // (e.g. nofis-on-geckoview → geckoview → desktop base).
         function displayVariant(jobName) {
-            const variant = extractVariant(jobName);
-            return swrCollapseMap[variant] || variant;
+            let variant = extractVariant(jobName);
+            while (variantCollapseMap[variant]) variant = variantCollapseMap[variant];
+            return variant;
         }
 
         // Map jobName → display platform (with 32/64 merge applied)
@@ -608,10 +618,11 @@
             return platformCollapseMap[dp] || dp;
         }
 
-        // Compute display mappings: swr collapse and platform 32/64 merge decisions.
-        // Reuses calculateJobNameBreakdown to avoid duplicating the data iteration.
+        // Compute display mappings: variant-token collapses (swr, artifact, standalone,
+        // msix, nofis, geckoview) and platform 32/64 merge. Reuses calculateJobNameBreakdown
+        // to avoid duplicating data iteration.
         function computeDisplayMappings(testId) {
-            swrCollapseMap = {};
+            variantCollapseMap = {};
             platformCollapseMap = {};
             const jobs = calculateJobNameBreakdown(testId);
             if (Object.keys(jobs).length === 0) return;
@@ -628,22 +639,62 @@
                 o.timeouts += c.timeouts; o.crashes += c.crashes; o.skips += c.skips;
             }
 
-            // SWR collapse: merge linux-only -swr variants into their base variant
-            for (const swrV of Object.keys(outcomes).filter(v => /-swr(?:-|$)/.test(v))) {
-                const dps = Object.keys(outcomes[swrV]);
-                if (!dps.every(p => p.startsWith('linux'))) continue;
-                const baseV = swrV.replace(/-swr(?=-|$)/, '');
-                if (!outcomes[baseV]) continue;
-                swrCollapseMap[swrV] = baseV;
-                for (const [dp, data] of Object.entries(outcomes[swrV])) {
-                    if (!outcomes[baseV][dp]) { outcomes[baseV][dp] = data; }
+            // Variant-token collapses: merge each matching variant into its base. The
+            // default is conditional — only collapse when per-platform outcome signatures
+            // match — so that a test which perma-fails only on artifact builds (or only
+            // with fission disabled, etc.) keeps a distinct row. Mark `unconditional` when
+            // the variant is known to behave like its base (currently just SWR). Steps run
+            // in table order; nofis sits before geckoview so "X-geckoview-Y-nofis" can
+            // collapse against the still-present "X-geckoview-Y" before geckoview is
+            // itself collapsed away.
+            //
+            // Token meanings:
+            //  - X-swr             : software WebRender (linux-only)
+            //  - artifact-X        : test runs against an artifact build (prebuilt binaries)
+            //  - X-standalone      : mochitest variant that restarts the browser per test
+            //  - X-msix            : Windows MSIX-packaged Firefox build
+            //  - X-nofis           : fission disabled (desktop and Android)
+            //  - X-geckoview-Y → X-Y : Android xpcshell/mochitest; lets a cross-platform
+            //                          test share a single row across desktop+android
+            const outcomeSig = (d) => {
+                const total = d.passes + d.failures + d.timeouts + d.crashes;
+                if (total === 0) return d.skips > 0 ? 'skip' : 'absent';
+                return (d.passes > 0 ? 'p' : '') + (d.failures > 0 ? 'f' : '') +
+                       (d.timeouts > 0 ? 't' : '') + (d.crashes > 0 ? 'c' : '');
+            };
+            const tryCollapse = (fromV, toV, opts) => {
+                if (!outcomes[toV]) return;
+                if (opts.precheck && !opts.precheck(Object.keys(outcomes[fromV]))) return;
+                if (!opts.unconditional) {
+                    for (const dp of Object.keys(outcomes[fromV])) {
+                        const a = outcomes[fromV][dp], b = outcomes[toV][dp];
+                        if (b && outcomeSig(a) !== outcomeSig(b)) return; // outcomes differ
+                    }
+                }
+                variantCollapseMap[fromV] = toV;
+                for (const [dp, data] of Object.entries(outcomes[fromV])) {
+                    if (!outcomes[toV][dp]) { outcomes[toV][dp] = data; }
                     else {
-                        const b = outcomes[baseV][dp];
+                        const b = outcomes[toV][dp];
                         b.passes += data.passes; b.failures += data.failures;
                         b.timeouts += data.timeouts; b.crashes += data.crashes; b.skips += data.skips;
                     }
                 }
-                delete outcomes[swrV];
+                delete outcomes[fromV];
+            };
+            const variantTokenCollapses = [
+                { match: /-swr(?:-|$)/,        strip: /-swr(?=-|$)/,
+                  unconditional: true, precheck: dps => dps.every(p => p.startsWith('linux')) },
+                { match: /^artifact-/,         strip: /^artifact-/ },
+                { match: /-standalone(?:-|$)/, strip: /-standalone(?=-|$)/ },
+                { match: /-msix(?:-|$)/,       strip: /-msix(?=-|$)/ },
+                { match: /-nofis(?:-|$)/,      strip: /-nofis(?=-|$)/ },
+                { match: /-geckoview(?:-|$)/,  strip: /-geckoview(?=-|$)/ },
+            ];
+            for (const { match, strip, ...opts } of variantTokenCollapses) {
+                for (const fromV of Object.keys(outcomes).filter(v => match.test(v))) {
+                    tryCollapse(fromV, fromV.replace(strip, ''), opts);
+                }
             }
 
             // Platform 32/64 merge: group detailed platforms by base OS
@@ -661,14 +712,7 @@
                 // Keep split only if some variant has different outcome types across sub-platforms
                 let hasDifferences = false;
                 for (const platformData of Object.values(outcomes)) {
-                    const sigs = subs.map(sp => {
-                        const d = platformData[sp];
-                        if (!d) return 'absent';
-                        const total = d.passes + d.failures + d.timeouts + d.crashes;
-                        if (total === 0) return d.skips > 0 ? 'skip' : 'absent';
-                        return (d.passes > 0 ? 'p' : '') + (d.failures > 0 ? 'f' : '') +
-                               (d.timeouts > 0 ? 't' : '') + (d.crashes > 0 ? 'c' : '');
-                    });
+                    const sigs = subs.map(sp => platformData[sp] ? outcomeSig(platformData[sp]) : 'absent');
                     const nonAbsent = sigs.filter(s => s !== 'absent');
                     if (new Set(nonAbsent).size > 1) { hasDifferences = true; break; }
                 }
