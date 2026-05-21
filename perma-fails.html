@@ -426,6 +426,7 @@
 
         // Extract display variant from a full job name (same logic as test.html)
         // e.g. "test-linux1804-64-asan/opt-xpcshell-1" -> "asan-xpcshell"
+        //      "test-linux1804-64-artifact/opt-xpcshell-1" -> "artifact-opt-xpcshell"
         //      "test-linux1804-64/opt-xpcshell-1" -> "opt-xpcshell"
         function extractVariant(jobName) {
             const slashIdx = jobName.indexOf('/');
@@ -436,6 +437,13 @@
                 const sanitizerMatch = prefix.match(/-(asan|tsan|ubsan|msan|hwasan|ccov)$/);
                 if (sanitizerMatch) {
                     variant = variant.replace(/^[^-]+/, sanitizerMatch[1]);
+                }
+                // Artifact builds share the same job name suffix as regular builds, so
+                // without this their failures would merge into the same cell as the
+                // non-artifact passes, diluting the failure rate below the threshold and
+                // hiding artifact-only perma-fails from the dashboard.
+                if (/-artifact(?:-|$)/.test(prefix)) {
+                    variant = 'artifact-' + variant;
                 }
             }
             return variant;
