@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPCShell Errors &amp; Warnings</title>
+    <link rel="icon" href="favicon-orange.svg">
+    <script src="shared.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <link rel="stylesheet" href="common-data-view.css">
+    <style>
+        .explanation {
+            background: white;
+            padding: 12px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px 24px;
+            align-items: flex-start;
+        }
+
+        .marker-kind-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 18px;
+        }
+
+        .filter-checkbox {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            padding: 2px 0;
+            white-space: nowrap;
+        }
+
+        .filter-checkbox input[type="checkbox"] {
+            margin-right: 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .filter-checkbox:hover {
+            background-color: #e9ecef;
+            border-radius: 3px;
+            padding-left: 5px;
+            margin-left: -5px;
+        }
+
+        .view-selector {
+            margin-left: auto;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .view-selector select {
+            font-size: 14px;
+            padding: 4px 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        /* Top-level / sub rows share a flexible main area + right-aligned stats. */
+        .marker-main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .marker-message {
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 40px;
+            flex: 0 1 auto;
+        }
+
+        .marker-loc {
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .marker-loc a { color: #888; text-decoration: none; }
+        .marker-loc a:hover { text-decoration: underline; }
+
+        .marker-component {
+            font-size: 11px;
+            color: #aaa;
+            white-space: nowrap;
+            margin-left: auto;
+            padding-left: 10px;
+            flex-shrink: 0;
+        }
+
+        .kind-badge {
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            padding: 1px 6px;
+            border-radius: 3px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            letter-spacing: 0.02em;
+        }
+
+        .kind-cpp-warning, .kind-console-warn, .kind-js-warning {
+            background: #fff3cd;
+            color: #8a6d00;
+        }
+
+        .kind-cpp-assertion, .kind-console-error, .kind-js-error {
+            background: #fde0e0;
+            color: #c00;
+        }
+
+        .marker-stats {
+            display: flex;
+            gap: 30px;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+
+        .marker-stat {
+            min-width: 70px;
+            text-align: right;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .marker-stat-h {
+            min-width: 70px;
+        }
+
+        .marker-list {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .run-count {
+            color: #888;
+            font-size: 12px;
+            padding: 0 12px;
+            white-space: nowrap;
+        }
+
+        .sub-row.non-clickable { cursor: default; }
+        .inst-block { background: #f5f5f5; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Errors &amp; Warnings</h1>
+    </div>
+
+    <div class="controls">
+        <div class="date-selector">
+            <label for="dateSelect">Select Date: </label>
+            <select id="dateSelect"></select>
+            <span class="status-text" id="statusText">Loading...</span>
+            <button id="historicalButton" class="historical-button">Show Last 21 Days</button>
+            <button id="loadTasksButton" class="historical-button" style="display:none;">Load task details</button>
+        </div>
+        <div class="search-container">
+            <input type="text" id="searchBox" class="search-box" placeholder="Filter by test, message, file, or component...">
+            <button class="search-clear" id="searchClear">×</button>
+        </div>
+    </div>
+
+    <div class="explanation">
+        <div class="marker-kind-filters">
+            <label class="filter-checkbox"><input type="checkbox" id="kind-cpp-warning" checked onchange="onKindFilterChange()"> C++ warning</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-cpp-assertion" checked onchange="onKindFilterChange()"> C++ assertion</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-console-error" checked onchange="onKindFilterChange()"> console.error</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-console-warn" checked onchange="onKindFilterChange()"> console.warn</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-js-error" checked onchange="onKindFilterChange()"> JavaScript error</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-js-warning" checked onchange="onKindFilterChange()"> JavaScript warning</label>
+        </div>
+        <div class="view-selector">
+            Group by:
+            <select id="viewSelect" onchange="onViewChange()">
+                <option value="message">Message</option>
+                <option value="test">Test</option>
+                <option value="component">Component</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="content">
+        <div class="no-data">Loading error/warning data...</div>
+    </div>
+
+    <script src="fetch-utils.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script>
+        // The six fixed marker kinds and their checkbox/CSS slugs.
+        const KIND_SLUG = {
+            'C++ warning': 'cpp-warning',
+            'C++ assertion': 'cpp-assertion',
+            'console.error': 'console-error',
+            'console.warn': 'console-warn',
+            'JavaScript error': 'js-error',
+            'JavaScript warning': 'js-warning'
+        };
+
+        // Columns shown per group-by view (besides the name column).
+        const VIEW_COLS = {
+            message:   [{ key: 'tests', label: 'Tests' }, { key: 'count', label: 'Occurrences' }],
+            test:      [{ key: 'messages', label: 'Messages' }, { key: 'count', label: 'Occurrences' }],
+            component: [{ key: 'tests', label: 'Tests' }, { key: 'messages', label: 'Messages' }, { key: 'count', label: 'Occurrences' }]
+        };
+        const VIEW_NAME_LABEL = { message: 'Message', test: 'Test', component: 'Component' };
+
+        let currentData = null;          // prepared data (see prepareData)
+        let currentResult = null;        // { groupsArr, total, totalTests, totalMsgs }
+        let currentSort = { column: 'count', ascending: false };
+        let isHistoricalMode = false;
+        let taskDataLoaded = false;      // whether the with-taskids aggregate was loaded
+
+        // Expansion state (one top-level group open at a time, like failures.html).
+        let expandedGroup = null;        // index into currentResult.groupsArr
+        let expandedInsts = new Set();   // sub indices whose instance table is open
+
+        // UI managers
+        let searchBoxManager;
+        let historicalToggleManager;
+        let hashManager;
+
+        // ===== Data preparation =====
+
+        // Resolve all per-message and per-test attributes once, up front, so the
+        // hot grouping loop only touches integer-indexed arrays.
+        function prepareData(raw) {
+            const t = raw.tables, m = raw.messages, ti = raw.testInfo;
+            const D = { raw };
+
+            D.hasDays = !!raw.markers.days;
+            D.hasTasks = !!raw.markers.taskIdIds;
+            D.markerNames = t.markerNames;
+            D.numDays = raw.metadata.days || 0;
+
+            D.msgKindId = m.markerNameIds;
+            D.msgText = m.textIds.map(id => id != null ? t.messageTexts[id] : '(no message)');
+            D.msgFile = m.fileIds.map(id => id != null ? t.files[id] : null);
+            D.msgLine = m.lines;
+            D.msgComp = m.componentIds.map(id => id != null ? t.components[id] : 'Unknown');
+            D.msgBlob = D.msgText.map((txt, i) =>
+                (txt + ' ' + (D.msgFile[i] || '') + ' ' + D.msgComp[i]).toLowerCase());
+
+            const paths = t.testPaths, names = t.testNames;
+            D.testFull = ti.testPathIds.map((pid, i) => {
+                const p = paths[pid];
+                const nm = names[ti.testNameIds[i]];
+                return p ? `${p}/${nm}` : nm;
+            });
+            D.testBlob = D.testFull.map(s => s.toLowerCase());
+
+            return D;
+        }
+
+        // Build the kindOn lookup (indexed by markerNameId) from checkbox state.
+        function computeKindOn(D) {
+            const on = new Array(D.markerNames.length);
+            for (let i = 0; i < on.length; i++) {
+                const slug = KIND_SLUG[D.markerNames[i]];
+                const cb = slug ? document.getElementById('kind-' + slug) : null;
+                on[i] = cb ? cb.checked : true;
+            }
+            D.kindOn = on;
+        }
+
+        // ===== Grouping =====
+
+        // Single pass over every marker occurrence, building a map of top-level
+        // groups (and their sub-groups + instances) for the active view, honoring
+        // the marker-kind checkboxes and the free-text filter.
+        function buildGroups(view, term) {
+            const D = currentData, r = D.raw, mk = r.markers;
+            const n = mk.testIds.length;
+            const counts = mk.counts, mids = mk.messageIds, tids = mk.testIds;
+            const days = D.hasDays ? mk.days : null;
+            const taskIdIds = D.hasTasks ? mk.taskIdIds : null;
+            const kindOn = D.kindOn, msgKindId = D.msgKindId;
+            const msgBlob = D.msgBlob, testBlob = D.testBlob;
+            const msgText = D.msgText, testFull = D.testFull, msgComp = D.msgComp;
+            const nDays = D.numDays;
+
+            const groups = new Map();
+            const gTests = new Set(), gMsgs = new Set();
+            let total = 0;
+
+            for (let i = 0; i < n; i++) {
+                const mid = mids[i];
+                if (!kindOn[msgKindId[mid]]) continue;
+                const tid = tids[i];
+                if (term && msgBlob[mid].indexOf(term) < 0 && testBlob[tid].indexOf(term) < 0) continue;
+
+                const c = counts[i];
+                total += c;
+                gTests.add(tid);
+                gMsgs.add(mid);
+
+                let l0;
+                if (view === 'message') l0 = msgText[mid];
+                else if (view === 'test') l0 = testFull[tid];
+                else l0 = msgComp[mid];
+
+                let g = groups.get(l0);
+                if (!g) {
+                    g = {
+                        key: l0,
+                        count: 0,
+                        tests: new Set(),
+                        msgs: new Set(),
+                        dayCounts: D.hasDays ? new Float64Array(nDays) : null,
+                        subs: new Map(),
+                        repMid: -1, repCount: 0,
+                        mc: view === 'message' ? new Map() : null
+                    };
+                    groups.set(l0, g);
+                }
+                g.count += c;
+                g.tests.add(tid);
+                g.msgs.add(mid);
+                if (D.hasDays && days[i] < nDays) g.dayCounts[days[i]] += c;
+
+                // For the message view a text group may span several messageIds
+                // (same text, different file); track the dominant one for display.
+                if (view === 'message') {
+                    const s = (g.mc.get(mid) || 0) + c;
+                    g.mc.set(mid, s);
+                    if (s > g.repCount) { g.repCount = s; g.repMid = mid; }
+                }
+
+                // Sub-group key: tests for the message view, the exact diagnostic
+                // (messageId) for the test/component views.
+                const subKey = view === 'message' ? tid : mid;
+                let sub = g.subs.get(subKey);
+                if (!sub) {
+                    sub = { key: subKey, count: 0, inst: D.hasTasks ? new Map() : null };
+                    g.subs.set(subKey, sub);
+                }
+                sub.count += c;
+
+                if (D.hasTasks) {
+                    const taskIdId = taskIdIds[i];
+                    let e = sub.inst.get(taskIdId);
+                    if (!e) { e = { count: 0, day: D.hasDays ? days[i] : -1 }; sub.inst.set(taskIdId, e); }
+                    e.count += c;
+                }
+            }
+
+            return { groups, total, totalTests: gTests.size, totalMsgs: gMsgs.size };
+        }
+
+        function colValue(g, key) {
+            if (key === 'count') return g.count;
+            if (key === 'tests') return g.tests.size;
+            if (key === 'messages') return g.msgs.size;
+            if (key === 'name') return g.key;
+            return 0;
+        }
+
+        // ===== Rendering =====
+
+        function getView() { return document.getElementById('viewSelect').value; }
+
+        function searchfoxFileLink(file, line) {
+            let url = `https://searchfox.org/mozilla-central/source/${file}`;
+            if (line != null) url += `#${line}`;
+            const text = line != null ? `${file}:${line}` : file;
+            return `<a href="${escapeAttr(url)}" target="_blank" onclick="event.stopPropagation();">${escapeHtml(text)}</a>`;
+        }
+
+        function kindBadge(kind) {
+            const slug = KIND_SLUG[kind] || '';
+            return `<span class="kind-badge kind-${slug}">${escapeHtml(kind)}</span>`;
+        }
+
+        // Main area (badge + message + file:line + component) for a diagnostic,
+        // identified by its messageId. Used for message-view top rows and for
+        // test/component-view sub rows.
+        function diagnosticMain(D, mid) {
+            const kind = D.markerNames[D.msgKindId[mid]];
+            const file = D.msgFile[mid];
+            const line = D.msgLine[mid];
+            const comp = D.msgComp[mid];
+            const text = D.msgText[mid];
+
+            let html = `<div class="marker-main">${kindBadge(kind)}`;
+            html += `<span class="marker-message" title="${escapeAttr(text)}">${escapeHtml(text)}</span>`;
+            if (file) html += `<span class="marker-loc">${searchfoxFileLink(file, line)}</span>`;
+            html += `<span class="marker-component">${escapeHtml(comp)}</span>`;
+            html += '</div>';
+            return html;
+        }
+
+        function statsHtml(values) {
+            let html = '<div class="marker-stats">';
+            for (const v of values) html += `<div class="marker-stat">${v.toLocaleString()}</div>`;
+            html += '</div>';
+            return html;
+        }
+
+        function renderList() {
+            if (!currentData) {
+                document.getElementById('content').innerHTML = '<div class="no-data">No data available</div>';
+                return;
+            }
+
+            const view = getView();
+            const term = searchBoxManager.getValue().trim().toLowerCase();
+            const cols = VIEW_COLS[view];
+
+            computeKindOn(currentData);
+            const result = buildGroups(view, term);
+
+            // Collapse expansion on every rebuild (results may have changed).
+            expandedGroup = null;
+            expandedInsts.clear();
+
+            let arr = Array.from(result.groups.values());
+            arr.sort((a, b) => {
+                const av = colValue(a, currentSort.column);
+                const bv = colValue(b, currentSort.column);
+                let cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
+                return currentSort.ascending ? cmp : -cmp;
+            });
+            result.groupsArr = arr;
+            currentResult = result;
+
+            if (arr.length === 0) {
+                document.getElementById('content').innerHTML =
+                    '<div class="no-data">No errors or warnings match the current filters.</div>';
+                return;
+            }
+
+            let html = '<div class="marker-list">';
+
+            // Sort header
+            html += '<div class="sort-header"><div class="marker-main">';
+            html += `<button class="sort-button ${currentSort.column === 'name' ? 'active' : ''}" onclick="sortBy('name')" style="width:auto;justify-content:flex-start;"><span class="sort-arrow">${sortArrow('name')}</span>${VIEW_NAME_LABEL[view]}</button>`;
+            html += '</div><div class="marker-stats">';
+            for (const col of cols) {
+                html += `<div class="marker-stat-h"><button class="sort-button ${currentSort.column === col.key ? 'active' : ''}" onclick="sortBy('${col.key}')"><span class="sort-arrow">${sortArrow(col.key)}</span>${col.label}</button></div>`;
+            }
+            html += '</div></div>';
+
+            // Total row
+            html += '<div class="data-row total-row non-clickable"><div class="marker-main"><span class="marker-message">📊 Total</span></div>';
+            html += statsHtml(cols.map(col =>
+                col.key === 'count' ? result.total :
+                col.key === 'tests' ? result.totalTests : result.totalMsgs));
+            html += '</div>';
+
+            // Group rows
+            for (let i = 0; i < arr.length; i++) {
+                html += renderGroupRow(view, arr[i], i);
+            }
+
+            html += '</div>';
+            document.getElementById('content').innerHTML = html;
+        }
+
+        function renderGroupRow(view, g, idx) {
+            const cols = VIEW_COLS[view];
+            let main;
+            if (view === 'message') {
+                main = diagnosticMain(currentData, g.repMid);
+            } else {
+                main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(g.key)}">${escapeHtml(g.key || '(none)')}</span></div>`;
+            }
+            const stats = statsHtml(cols.map(col => colValue(g, col.key)));
+            return `<div class="data-row marker-row" data-group="${idx}">${main}${stats}</div>`;
+        }
+
+        function sortArrow(column) {
+            if (currentSort.column !== column) return '';
+            return currentSort.ascending ? '▲' : '▼';
+        }
+
+        function sortBy(column) {
+            if (currentSort.column === column) {
+                currentSort.ascending = !currentSort.ascending;
+            } else {
+                currentSort.column = column;
+                currentSort.ascending = column === 'name';
+            }
+            renderList();
+        }
+
+        // ===== Expansion =====
+
+        function removeFollowingExpansion(row, stopClasses) {
+            let next = row.nextElementSibling;
+            while (next && !stopClasses.some(c => next.classList.contains(c))) {
+                const toRemove = next;
+                next = next.nextElementSibling;
+                toRemove.remove();
+            }
+        }
+
+        function toggleGroup(idx, row) {
+            if (expandedGroup === idx) {
+                // Collapse
+                row.classList.remove('expanded');
+                removeFollowingExpansion(row, ['marker-row', 'sort-header', 'total-row']);
+                expandedGroup = null;
+                expandedInsts.clear();
+                return;
+            }
+
+            // Close any previously open group.
+            if (expandedGroup !== null) {
+                const prev = document.querySelector(`.marker-row[data-group="${expandedGroup}"]`);
+                if (prev) {
+                    prev.classList.remove('expanded');
+                    removeFollowingExpansion(prev, ['marker-row', 'sort-header', 'total-row']);
+                }
+                expandedInsts.clear();
+            }
+
+            expandedGroup = idx;
+            row.classList.add('expanded');
+            row.insertAdjacentHTML('afterend', renderGroupExpansion(idx));
+
+            // Per-day trend chart (aggregate mode only).
+            if (isHistoricalMode && currentData.hasDays) {
+                createDayChart(`chart-g-${idx}`, currentResult.groupsArr[idx].dayCounts);
+            }
+        }
+
+        function renderGroupExpansion(idx) {
+            const view = getView();
+            const g = currentResult.groupsArr[idx];
+
+            // Cache sorted sub array on the node.
+            g.subArr = Array.from(g.subs.values()).sort((a, b) => b.count - a.count);
+
+            let html = '';
+            if (isHistoricalMode && currentData.hasDays) {
+                html += `<div class="historical-chart"><canvas id="chart-g-${idx}" class="historical-chart-canvas"></canvas></div>`;
+            }
+
+            for (let s = 0; s < g.subArr.length; s++) {
+                html += renderSubRow(view, idx, s, g.subArr[s]);
+            }
+            return html;
+        }
+
+        function renderSubRow(view, gIdx, sIdx, sub) {
+            const D = currentData;
+            let main;
+            if (view === 'message') {
+                // Sub is a test.
+                const testFull = D.testFull[sub.key];
+                main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(testFull)}">${escapeHtml(testFull)}</span></div>`;
+            } else {
+                // Sub is a diagnostic (messageId).
+                main = diagnosticMain(D, sub.key);
+            }
+            const clickable = D.hasTasks;
+            const cls = 'data-row test-row direct-child sub-row' + (clickable ? '' : ' non-clickable');
+            return `<div class="${cls}" data-group="${gIdx}" data-sub="${sIdx}">${main}` +
+                `<div class="marker-stats"><div class="marker-stat">${sub.count.toLocaleString()}</div></div></div>`;
+        }
+
+        function toggleSub(gIdx, sIdx, row) {
+            if (!currentData.hasTasks) return;
+
+            if (expandedInsts.has(sIdx)) {
+                row.classList.remove('expanded');
+                removeFollowingExpansion(row, ['marker-row', 'sort-header', 'total-row', 'sub-row']);
+                expandedInsts.delete(sIdx);
+                return;
+            }
+
+            expandedInsts.add(sIdx);
+            row.classList.add('expanded');
+            const view = getView();
+            const g = currentResult.groupsArr[gIdx];
+            const sub = g.subArr[sIdx];
+
+            // A test name for the profiler marker search, when we know it.
+            let testName = null;
+            if (view === 'message') testName = currentData.testFull[sub.key];
+            else if (view === 'test') testName = g.key;
+
+            row.insertAdjacentHTML('afterend', renderInstances(sub, testName));
+        }
+
+        function renderInstances(sub, testName) {
+            const D = currentData, r = D.raw;
+            const instances = Array.from(sub.inst.entries()).map(([taskIdId, e]) => {
+                const ts = r.tables.taskIds[taskIdId];
+                const dot = ts.lastIndexOf('.');
+                const taskId = ts.substring(0, dot);
+                const retryId = ts.substring(dot + 1);
+                const jobName = r.tables.jobNames[r.taskInfo.jobNameIds[taskIdId]];
+                let date = '';
+                if (D.hasDays && e.day >= 0) {
+                    date = new Date((r.metadata.startTime + e.day * 86400) * 1000).toISOString().split('T')[0];
+                } else if (r.metadata.date) {
+                    date = r.metadata.date;
+                }
+                return { taskId, retryId, jobName, count: e.count, date };
+            });
+
+            prepareRunsForDisplay(instances);
+
+            let html = '<div class="inst-block"><table class="instance-table">';
+            for (const inst of instances) {
+                const profilerUrl = getProfilerUrl(inst, testName);
+                const links = [`<a href="${profilerUrl}" target="_blank" onclick="event.stopPropagation();">Profile</a>`];
+                const treeherderUrl = getTreeherderJobUrl(inst, r);
+                if (treeherderUrl) {
+                    links.push(`<a href="${treeherderUrl}" target="_blank" onclick="event.stopPropagation();">Job</a>`);
+                }
+                html += '<tr class="failure-instance-row">';
+                html += inst.dateHtml;
+                html += `<td class="failure-job-name"><a href="${profilerUrl}" target="_blank">${escapeHtml(inst.jobName)}</a></td>`;
+                html += `<td class="run-count">${inst.count > 1 ? '×' + inst.count.toLocaleString() : ''}</td>`;
+                html += `<td class="view-links">View: ${links.join(' ')}</td>`;
+                html += '</tr>';
+            }
+            html += '</table></div>';
+            return html;
+        }
+
+        // ===== Per-day trend chart (aggregate mode) =====
+
+        function createDayChart(canvasId, dayCounts) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || !dayCounts) return;
+            const meta = currentData.raw.metadata;
+            const labels = [], data = [];
+            for (let d = 0; d < currentData.numDays; d++) {
+                labels.push(new Date((meta.startTime + d * 86400) * 1000).toISOString().split('T')[0]);
+                data.push(dayCounts[d] || 0);
+            }
+            new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        data,
+                        backgroundColor: 'rgba(255, 140, 0, 0.7)',
+                        borderColor: '#ff8c00',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            animation: false,
+                            callbacks: {
+                                label: (c) => `${c.parsed.y.toLocaleString()} occurrence${c.parsed.y === 1 ? '' : 's'}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {},
+                        y: { beginAtZero: true, title: { display: true, text: 'occurrences' } }
+                    }
+                }
+            });
+        }
+
+        // ===== Click handling =====
+
+        function setupClickHandlers() {
+            const content = document.getElementById('content');
+            content.addEventListener('click', function(event) {
+                if (event.target.tagName === 'A') return;
+
+                let target = event.target;
+                while (target && target !== content) {
+                    if (target.classList.contains('sub-row')) {
+                        if (!target.classList.contains('non-clickable')) {
+                            toggleSub(+target.dataset.group, +target.dataset.sub, target);
+                        }
+                        return;
+                    }
+                    if (target.classList.contains('marker-row') && !target.classList.contains('total-row')) {
+                        toggleGroup(+target.dataset.group, target);
+                        return;
+                    }
+                    target = target.parentElement;
+                }
+            });
+        }
+
+        // ===== Filter / view / sort change handlers =====
+
+        function onKindFilterChange() {
+            updateUrlHash();
+            renderList();
+        }
+
+        function onViewChange() {
+            // Reset sort to the default for the new view.
+            currentSort = { column: 'count', ascending: false };
+            updateUrlHash();
+            renderList();
+        }
+
+        // ===== Data loading =====
+
+        async function loadSelectedDate() {
+            const date = document.getElementById('dateSelect').value;
+            if (!date) return;
+
+            try {
+                document.getElementById('statusText').textContent = 'Loading...';
+                const harness = getHarnessType();
+                const response = await fetchData(`${harness}-${date}-errors.json`);
+                if (!response.ok) {
+                    throw new Error(`No error/warning data for ${date}.`);
+                }
+                currentData = prepareData(await response.json());
+                renderList();
+
+                const meta = currentData.raw.metadata;
+                const jobs = (meta.jobCount || 0).toLocaleString();
+                const markers = (meta.markerCount || 0).toLocaleString();
+                document.getElementById('statusText').textContent = `${jobs} test jobs · ${markers} markers`;
+            } catch (error) {
+                console.error('Error loading data:', error);
+                currentData = null;
+                document.getElementById('content').innerHTML = `<div class="no-data">${escapeHtml(error.message)}</div>`;
+                document.getElementById('statusText').textContent = error.message;
+            }
+        }
+
+        async function toggleHistoricalData() {
+            await historicalToggleManager.toggle();
+        }
+
+        // In aggregate (counts-only) mode the data has no task IDs. Lazily swap in
+        // the with-taskids aggregate so messages can be drilled down to CI tasks.
+        async function loadTaskDetails() {
+            const button = document.getElementById('loadTasksButton');
+            try {
+                button.disabled = true;
+                button.textContent = 'Loading task details...';
+                const harness = getHarnessType();
+                const response = await fetchData(`${harness}-errors-with-taskids.json`);
+                if (!response.ok) throw new Error('Task detail data not available');
+                currentData = prepareData(await response.json());
+                taskDataLoaded = true;
+                button.style.display = 'none';
+                renderList();
+            } catch (error) {
+                console.error('Error loading task details:', error);
+                button.textContent = 'Load task details';
+                button.disabled = false;
+            }
+        }
+
+        // ===== URL hash =====
+
+        function getDisabledKindSlugs() {
+            return Object.values(KIND_SLUG)
+                .filter(slug => !document.getElementById('kind-' + slug).checked);
+        }
+
+        function updateUrlHash() {
+            if (hashManager) hashManager.updateHash();
+        }
+
+        async function loadFromUrlHash() {
+            if (!hashManager) return;
+            const state = hashManager.loadFromHash();
+            const dateSelect = document.getElementById('dateSelect');
+
+            // Restore group-by view.
+            if (state.view && VIEW_COLS[state.view]) {
+                document.getElementById('viewSelect').value = state.view;
+            }
+
+            // Restore marker-kind checkboxes (default: all on).
+            const hidden = new Set((state.hide || '').split(',').filter(Boolean));
+            for (const slug of Object.values(KIND_SLUG)) {
+                document.getElementById('kind-' + slug).checked = !hidden.has(slug);
+            }
+
+            // Restore filter text.
+            const searchBox = document.getElementById('searchBox');
+            if (document.activeElement !== searchBox) {
+                searchBoxManager.setValue(state.q || '');
+            }
+
+            // Restore mode / date. Default: most recent single day.
+            if (state.date === '21days') {
+                if (!isHistoricalMode) await toggleHistoricalData();
+            } else {
+                if (isHistoricalMode) await toggleHistoricalData();
+                if (state.date && dateSelect.value !== state.date &&
+                    dateSelect.querySelector(`option[value="${state.date}"]`)) {
+                    dateSelect.value = state.date;
+                }
+            }
+        }
+
+        // ===== Initialization =====
+
+        function initializeUI() {
+            initHarnessSwitcher('Errors & Warnings');
+
+            searchBoxManager = initSearchBox({
+                searchBoxId: 'searchBox',
+                searchClearId: 'searchClear',
+                onSearch: renderList,
+                updateUrlHash: updateUrlHash
+            });
+
+            hashManager = initUrlHashManager({
+                getState: () => ({
+                    date: isHistoricalMode ? '21days' : document.getElementById('dateSelect').value,
+                    q: searchBoxManager.getValue().trim(),
+                    view: getView(),
+                    hide: getDisabledKindSlugs().join(',')
+                }),
+                onHashChange: async () => {
+                    searchBoxManager.setNavigating(true);
+                    await loadFromUrlHash();
+                    if (!isHistoricalMode) await loadSelectedDate();
+                    else renderList();
+                    searchBoxManager.setNavigating(false);
+                }
+            });
+
+            const harness = getHarnessType();
+            historicalToggleManager = initHistoricalToggle({
+                buttonId: 'historicalButton',
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData,
+                historicalDataFile: `${harness}-errors.json`,
+                onToggle: async (isHistorical, data) => {
+                    isHistoricalMode = isHistorical;
+                    const loadTasksButton = document.getElementById('loadTasksButton');
+                    if (isHistorical) {
+                        taskDataLoaded = false;
+                        currentData = prepareData(data);
+                        // Offer task drill-down (the counts-only aggregate has none).
+                        loadTasksButton.style.display = currentData.hasTasks ? 'none' : '';
+                        loadTasksButton.disabled = false;
+                        loadTasksButton.textContent = 'Load task details';
+                        renderList();
+                    } else {
+                        loadTasksButton.style.display = 'none';
+                        await loadSelectedDate();
+                    }
+                    updateUrlHash();
+                },
+                updateUrlHash: updateUrlHash
+            });
+
+            document.getElementById('loadTasksButton').addEventListener('click', loadTaskDetails);
+            document.getElementById('dateSelect').addEventListener('change', () => {
+                updateUrlHash();
+                loadSelectedDate();
+            });
+        }
+
+        setupClickHandlers();
+
+        (async function() {
+            initializeUI();
+
+            const hasData = await populateDateSelector({
+                selectId: 'dateSelect',
+                statusTextId: 'statusText',
+                fetchData: fetchData
+            });
+
+            if (hasData) {
+                const dateSelect = document.getElementById('dateSelect');
+                if (!dateSelect.value && dateSelect.options.length > 0) {
+                    dateSelect.selectedIndex = 0;
+                }
+                await loadFromUrlHash();
+                if (!isHistoricalMode) await loadSelectedDate();
+            }
+        })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</body>
+</html>
