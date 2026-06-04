@@ -410,9 +410,19 @@
             return html;
         }
 
-        function statsHtml(values) {
+        // Tooltip for an occurrences cell: its share of the grand total.
+        function pctTitle(count, total) {
+            if (!total) return '';
+            return ` title="${(count / total * 100).toFixed(2)}% of all occurrences"`;
+        }
+
+        // `total` enables a percentage-of-total tooltip on the occurrences cell.
+        function statsHtml(values, cols, total) {
             let html = '<div class="marker-stats">';
-            for (const v of values) html += `<div class="marker-stat">${v.toLocaleString()}</div>`;
+            for (let i = 0; i < values.length; i++) {
+                const attrs = cols[i].key === 'count' ? pctTitle(values[i], total) : '';
+                html += `<div class="marker-stat"${attrs}>${values[i].toLocaleString()}</div>`;
+            }
             html += '</div>';
             return html;
         }
@@ -465,19 +475,19 @@
             html += '<div class="data-row total-row non-clickable"><div class="marker-main"><span class="marker-message">📊 Total</span></div>';
             html += statsHtml(cols.map(col =>
                 col.key === 'count' ? result.total :
-                col.key === 'tests' ? result.totalTests : result.totalMsgs));
+                col.key === 'tests' ? result.totalTests : result.totalMsgs), cols);
             html += '</div>';
 
             // Group rows
             for (let i = 0; i < arr.length; i++) {
-                html += renderGroupRow(view, arr[i], i);
+                html += renderGroupRow(view, arr[i], i, result.total);
             }
 
             html += '</div>';
             document.getElementById('content').innerHTML = html;
         }
 
-        function renderGroupRow(view, g, idx) {
+        function renderGroupRow(view, g, idx, total) {
             const cols = VIEW_COLS[view];
             let main;
             if (view === 'message') {
@@ -486,7 +496,7 @@
                 const label = g.key || (view === 'test' ? '(no test)' : '(none)');
                 main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(g.key)}">${escapeHtml(label)}</span></div>`;
             }
-            const stats = statsHtml(cols.map(col => colValue(g, col.key)));
+            const stats = statsHtml(cols.map(col => colValue(g, col.key)), cols, total);
             return `<div class="data-row marker-row" data-group="${idx}">${main}${stats}</div>`;
         }
 
@@ -578,7 +588,7 @@
             const clickable = D.hasTasks;
             const cls = 'data-row test-row direct-child sub-row' + (clickable ? '' : ' non-clickable');
             return `<div class="${cls}" data-group="${gIdx}" data-sub="${sIdx}">${main}` +
-                `<div class="marker-stats"><div class="marker-stat">${sub.count.toLocaleString()}</div></div></div>`;
+                `<div class="marker-stats"><div class="marker-stat"${pctTitle(sub.count, currentResult.total)}>${sub.count.toLocaleString()}</div></div></div>`;
         }
 
         function toggleSub(gIdx, sIdx, row) {
