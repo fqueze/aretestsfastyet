@@ -118,7 +118,7 @@
             color: #8a6d00;
         }
 
-        .kind-cpp-assertion, .kind-console-error, .kind-js-error {
+        .kind-cpp-assertion, .kind-console-error, .kind-js-error, .kind-tsan-error {
             background: #fde0e0;
             color: #c00;
         }
@@ -187,6 +187,7 @@
             <label class="filter-checkbox"><input type="checkbox" id="kind-console-warn" checked onchange="onKindFilterChange()"> console.warn</label>
             <label class="filter-checkbox"><input type="checkbox" id="kind-js-error" checked onchange="onKindFilterChange()"> JavaScript error</label>
             <label class="filter-checkbox"><input type="checkbox" id="kind-js-warning" checked onchange="onKindFilterChange()"> JavaScript warning</label>
+            <label class="filter-checkbox"><input type="checkbox" id="kind-tsan-error" checked onchange="onKindFilterChange()"> TSan Error</label>
         </div>
         <div class="view-selector">
             Group by:
@@ -213,7 +214,8 @@
             'console.error': 'console-error',
             'console.warn': 'console-warn',
             'JavaScript error': 'js-error',
-            'JavaScript warning': 'js-warning'
+            'JavaScript warning': 'js-warning',
+            'TSan Error': 'tsan-error'
         };
 
         // Columns shown per group-by view (besides the name column).
@@ -481,7 +483,8 @@
             if (view === 'message') {
                 main = diagnosticMain(currentData, g.repMid);
             } else {
-                main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(g.key)}">${escapeHtml(g.key || '(none)')}</span></div>`;
+                const label = g.key || (view === 'test' ? '(no test)' : '(none)');
+                main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(g.key)}">${escapeHtml(label)}</span></div>`;
             }
             const stats = statsHtml(cols.map(col => colValue(g, col.key)));
             return `<div class="data-row marker-row" data-group="${idx}">${main}${stats}</div>`;
