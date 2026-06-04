@@ -227,14 +227,24 @@
         const VIEW_NAME_LABEL = { message: 'Message', test: 'Test', component: 'Component' };
 
         let currentData = null;          // prepared data (see prepareData)
-        let currentResult = null;        // { groupsArr, total, totalTests, totalMsgs }
+        let currentResult = null;        // { view, groupsArr (sorted), visible, total, totalTests, totalMsgs }
         let currentSort = { column: 'count', ascending: false };
         let isHistoricalMode = false;
         let taskDataLoaded = false;      // whether the with-taskids aggregate was loaded
 
         // Expansion state (one top-level group open at a time, like failures.html).
-        let expandedGroup = null;        // index into currentResult.groupsArr
+        let expandedGroup = null;        // index into currentResult.visible
         let expandedInsts = new Set();   // sub indices whose instance table is open
+
+        // Virtualized group list. The list can hold tens of thousands of rows, so
+        // we render it in fixed-size chunks: every chunk is a placeholder <div>
+        // sized to its rows, and an IntersectionObserver fills it with real rows
+        // only while it (or its margin) is on screen, emptying it again when it
+        // scrolls away. DOM stays small no matter how many groups there are.
+        const VCHUNK = 50;               // groups per chunk
+        let vObserver = null;            // IntersectionObserver over the chunk divs
+        let vRowH = 29;                  // measured height of one collapsed row, px
+        let pinnedChunk = null;          // chunk holding the expanded group (kept filled)
 
         // UI managers
         let searchBoxManager;
@@ -270,7 +280,63 @@
             });
             D.testBlob = D.testFull.map(s => s.toLowerCase());
 
+            // Dense integer group id per marker, for each view, plus a label table
+            // (id -> display string). Grouping the hot loop by integer instead of
+            // by the message-text string avoids hashing long strings 10M+ times.
+            // The lookup-table id is already dense per distinct value; a missing
+            // text/component folds into one trailing sentinel group.
+            D.msgGroupLabel = t.messageTexts.concat(['(no message)']);
+            const msgSentinel = t.messageTexts.length;
+            D.msgGroupId = m.textIds.map(id => id == null ? msgSentinel : id);
+
+            D.compGroupLabel = t.components.concat(['Unknown']);
+            const compSentinel = t.components.length;
+            D.compGroupId = m.componentIds.map(id => id == null ? compSentinel : id);
+
+            // The test view groups by the full path string, so two test entries
+            // with the same path/name must share a group: intern to a dense id.
+            const testIndex = new Map();
+            D.testGroupLabel = [];
+            D.testGroupId = new Int32Array(D.testFull.length);
+            for (let i = 0; i < D.testFull.length; i++) {
+                const s = D.testFull[i];
+                let id = testIndex.get(s);
+                if (id === undefined) { id = D.testGroupLabel.length; testIndex.set(s, id); D.testGroupLabel.push(s); }
+                D.testGroupId[i] = id;
+            }
+
             return D;
+        }
+
+        // Per-view CSR (compressed-sparse-row) bucketing of marker indices by group
+        // id: order[gStart[g] .. gStart[g+1]) lists every marker in group g. Built
+        // once per view and cached on the data object, so each filter/sort change
+        // is a flat scan of contiguous per-group runs (no Map, no per-group Set)
+        // and expanding a group touches only that group's markers.
+        function getCSR(D, view) {
+            if (!D.csr) D.csr = {};
+            if (D.csr[view]) return D.csr[view];
+
+            const mk = D.raw.markers, n = mk.testIds.length;
+            const mids = mk.messageIds, tids = mk.testIds;
+            const byTest = view === 'test';
+            const idOf = view === 'message' ? D.msgGroupId : view === 'component' ? D.compGroupId : null;
+            const tg = byTest ? D.testGroupId : null;
+            const labels = view === 'message' ? D.msgGroupLabel
+                : view === 'component' ? D.compGroupLabel : D.testGroupLabel;
+            const nGroups = labels.length;
+
+            const gStart = new Int32Array(nGroups + 1);
+            for (let i = 0; i < n; i++) gStart[(byTest ? tg[tids[i]] : idOf[mids[i]]) + 1]++;
+            for (let g = 0; g < nGroups; g++) gStart[g + 1] += gStart[g];
+
+            const order = new Int32Array(n);
+            const pos = gStart.slice();
+            for (let i = 0; i < n; i++) {
+                const g = byTest ? tg[tids[i]] : idOf[mids[i]];
+                order[pos[g]++] = i;
+            }
+            return D.csr[view] = { gStart, order, nGroups, labels };
         }
 
         // Build the kindOn lookup (indexed by markerNameId) from checkbox state.
@@ -289,89 +355,190 @@
         // Single pass over every marker occurrence, building a map of top-level
         // groups (and their sub-groups + instances) for the active view, honoring
         // the marker-kind checkboxes and the free-text filter.
-        function buildGroups(view, term) {
-            const D = currentData, r = D.raw, mk = r.markers;
-            const n = mk.testIds.length;
+        // Group every marker for the active view into a sorted array, via the
+        // per-view CSR buckets (one contiguous run per group -> no Map, and
+        // distinct test/message counts come from a stamp array keyed by the
+        // group id rather than a per-group Set). Each group is tagged with the
+        // bitmask of marker kinds it contains so the message view can later
+        // show/hide whole rows by kind without rebuilding.
+        //
+        // The message view groups by message text, and a text is effectively a
+        // single kind, so it is built once over *all* kinds and the checkboxes
+        // just filter visibility (see applyFilter). The test/component views mix
+        // kinds per row, so there `applyKind` bakes the current checkbox state
+        // into the counts and a kind change rebuilds + re-sorts.
+        function buildGroups(view) {
+            const D = currentData, mk = D.raw.markers;
+            const counts = mk.counts, mids = mk.messageIds, tids = mk.testIds;
+            const kindOn = D.kindOn, msgKindId = D.msgKindId;
+            const { gStart, order, nGroups, labels } = getCSR(D, view);
+
+            const applyKind = view !== 'message';
+            const needTests = view !== 'test';      // 'Tests' column: message + component
+            const needMsgs = view !== 'message';    // 'Messages' column: test + component
+            const numTests = D.testFull.length, numMids = D.msgKindId.length;
+
+            const gCount = new Float64Array(nGroups);
+            const gMask = new Int32Array(nGroups);
+            const gTest = needTests ? new Int32Array(nGroups) : null;
+            const gMsg = needMsgs ? new Int32Array(nGroups) : null;
+            const tidStamp = needTests ? new Int32Array(numTests) : null;   // stores gid + 1
+            const midStamp = needMsgs ? new Int32Array(numMids) : null;
+            const seenTid = needTests ? new Uint8Array(numTests) : null;    // grand-total distinct
+            const seenMid = needMsgs ? new Uint8Array(numMids) : null;
+            let total = 0, totalTests = 0, totalMsgs = 0;
+
+            for (let g = 0; g < nGroups; g++) {
+                const e = gStart[g + 1];
+                for (let j = gStart[g]; j < e; j++) {
+                    const i = order[j];
+                    const mid = mids[i];
+                    const kind = msgKindId[mid];
+                    if (applyKind && !kindOn[kind]) continue;
+                    const c = counts[i];
+                    gCount[g] += c; total += c;
+                    gMask[g] |= (1 << kind);
+                    if (needTests) {
+                        const tid = tids[i];
+                        if (tidStamp[tid] !== g + 1) { tidStamp[tid] = g + 1; gTest[g]++; }
+                        if (!seenTid[tid]) { seenTid[tid] = 1; totalTests++; }
+                    }
+                    if (needMsgs) {
+                        if (midStamp[mid] !== g + 1) { midStamp[mid] = g + 1; gMsg[g]++; }
+                        if (!seenMid[mid]) { seenMid[mid] = 1; totalMsgs++; }
+                    }
+                }
+            }
+
+            const arr = [];
+            for (let g = 0; g < nGroups; g++) {
+                if (gCount[g] <= 0) continue;
+                arr.push({
+                    gid: g, key: labels[g], count: gCount[g], kindMask: gMask[g],
+                    testCount: needTests ? gTest[g] : 0,
+                    msgCount: needMsgs ? gMsg[g] : 0,
+                    repMid: -1, hay: null, detail: null
+                });
+            }
+            sortGroups(arr);
+            return { view, groupsArr: arr, total, totalTests, totalMsgs };
+        }
+
+        function sortGroups(arr) {
+            const col = currentSort.column, asc = currentSort.ascending;
+            arr.sort((a, b) => {
+                const av = colValue(a, col), bv = colValue(b, col);
+                const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
+                return asc ? cmp : -cmp;
+            });
+        }
+
+        // The message-view top row shows one representative diagnostic (the
+        // messageId with the most occurrences among visible kinds). Only needed
+        // for rendered rows, so computed lazily per row and cached.
+        function groupRepMid(g) {
+            if (g.repMid >= 0) return g.repMid;
+            const D = currentData, mk = D.raw.markers;
+            const mids = mk.messageIds, counts = mk.counts, msgKindId = D.msgKindId, kindOn = D.kindOn;
+            const { gStart, order } = getCSR(D, 'message');
+            const mc = new Map();
+            let best = -1, bestCount = 0;
+            for (let j = gStart[g.gid], e = gStart[g.gid + 1]; j < e; j++) {
+                const i = order[j], mid = mids[i];
+                if (!kindOn[msgKindId[mid]]) continue;
+                const s = (mc.get(mid) || 0) + counts[i];
+                mc.set(mid, s);
+                if (s > bestCount) { bestCount = s; best = mid; }
+            }
+            return g.repMid = best;
+        }
+
+        // Build a group's sub-rows, per-task instances and day-counts on demand.
+        // This is the expensive part of grouping (a Map per sub, a Map entry per
+        // task, a Float64Array per group), so it is deferred until the user
+        // actually expands a group. Walks only this group's CSR run, so it is
+        // O(group size) rather than O(all markers). Cached on the group.
+        function buildGroupDetail(g) {
+            if (g.detail) return g.detail;
+
+            const D = currentData, mk = D.raw.markers;
             const counts = mk.counts, mids = mk.messageIds, tids = mk.testIds;
             const days = D.hasDays ? mk.days : null;
             const taskIdIds = D.hasTasks ? mk.taskIdIds : null;
             const kindOn = D.kindOn, msgKindId = D.msgKindId;
             const msgBlob = D.msgBlob, testBlob = D.testBlob;
-            const msgText = D.msgText, testFull = D.testFull, msgComp = D.msgComp;
             const nDays = D.numDays;
+            const view = getView();
+            const term = searchBoxManager.getValue().trim().toLowerCase();
+            const { gStart, order } = getCSR(D, view);
 
-            const groups = new Map();
-            const gTests = new Set(), gMsgs = new Set();
-            let total = 0;
+            const subs = new Map();
+            const dayCounts = D.hasDays ? new Float64Array(nDays) : null;
 
-            for (let i = 0; i < n; i++) {
+            for (let j = gStart[g.gid], e = gStart[g.gid + 1]; j < e; j++) {
+                const i = order[j];
                 const mid = mids[i];
                 if (!kindOn[msgKindId[mid]]) continue;
                 const tid = tids[i];
                 if (term && msgBlob[mid].indexOf(term) < 0 && testBlob[tid].indexOf(term) < 0) continue;
 
                 const c = counts[i];
-                total += c;
-                gTests.add(tid);
-                gMsgs.add(mid);
-
-                let l0;
-                if (view === 'message') l0 = msgText[mid];
-                else if (view === 'test') l0 = testFull[tid];
-                else l0 = msgComp[mid];
-
-                let g = groups.get(l0);
-                if (!g) {
-                    g = {
-                        key: l0,
-                        count: 0,
-                        tests: new Set(),
-                        msgs: new Set(),
-                        dayCounts: D.hasDays ? new Float64Array(nDays) : null,
-                        subs: new Map(),
-                        repMid: -1, repCount: 0,
-                        mc: view === 'message' ? new Map() : null
-                    };
-                    groups.set(l0, g);
-                }
-                g.count += c;
-                g.tests.add(tid);
-                g.msgs.add(mid);
-                if (D.hasDays && days[i] < nDays) g.dayCounts[days[i]] += c;
-
-                // For the message view a text group may span several messageIds
-                // (same text, different file); track the dominant one for display.
-                if (view === 'message') {
-                    const s = (g.mc.get(mid) || 0) + c;
-                    g.mc.set(mid, s);
-                    if (s > g.repCount) { g.repCount = s; g.repMid = mid; }
-                }
+                if (D.hasDays && days[i] < nDays) dayCounts[days[i]] += c;
 
                 // Sub-group key: tests for the message view, the exact diagnostic
                 // (messageId) for the test/component views.
                 const subKey = view === 'message' ? tid : mid;
-                let sub = g.subs.get(subKey);
+                let sub = subs.get(subKey);
                 if (!sub) {
                     sub = { key: subKey, count: 0, inst: D.hasTasks ? new Map() : null };
-                    g.subs.set(subKey, sub);
+                    subs.set(subKey, sub);
                 }
                 sub.count += c;
 
                 if (D.hasTasks) {
                     const taskIdId = taskIdIds[i];
-                    let e = sub.inst.get(taskIdId);
-                    if (!e) { e = { count: 0, day: D.hasDays ? days[i] : -1 }; sub.inst.set(taskIdId, e); }
-                    e.count += c;
+                    let e2 = sub.inst.get(taskIdId);
+                    if (!e2) { e2 = { count: 0, day: D.hasDays ? days[i] : -1 }; sub.inst.set(taskIdId, e2); }
+                    e2.count += c;
                 }
             }
 
-            return { groups, total, totalTests: gTests.size, totalMsgs: gMsgs.size };
+            g.detail = {
+                subArr: Array.from(subs.values()).sort((a, b) => b.count - a.count),
+                dayCounts
+            };
+            return g.detail;
+        }
+
+        // Lazily build a lowercase search haystack per group (its messages'
+        // text/file/component blobs plus its tests' path blobs), so a search-term
+        // change is a linear scan of the already-grouped array instead of a
+        // rebuild. One pass over all markers, the first time a search runs for the
+        // current grouping; cached on each group until the next rebuild.
+        function ensureHays() {
+            const arr = currentResult.groupsArr;
+            if (!arr.length || arr[0].hay !== null) return;
+            const D = currentData, mk = D.raw.markers;
+            const mids = mk.messageIds, tids = mk.testIds;
+            const msgBlob = D.msgBlob, testBlob = D.testBlob;
+            const { gStart, order } = getCSR(D, currentResult.view);
+            const midStamp = new Int32Array(D.msgKindId.length);
+            const tidStamp = new Int32Array(D.testFull.length);
+            for (const grp of arr) {
+                const gid = grp.gid, parts = [];
+                for (let j = gStart[gid], e = gStart[gid + 1]; j < e; j++) {
+                    const i = order[j], mid = mids[i], tid = tids[i];
+                    if (midStamp[mid] !== gid + 1) { midStamp[mid] = gid + 1; parts.push(msgBlob[mid]); }
+                    if (tidStamp[tid] !== gid + 1) { tidStamp[tid] = gid + 1; parts.push(testBlob[tid]); }
+                }
+                grp.hay = parts.join(' ');
+            }
         }
 
         function colValue(g, key) {
             if (key === 'count') return g.count;
-            if (key === 'tests') return g.tests.size;
-            if (key === 'messages') return g.msgs.size;
+            if (key === 'tests') return g.testCount;
+            if (key === 'messages') return g.msgCount;
             if (key === 'name') return g.key;
             return 0;
         }
@@ -427,35 +594,64 @@
             return html;
         }
 
+        // Full rebuild: re-group and re-sort from the markers. Used on data load,
+        // group-by change, and (test/component views only) kind change. Sort-column
+        // changes re-sort the existing array (sortBy); search and message-view kind
+        // changes only re-filter (applyFilter).
         function renderList() {
             if (!currentData) {
                 document.getElementById('content').innerHTML = '<div class="no-data">No data available</div>';
                 return;
             }
-
-            const view = getView();
-            const term = searchBoxManager.getValue().trim().toLowerCase();
-            const cols = VIEW_COLS[view];
-
             computeKindOn(currentData);
-            const result = buildGroups(view, term);
+            currentResult = buildGroups(getView());
+            applyFilter();
+        }
 
-            // Collapse expansion on every rebuild (results may have changed).
+        // Cheap path: re-pick which already-built groups are visible (message-view
+        // kind checkboxes and the search term) and re-render, without re-grouping
+        // or re-sorting. A kind change is a bitmask test; a search is a substring
+        // scan over the cached per-group haystacks.
+        function applyFilter() {
+            if (!currentResult) return;
+            computeKindOn(currentData);
+            const arr = currentResult.groupsArr;
+            const isMsg = currentResult.view === 'message';
+            const term = searchBoxManager.getValue().trim().toLowerCase();
+            const onMask = isMsg ? kindOnMask(currentData) : 0;
+            if (term) ensureHays();
+
+            const visible = [];
+            for (const g of arr) {
+                if (isMsg && !(g.kindMask & onMask)) continue;
+                if (term && g.hay.indexOf(term) < 0) continue;
+                visible.push(g);
+            }
+            currentResult.visible = visible;
+            renderVirtualList();
+        }
+
+        // Bitmask of the marker kinds whose checkbox is currently checked.
+        function kindOnMask(D) {
+            let mask = 0;
+            for (let k = 0; k < D.kindOn.length; k++) if (D.kindOn[k]) mask |= (1 << k);
+            return mask;
+        }
+
+        // Lay out the (virtualized) visible list: sort header, total row, and one
+        // empty placeholder per chunk for the IntersectionObserver to fill.
+        function renderVirtualList() {
+            const result = currentResult, view = result.view, cols = VIEW_COLS[view];
+            const visible = result.visible;
+
             expandedGroup = null;
             expandedInsts.clear();
+            if (vObserver) { vObserver.disconnect(); vObserver = null; }
+            pinnedChunk = null;
 
-            let arr = Array.from(result.groups.values());
-            arr.sort((a, b) => {
-                const av = colValue(a, currentSort.column);
-                const bv = colValue(b, currentSort.column);
-                let cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
-                return currentSort.ascending ? cmp : -cmp;
-            });
-            result.groupsArr = arr;
-            currentResult = result;
-
-            if (arr.length === 0) {
-                document.getElementById('content').innerHTML =
+            const content = document.getElementById('content');
+            if (visible.length === 0) {
+                content.innerHTML =
                     '<div class="no-data">No errors or warnings match the current filters.</div>';
                 return;
             }
@@ -478,20 +674,68 @@
                 col.key === 'tests' ? result.totalTests : result.totalMsgs), cols);
             html += '</div>';
 
-            // Group rows
-            for (let i = 0; i < arr.length; i++) {
-                html += renderGroupRow(view, arr[i], i, result.total);
+            // Empty chunk placeholders; the observer fills them on demand.
+            const nChunks = Math.ceil(visible.length / VCHUNK);
+            html += '<div class="vlist">';
+            for (let c = 0; c < nChunks; c++) {
+                html += `<div class="vchunk" data-chunk="${c}"></div>`;
+            }
+            html += '</div></div>';
+            content.innerHTML = html;
+
+            // Measure a real row from the always-present total row, then size each
+            // placeholder so the scrollbar matches the full (unrendered) list.
+            const totalRow = content.querySelector('.total-row');
+            if (totalRow) vRowH = totalRow.getBoundingClientRect().height;
+            const chunkEls = content.querySelectorAll('.vchunk');
+            for (const el of chunkEls) {
+                el.style.height = chunkRowCount(+el.dataset.chunk) * vRowH + 'px';
             }
 
-            html += '</div>';
-            document.getElementById('content').innerHTML = html;
+            vObserver = new IntersectionObserver(onChunkIntersect, { rootMargin: '600px 0px' });
+            for (const el of chunkEls) vObserver.observe(el);
+        }
+
+        // Number of group rows in chunk c (the last chunk may be short).
+        function chunkRowCount(c) {
+            return Math.min(VCHUNK, currentResult.visible.length - c * VCHUNK);
+        }
+
+        function onChunkIntersect(entries) {
+            for (const e of entries) {
+                if (e.isIntersecting) fillChunk(e.target);
+                else clearChunk(e.target);
+            }
+        }
+
+        // Render a chunk's rows. A freshly visible chunk never holds the expanded
+        // group (expanding requires clicking a row that was already on screen, and
+        // its chunk is then pinned), so no expansion needs restoring here.
+        function fillChunk(el) {
+            if (el.dataset.filled === '1') return;
+            const view = getView();
+            const visible = currentResult.visible;
+            const c = +el.dataset.chunk;
+            const start = c * VCHUNK, end = Math.min(start + VCHUNK, visible.length);
+            let html = '';
+            for (let i = start; i < end; i++) html += renderGroupRow(view, visible[i], i, currentResult.total);
+            el.innerHTML = html;
+            el.style.height = 'auto';
+            el.dataset.filled = '1';
+        }
+
+        function clearChunk(el) {
+            if (el.dataset.filled !== '1' || el === pinnedChunk) return;
+            el.style.height = chunkRowCount(+el.dataset.chunk) * vRowH + 'px';
+            el.innerHTML = '';
+            el.dataset.filled = '0';
         }
 
         function renderGroupRow(view, g, idx, total) {
             const cols = VIEW_COLS[view];
             let main;
             if (view === 'message') {
-                main = diagnosticMain(currentData, g.repMid);
+                main = diagnosticMain(currentData, groupRepMid(g));
             } else {
                 const label = g.key || (view === 'test' ? '(no test)' : '(none)');
                 main = `<div class="marker-main"><span class="marker-message" title="${escapeAttr(g.key)}">${escapeHtml(label)}</span></div>`;
@@ -512,7 +756,9 @@
                 currentSort.column = column;
                 currentSort.ascending = column === 'name';
             }
-            renderList();
+            // Re-sort the already-grouped array; no need to re-scan markers.
+            sortGroups(currentResult.groupsArr);
+            applyFilter();
         }
 
         // ===== Expansion =====
@@ -533,6 +779,7 @@
                 removeFollowingExpansion(row, ['marker-row', 'sort-header', 'total-row']);
                 expandedGroup = null;
                 expandedInsts.clear();
+                pinnedChunk = null;
                 return;
             }
 
@@ -550,18 +797,22 @@
             row.classList.add('expanded');
             row.insertAdjacentHTML('afterend', renderGroupExpansion(idx));
 
+            // Keep this chunk filled even when scrolled off screen so the open
+            // group (and its chart) survives scrolling.
+            pinnedChunk = row.closest('.vchunk');
+
             // Per-day trend chart (aggregate mode only).
             if (isHistoricalMode && currentData.hasDays) {
-                createDayChart(`chart-g-${idx}`, currentResult.groupsArr[idx].dayCounts);
+                createDayChart(`chart-g-${idx}`, currentResult.visible[idx].detail.dayCounts);
             }
         }
 
         function renderGroupExpansion(idx) {
             const view = getView();
-            const g = currentResult.groupsArr[idx];
+            const g = currentResult.visible[idx];
 
             // Cache sorted sub array on the node.
-            g.subArr = Array.from(g.subs.values()).sort((a, b) => b.count - a.count);
+            g.subArr = buildGroupDetail(g).subArr;
 
             let html = '';
             if (isHistoricalMode && currentData.hasDays) {
@@ -604,7 +855,7 @@
             expandedInsts.add(sIdx);
             row.classList.add('expanded');
             const view = getView();
-            const g = currentResult.groupsArr[gIdx];
+            const g = currentResult.visible[gIdx];
             const sub = g.subArr[sIdx];
 
             // A test name for the profiler marker search, when we know it.
@@ -724,7 +975,11 @@
 
         function onKindFilterChange() {
             updateUrlHash();
-            renderList();
+            // Message-view rows are single-kind, so a checkbox just shows/hides
+            // rows -- no re-group, no re-sort. Test/component rows mix kinds, so
+            // their counts (and thus order) change: rebuild.
+            if (getView() === 'message') applyFilter();
+            else renderList();
         }
 
         function onViewChange() {
@@ -840,7 +1095,7 @@
             searchBoxManager = initSearchBox({
                 searchBoxId: 'searchBox',
                 searchClearId: 'searchClear',
-                onSearch: renderList,
+                onSearch: applyFilter,
                 updateUrlHash: updateUrlHash
             });
 
