@@ -257,10 +257,36 @@
         // hot grouping loop only touches integer-indexed arrays.
         function prepareData(raw) {
             const t = raw.tables, m = raw.messages, ti = raw.testInfo;
-            const D = { raw };
+            const D = { raw, markers: raw.markers };
 
-            D.hasDays = !!raw.markers.days;
-            D.hasTasks = !!raw.markers.taskIdIds;
+            // The markers section ships grouped by (test, message) -- or (day,
+            // test, message) for the aggregated files: one entry per group, with
+            // parallel taskIdIds/counts sub-arrays and taskIdIds delta-encoded
+            // ascending within each group. The counts-only aggregate omits
+            // taskIdIds and stores a single scalar count per group instead. Each
+            // group is a unique (test, message), so the collapsed list, sorting,
+            // filtering and search all work at group granularity -- we never
+            // expand to per-occurrence rows. Only buildGroupDetail, when a row is
+            // expanded, decodes a group's per-task sub-arrays.
+            D.hasDays = !!D.markers.days;
+            D.hasTasks = !!D.markers.taskIdIds;
+
+            // Per-group total occurrence count: the sum of the group's per-task
+            // counts (already a scalar in the counts-only aggregate). Computed
+            // once so the grouping loop reads a flat number per group.
+            const counts = D.markers.counts, nGroups = D.markers.testIds.length;
+            const groupTotal = new Float64Array(nGroups);
+            if (D.hasTasks) {
+                for (let g = 0; g < nGroups; g++) {
+                    const cs = counts[g];
+                    let s = 0;
+                    for (let j = 0; j < cs.length; j++) s += cs[j];
+                    groupTotal[g] = s;
+                }
+            } else {
+                for (let g = 0; g < nGroups; g++) groupTotal[g] = counts[g];
+            }
+            D.groupTotal = groupTotal;
             D.markerNames = t.markerNames;
             D.numDays = raw.metadata.days || 0;
 
@@ -317,7 +343,7 @@
             if (!D.csr) D.csr = {};
             if (D.csr[view]) return D.csr[view];
 
-            const mk = D.raw.markers, n = mk.testIds.length;
+            const mk = D.markers, n = mk.testIds.length;
             const mids = mk.messageIds, tids = mk.testIds;
             const byTest = view === 'test';
             const idOf = view === 'message' ? D.msgGroupId : view === 'component' ? D.compGroupId : null;
@@ -368,8 +394,8 @@
         // kinds per row, so there `applyKind` bakes the current checkbox state
         // into the counts and a kind change rebuilds + re-sorts.
         function buildGroups(view) {
-            const D = currentData, mk = D.raw.markers;
-            const counts = mk.counts, mids = mk.messageIds, tids = mk.testIds;
+            const D = currentData, mk = D.markers;
+            const groupTotal = D.groupTotal, mids = mk.messageIds, tids = mk.testIds;
             const kindOn = D.kindOn, msgKindId = D.msgKindId;
             const { gStart, order, nGroups, labels } = getCSR(D, view);
 
@@ -395,7 +421,7 @@
                     const mid = mids[i];
                     const kind = msgKindId[mid];
                     if (applyKind && !kindOn[kind]) continue;
-                    const c = counts[i];
+                    const c = groupTotal[i];
                     gCount[g] += c; total += c;
                     gMask[g] |= (1 << kind);
                     if (needTests) {
@@ -438,15 +464,15 @@
         // for rendered rows, so computed lazily per row and cached.
         function groupRepMid(g) {
             if (g.repMid >= 0) return g.repMid;
-            const D = currentData, mk = D.raw.markers;
-            const mids = mk.messageIds, counts = mk.counts, msgKindId = D.msgKindId, kindOn = D.kindOn;
+            const D = currentData, mk = D.markers;
+            const mids = mk.messageIds, groupTotal = D.groupTotal, msgKindId = D.msgKindId, kindOn = D.kindOn;
             const { gStart, order } = getCSR(D, 'message');
             const mc = new Map();
             let best = -1, bestCount = 0;
             for (let j = gStart[g.gid], e = gStart[g.gid + 1]; j < e; j++) {
                 const i = order[j], mid = mids[i];
                 if (!kindOn[msgKindId[mid]]) continue;
-                const s = (mc.get(mid) || 0) + counts[i];
+                const s = (mc.get(mid) || 0) + groupTotal[i];
                 mc.set(mid, s);
                 if (s > bestCount) { bestCount = s; best = mid; }
             }
@@ -461,8 +487,9 @@
         function buildGroupDetail(g) {
             if (g.detail) return g.detail;
 
-            const D = currentData, mk = D.raw.markers;
-            const counts = mk.counts, mids = mk.messageIds, tids = mk.testIds;
+            const D = currentData, mk = D.markers;
+            const groupTotal = D.groupTotal, mids = mk.messageIds, tids = mk.testIds;
+            const counts = mk.counts;
             const days = D.hasDays ? mk.days : null;
             const taskIdIds = D.hasTasks ? mk.taskIdIds : null;
             const kindOn = D.kindOn, msgKindId = D.msgKindId;
@@ -482,7 +509,7 @@
                 const tid = tids[i];
                 if (term && msgBlob[mid].indexOf(term) < 0 && testBlob[tid].indexOf(term) < 0) continue;
 
-                const c = counts[i];
+                const c = groupTotal[i];
                 if (D.hasDays && days[i] < nDays) dayCounts[days[i]] += c;
 
                 // Sub-group key: tests for the message view, the exact diagnostic
@@ -495,11 +522,18 @@
                 }
                 sub.count += c;
 
+                // Decode this group's per-task occurrences on demand: taskIdIds[i]
+                // is delta-encoded ascending, counts[i] is parallel, and every
+                // task in the group shares the group's day.
                 if (D.hasTasks) {
-                    const taskIdId = taskIdIds[i];
-                    let e2 = sub.inst.get(taskIdId);
-                    if (!e2) { e2 = { count: 0, day: D.hasDays ? days[i] : -1 }; sub.inst.set(taskIdId, e2); }
-                    e2.count += c;
+                    const deltas = taskIdIds[i], taskCounts = counts[i], day = D.hasDays ? days[i] : -1;
+                    let taskIdId = 0;
+                    for (let k = 0; k < deltas.length; k++) {
+                        taskIdId += deltas[k];
+                        let e2 = sub.inst.get(taskIdId);
+                        if (!e2) { e2 = { count: 0, day }; sub.inst.set(taskIdId, e2); }
+                        e2.count += taskCounts[k];
+                    }
                 }
             }
 
@@ -518,7 +552,7 @@
         function ensureHays() {
             const arr = currentResult.groupsArr;
             if (!arr.length || arr[0].hay !== null) return;
-            const D = currentData, mk = D.raw.markers;
+            const D = currentData, mk = D.markers;
             const mids = mk.messageIds, tids = mk.testIds;
             const msgBlob = D.msgBlob, testBlob = D.testBlob;
             const { gStart, order } = getCSR(D, currentResult.view);
