@@ -135,6 +135,216 @@ button.active {
     }
 }
 
+/* Top-right hover menu of dashboards (injected by dashboards.js). */
+.dash-menu {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 1000;
+    font-size: 0.9rem;
+}
+
+.dash-menu-trigger {
+    padding: 7px 12px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    font: inherit;
+    color: #333;
+}
+
+.dash-menu-trigger:hover {
+    background: #f0f0f0;
+}
+
+.dash-menu-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    min-width: 280px;
+    max-width: 340px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    padding: 6px;
+    /* Hidden until the menu is hovered or contains keyboard focus. */
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+
+.dash-menu:hover .dash-menu-panel,
+.dash-menu:focus-within .dash-menu-panel {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.dash-menu-item {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 6px;
+    text-decoration: none;
+    color: #222;
+}
+
+a.dash-menu-item:hover {
+    background: #f0f8ff;
+}
+
+.dash-menu-title {
+    display: block;
+    font-weight: 600;
+    color: #0060df;
+}
+
+a.dash-menu-item:hover .dash-menu-title {
+    text-decoration: underline;
+}
+
+.dash-menu-desc {
+    display: block;
+    font-size: 0.8rem;
+    color: #777;
+    margin-top: 1px;
+}
+
+.dash-menu-current {
+    background: #f5f5f5;
+    cursor: default;
+}
+
+.dash-menu-current .dash-menu-title {
+    color: #555;
+}
+
+.dash-menu-all {
+    border-top: 1px solid #eee;
+    margin-top: 4px;
+    padding-top: 9px;
+}
+
+/* Full dashboard listing (help.html), via renderDashboardList(). */
+.dash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dash-list-item {
+    display: block;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 14px 18px;
+    text-decoration: none;
+    color: #222;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+a.dash-list-item:hover {
+    border-color: #0060df;
+    box-shadow: 0 2px 8px rgba(0,96,223,0.15);
+}
+
+.dash-list-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #0060df;
+}
+
+.dash-list-desc {
+    font-size: 0.92rem;
+    color: #555;
+    margin-top: 5px;
+    line-height: 1.5;
+    max-width: 95ch;
+}
+
+.dash-list-current {
+    cursor: default;
+    border-style: dashed;
+}
+
+.dash-list-current .dash-list-title {
+    color: #555;
+}
+
+.dash-list-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-left: 8px;
+}
+
+.dash-list-more {
+    margin-top: 28px;
+}
+
+.dash-list-more > summary {
+    cursor: pointer;
+    color: #555;
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+
+/* Compact teaser at the top of index.html, via renderDashboardTeaser().
+   A single wrapping line: heading + featured chips + a "See all" link. */
+.dash-teaser {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+}
+
+.dash-teaser h2 {
+    margin: 0;
+    margin-right: 4px;
+    cursor: default;
+}
+
+.dash-teaser h2::before {
+    content: none;
+}
+
+.dash-chip {
+    display: inline-block;
+    padding: 6px 12px;
+    background: #f0f8ff;
+    border: 1px solid #d6e8fb;
+    border-radius: 16px;
+    color: #0060df;
+    text-decoration: none;
+    font-size: 0.88rem;
+}
+
+.dash-chip:hover {
+    background: #e1f0ff;
+    text-decoration: underline;
+}
+
+.dash-teaser-all {
+    margin-left: auto;
+    color: #0060df;
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.dash-teaser-all:hover {
+    text-decoration: underline;
+}
+
 /* Style Plotly tooltips */
 .hoverlayer .hovertext {
     pointer-events: none !important;

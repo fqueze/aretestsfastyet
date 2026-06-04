@@ -12,6 +12,7 @@
     </script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="shared.js"></script>
+    <script src="dashboards.js"></script>
     <link rel="stylesheet" href="shared.css">
     <style>
         .header {
@@ -188,6 +189,10 @@
                 <button onclick="setDisplayMode('count')" id="btnCount">Raw Counts</button>
             </div>
         </div>
+    </div>
+
+    <div class="stats-section">
+        <div class="dash-teaser" id="dashboardTeaser"></div>
     </div>
 
     <div class="stats-section">
@@ -672,6 +677,7 @@
             });
         });
 
+        renderDashboardTeaser(document.getElementById('dashboardTeaser'));
         setupWindowResize();
         loadData();
     </script>

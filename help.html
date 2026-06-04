@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboards</title>
+    <link rel="stylesheet" href="shared.css">
+    <script src="dashboards.js"></script>
+    <style>
+        .container { max-width: 1100px; }
+        .intro {
+            color: #666;
+            margin: -8px 0 24px 0;
+            max-width: 70ch;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Dashboards</h1>
+        <p class="intro">
+            All the dashboards on this site. The most useful ones are listed first;
+            older and more specialized ones are grouped at the bottom.
+        </p>
+        <div id="dashboardList"></div>
+    </div>
+
+    <script>
+        renderDashboardList(document.getElementById('dashboardList'));
+    </script>
+</body>
+</html>
