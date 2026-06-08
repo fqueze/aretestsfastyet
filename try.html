@@ -865,7 +865,7 @@ function extractTestTimings(profile) {
                 status = 'EXPECTED-FAIL';
             } else if (status === 'PASS' && data.expected && data.expected !== 'PASS') {
                 status = 'UNEXPECTED-PASS';
-            } else if (['TIMEOUT', 'FAIL', 'PASS'].includes(status) && parallelRanges.length) {
+            } else if (['TIMEOUT', 'FAIL', 'CRASH', 'PASS'].includes(status) && parallelRanges.length) {
                 status += isInParallelRange(markers.startTime[i], markers.endTime[i], parallelRanges)
                     ? '-PARALLEL' : '-SEQUENTIAL';
             }
@@ -909,7 +909,7 @@ function extractTestTimings(profile) {
         };
         if (message) timing.message = message;
 
-        if (status === 'CRASH') {
+        if (status.startsWith('CRASH')) {
             const matchingCrash = crashMarkers.find(
                 c => c.testPath === fullTestId &&
                      c.startTime >= markers.startTime[i] &&
@@ -1213,7 +1213,7 @@ self.onmessage = function(e) {
                 if (!isFailureStatus(t.status)) { t.intermittent = false; continue; }
 
                 // Case 1: failed in parallel but passed on sequential retry in the same run
-                if (t.status === 'FAIL-PARALLEL' || t.status === 'TIMEOUT-PARALLEL') {
+                if (t.status.endsWith('-PARALLEL')) {
                     const runKey = `${t.taskId}.${t.retryId}`;
                     const seqPasses = seqPassByRun.get(runKey);
                     if (seqPasses && seqPasses.has(t.path)) {
@@ -1296,11 +1296,11 @@ self.onmessage = function(e) {
 
     const MITTEN = '<span class="mitten"></span>';
 
+    // Base failure statuses, ignoring any -PARALLEL/-SEQUENTIAL phase suffix.
+    const FAILURE_STATUSES = new Set(['FAIL', 'TIMEOUT', 'CRASH', 'ERROR', 'UNEXPECTED-PASS']);
+
     function isFailureStatus(status) {
-        return status === 'FAIL' || status === 'FAIL-SEQUENTIAL' || status === 'FAIL-PARALLEL' ||
-               status === 'TIMEOUT' || status === 'TIMEOUT-SEQUENTIAL' || status === 'TIMEOUT-PARALLEL' ||
-               status === 'CRASH' || status === 'ERROR' ||
-               status === 'UNEXPECTED-PASS';
+        return FAILURE_STATUSES.has(status.replace(/-(PARALLEL|SEQUENTIAL)$/, ''));
     }
 
     function aggregateFailures(allTimings, globalPlatforms, globalBuildTypes, jobRunCounts) {
@@ -2301,7 +2301,7 @@ self.onmessage = function(e) {
                 if (inst.message) tryMessages.add(inst.message);
                 if (inst.crashSignature) tryMessages.add(inst.crashSignature);
                 if (inst.status.startsWith('TIMEOUT')) hasTimeout = true;
-                if (inst.status === 'CRASH') hasCrash = true;
+                if (inst.status.startsWith('CRASH')) hasCrash = true;
             }
             return { path: test.path, tryMessages, hasTimeout, hasCrash };
         });
