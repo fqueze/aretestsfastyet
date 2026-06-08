@@ -1208,6 +1208,20 @@
                 updateUrlHash: updateUrlHash
             });
 
+            // Double-clicking a kind filter solos it: show only that kind. The two
+            // clicks of the double-click first toggle the box (firing onchange); the
+            // dblclick then forces the solo state and re-filters.
+            document.querySelector('.marker-kind-filters').addEventListener('dblclick', event => {
+                const label = event.target.closest('label.filter-checkbox');
+                const cb = label && label.querySelector('input[type="checkbox"]');
+                if (!cb) return;
+                for (const slug of Object.values(KIND_SLUG)) {
+                    document.getElementById('kind-' + slug).checked = ('kind-' + slug === cb.id);
+                }
+                updateUrlHash();
+                onKindFilterChange();
+            });
+
             document.getElementById('loadTasksButton').addEventListener('click', loadTaskDetails);
             document.getElementById('dateSelect').addEventListener('change', () => {
                 updateUrlHash();
