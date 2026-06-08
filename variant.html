@@ -479,6 +479,27 @@
                 label: 'MSIX package (Windows)',
                 strip: v => /-msix(?=-|$)/.test(v) ? v.replace(/-msix(?=-|$)/, '') : null,
             },
+            {
+                id: 'asan',
+                label: 'AddressSanitizer (asan vs opt)',
+                // Sanitizer builds are opt builds; extractVariant stamps the
+                // sanitizer name into the build-type slot (opt-xpcshell ->
+                // asan-xpcshell), so the baseline is the same job's opt variant.
+                // Substitute the token back rather than removing it. Note: asan
+                // instruments the binary to surface failures opt never would, so
+                // a higher rate here is partly expected by design.
+                strip: v => v.startsWith('asan-') ? 'opt-' + v.slice('asan-'.length) : null,
+            },
+            {
+                id: 'tsan',
+                label: 'ThreadSanitizer (tsan vs opt)',
+                strip: v => v.startsWith('tsan-') ? 'opt-' + v.slice('tsan-'.length) : null,
+            },
+            {
+                id: 'ccov',
+                label: 'Code coverage (ccov vs opt)',
+                strip: v => v.startsWith('ccov-') ? 'opt-' + v.slice('ccov-'.length) : null,
+            },
         ];
         const AXES_BY_ID = Object.fromEntries(KNOWN_AXES.map(a => [a.id, a]));
 
@@ -494,7 +515,7 @@
             variant = variant.replace(/-\d+$/, '');
             if (slashIdx !== -1) {
                 const prefix = jobName.substring(0, slashIdx);
-                const sanitizerMatch = prefix.match(/-(asan|tsan|ubsan|msan|hwasan|ccov)$/);
+                const sanitizerMatch = prefix.match(/-(asan|tsan|ccov)$/);
                 if (sanitizerMatch) {
                     variant = variant.replace(/^[^-]+/, sanitizerMatch[1]);
                 }
