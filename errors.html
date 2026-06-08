@@ -332,6 +332,22 @@
                 D.testGroupId[i] = id;
             }
 
+            // Per-kind grand-total aggregates, so the message-view fast path can
+            // refresh the Total row on a kind-checkbox toggle without re-grouping:
+            // kindTotal[k] is kind k's summed occurrences, and testKindMask[tid]
+            // carries the kinds a test has any marker in (for the distinct-test
+            // total, which can't be summed across kinds). Both are view-independent.
+            const kindTotal = new Float64Array(D.markerNames.length);
+            const testKindMask = new Int32Array(D.testFull.length);
+            const aMids = D.markers.messageIds, aTids = D.markers.testIds;
+            for (let i = 0; i < nGroups; i++) {
+                const k = D.msgKindId[aMids[i]];
+                kindTotal[k] += groupTotal[i];
+                testKindMask[aTids[i]] |= (1 << k);
+            }
+            D.kindTotal = kindTotal;
+            D.testKindMask = testKindMask;
+
             return D;
         }
 
@@ -663,6 +679,21 @@
                 visible.push(g);
             }
             currentResult.visible = visible;
+
+            // The message view doesn't re-group on a kind toggle, so refresh the
+            // Total row from the per-kind aggregates (test/component views get
+            // fresh totals from buildGroups via renderList).
+            if (isMsg) {
+                let total = 0;
+                for (let k = 0; k < currentData.kindTotal.length; k++)
+                    if (currentData.kindOn[k]) total += currentData.kindTotal[k];
+                let totalTests = 0;
+                const tkm = currentData.testKindMask;
+                for (let i = 0; i < tkm.length; i++) if (tkm[i] & onMask) totalTests++;
+                currentResult.total = total;
+                currentResult.totalTests = totalTests;
+            }
+
             renderVirtualList();
         }
 
