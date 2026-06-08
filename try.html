@@ -870,7 +870,7 @@ function extractTestTimings(profile) {
                     ? '-PARALLEL' : '-SEQUENTIAL';
             }
 
-            if (status.startsWith('FAIL') || status === 'TIMEOUT' || status === 'ERROR') {
+            if (status.startsWith('FAIL') || status.startsWith('TIMEOUT') || status === 'ERROR') {
                 const testStartTime = markers.startTime[i];
                 const testEndTime = markers.endTime[i];
                 for (const m of testStatusMarkers) {
@@ -1213,7 +1213,7 @@ self.onmessage = function(e) {
                 if (!isFailureStatus(t.status)) { t.intermittent = false; continue; }
 
                 // Case 1: failed in parallel but passed on sequential retry in the same run
-                if (t.status === 'FAIL-PARALLEL') {
+                if (t.status === 'FAIL-PARALLEL' || t.status === 'TIMEOUT-PARALLEL') {
                     const runKey = `${t.taskId}.${t.retryId}`;
                     const seqPasses = seqPassByRun.get(runKey);
                     if (seqPasses && seqPasses.has(t.path)) {
@@ -1298,7 +1298,8 @@ self.onmessage = function(e) {
 
     function isFailureStatus(status) {
         return status === 'FAIL' || status === 'FAIL-SEQUENTIAL' || status === 'FAIL-PARALLEL' ||
-               status === 'TIMEOUT' || status === 'CRASH' || status === 'ERROR' ||
+               status === 'TIMEOUT' || status === 'TIMEOUT-SEQUENTIAL' || status === 'TIMEOUT-PARALLEL' ||
+               status === 'CRASH' || status === 'ERROR' ||
                status === 'UNEXPECTED-PASS';
     }
 
@@ -2299,7 +2300,7 @@ self.onmessage = function(e) {
             for (const inst of test.instances) {
                 if (inst.message) tryMessages.add(inst.message);
                 if (inst.crashSignature) tryMessages.add(inst.crashSignature);
-                if (inst.status === 'TIMEOUT') hasTimeout = true;
+                if (inst.status.startsWith('TIMEOUT')) hasTimeout = true;
                 if (inst.status === 'CRASH') hasCrash = true;
             }
             return { path: test.path, tryMessages, hasTimeout, hasCrash };
