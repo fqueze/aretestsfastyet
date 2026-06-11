@@ -2632,21 +2632,21 @@ self.onmessage = function(e) {
     }
 
     // Real link that opens the uploaded failure profile in the Firefox Profiler
-    // (so the destination shows in the status bar on hover). Alt+click locally
-    // copies a profiler-cli debugging prompt instead of navigating.
+    // (so the destination shows in the status bar on hover). Alt+click copies a
+    // profiler-cli debugging prompt instead of navigating.
     // jobKey restricts to a single run; null means the whole test (aggregate row).
     function profilerLinkHtml(testPath, jobKey, prof) {
         const url = failureProfilerUrl(testPath, prof);
-        const hint = isLocal ? ' (Alt+click: copy profiler-cli debug prompt)' : '';
+        const hint = ' (Alt+click: copy profiler-cli debug prompt)';
         const keyArg = jobKey ? `'${escapeAttr(jobKey)}'` : 'null';
         return `<a class="profiler-cmd" href="${escapeAttr(url)}" target="_blank" rel="noopener" onclick="return onProfilerClick(event, '${escapeAttr(testPath)}', ${keyArg})" title="Open the failure profile in the Firefox Profiler${hint}"></a>`;
     }
 
     // Returns true to let the link navigate normally; intercepts Alt+click
-    // locally to copy a profiler-cli debugging prompt.
+    // to copy a profiler-cli debugging prompt.
     function onProfilerClick(event, testPath, jobKey) {
         event.stopPropagation();
-        if (isLocal && event.altKey) {
+        if (event.altKey) {
             event.preventDefault();
             copyProfilerDebugPrompt(testPath, jobKey, event.currentTarget);
             return false;
