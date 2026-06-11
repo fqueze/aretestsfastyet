@@ -321,6 +321,41 @@
             font-size: 10px;
             margin-right: 4px;
         }
+        .assertion-list li.phase-label {
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin: 8px 0 3px;
+            padding: 0;
+        }
+        .assertion-list li.phase-label:first-child {
+            margin-top: 0;
+        }
+        .assertion-list li.phase-label .chip {
+            padding: 1px 7px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #fff;
+        }
+        .assertion-list li.phase-label .profiler-cmd {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+        }
+        .assertion-list li.phase-body {
+            border-left: 3px solid;
+            padding-left: 8px;
+            margin-left: 1px;
+        }
+        li.phase-label.phase-initial .chip { background: #c77700; }
+        li.phase-body.phase-initial { border-left-color: #c77700; }
+        li.phase-label.phase-retry .chip { background: #8a3ffc; }
+        li.phase-body.phase-retry { border-left-color: #8a3ffc; }
+        .assertion-list .repro-pass { color: #2e7d32; font-weight: 600; }
         .assertion-stack {
             margin: 2px 0 4px 12px;
             padding: 4px 8px;
@@ -450,6 +485,27 @@
         }
         .copy-cmd.copied {
             opacity: 1;
+        }
+        a.profiler-cmd {
+            cursor: pointer;
+            opacity: 0.45;
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            vertical-align: middle;
+            margin-left: 2px;
+            text-decoration: none;
+            background-image: url("https://profiler.firefox.com/res/img/favicon.png");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 14px 14px;
+        }
+        .profiler-cmd:hover {
+            opacity: 1;
+        }
+        .profiler-cmd.copied {
+            opacity: 1;
+            filter: drop-shadow(0 0 2px #2e7d32);
         }
         .repro-icon {
             display: inline-block;
@@ -760,18 +816,18 @@ function normalizeMessage(message) {
         .replace(/Test ran for \\d+s/g, 'Test ran for Xs');
 }
 
-function extractParallelRanges(markers) {
+function extractTextRanges(markers, text) {
     const ranges = [];
     for (let i = 0; i < markers.length; i++) {
         const data = markers.data[i];
-        if (data?.type === 'Text' && data.text === 'parallel') {
+        if (data?.type === 'Text' && data.text === text) {
             ranges.push({ start: markers.startTime[i], end: markers.endTime[i] });
         }
     }
     return ranges;
 }
 
-function isInParallelRange(testStart, testEnd, ranges) {
+function isInRange(testStart, testEnd, ranges) {
     for (const r of ranges) {
         if (testStart < r.end && testEnd > r.start) return true;
     }
@@ -806,7 +862,9 @@ function extractTestTimings(profile) {
     const { markers, stringArray } = thread;
     if (!markers?.data || !markers?.name || !stringArray) return [];
 
-    const parallelRanges = extractParallelRanges(markers);
+    const parallelRanges = extractTextRanges(markers, 'parallel');
+    // The harness wraps reruns of initially-failing tests in a "retry" marker.
+    const retryRanges = extractTextRanges(markers, 'retry');
 
     const crashMarkers = [];
     for (let i = 0; i < markers.length; i++) {
@@ -866,7 +924,7 @@ function extractTestTimings(profile) {
             } else if (status === 'PASS' && data.expected && data.expected !== 'PASS') {
                 status = 'UNEXPECTED-PASS';
             } else if (['TIMEOUT', 'FAIL', 'CRASH', 'PASS'].includes(status) && parallelRanges.length) {
-                status += isInParallelRange(markers.startTime[i], markers.endTime[i], parallelRanges)
+                status += isInRange(markers.startTime[i], markers.endTime[i], parallelRanges)
                     ? '-PARALLEL' : '-SEQUENTIAL';
             }
 
@@ -907,6 +965,9 @@ function extractTestTimings(profile) {
             timestamp: profile.meta.startTime + markers.startTime[i],
             allMessages,
         };
+        if (retryRanges.length && isInRange(markers.startTime[i], markers.endTime[i], retryRanges)) {
+            timing.isRetry = true;
+        }
         if (message) timing.message = message;
 
         if (status.startsWith('CRASH')) {
@@ -1199,27 +1260,24 @@ self.onmessage = function(e) {
                 failsByJobAndRun.get(t.jobName).get(runKey).add(t.path);
             }
 
-            // Build per-run sets of tests that passed sequential retry
-            // (failed in parallel, then passed when retried sequentially).
-            const seqPassByRun = new Map(); // runKey -> Set<testPath>
+            // Tests that passed when rerun in the harness's "retry" phase, per run.
+            const passedOnRetryByRun = new Map(); // runKey -> Set<testPath>
             for (const t of result.timings) {
-                if (t.status !== 'PASS-SEQUENTIAL') continue;
+                if (!t.isRetry || !t.status.startsWith('PASS')) continue;
                 const runKey = `${t.taskId}.${t.retryId}`;
-                if (!seqPassByRun.has(runKey)) seqPassByRun.set(runKey, new Set());
-                seqPassByRun.get(runKey).add(t.path);
+                if (!passedOnRetryByRun.has(runKey)) passedOnRetryByRun.set(runKey, new Set());
+                passedOnRetryByRun.get(runKey).add(t.path);
             }
 
             for (const t of result.timings) {
                 if (!isFailureStatus(t.status)) { t.intermittent = false; continue; }
 
-                // Case 1: failed in parallel but passed on sequential retry in the same run
-                if (t.status.endsWith('-PARALLEL')) {
-                    const runKey = `${t.taskId}.${t.retryId}`;
-                    const seqPasses = seqPassByRun.get(runKey);
-                    if (seqPasses && seqPasses.has(t.path)) {
-                        t.intermittent = true;
-                        continue;
-                    }
+                // Case 1: failed initially but passed when rerun in the retry phase.
+                const runKey = `${t.taskId}.${t.retryId}`;
+                if (passedOnRetryByRun.get(runKey)?.has(t.path)) {
+                    t.intermittent = true;
+                    t.passedOnRetry = true;
+                    continue;
                 }
 
                 // Case 2: a successful run of the same job exists
@@ -1231,7 +1289,6 @@ self.onmessage = function(e) {
                 // Case 3: another run of the same job failed on different tests
                 const runs = failsByJobAndRun.get(t.jobName);
                 if (runs && runs.size > 1) {
-                    const runKey = `${t.taskId}.${t.retryId}`;
                     // Check if any other run does NOT fail this test
                     t.intermittent = false;
                     for (const [key, failSet] of runs) {
@@ -1571,6 +1628,7 @@ self.onmessage = function(e) {
     function renderTestTable(tests, hasRepro, showJobCount) {
         const arrow = c => currentSort.column === c ? (currentSort.ascending ? ' &#9650;' : ' &#9660;') : '';
         const cls = c => currentSort.column === c ? ' class="active"' : '';
+        const hasAnyProfile = tests.some(t => findUploadedProfile(t.instances));
 
         let html = '<table class="failure-table">';
         html += '<thead><tr>';
@@ -1580,7 +1638,7 @@ self.onmessage = function(e) {
         html += `<th class="no-sort" style="width: 55px">Build</th>`;
         html += `<th${cls('flakiness')} onclick="sortTable('flakiness')" style="width: 45px; text-align: right" title="Existing flakiness: failure rate over 21 days on autoland and mozilla-central">${MITTEN}${arrow('flakiness')}</th>`;
         html += `<th${cls('test')} onclick="sortTable('test')">Test${arrow('test')}</th>`;
-        html += `<th class="no-sort" style="width: ${hasRepro || isLocal ? 38 : 20}px"></th>`;
+        html += `<th class="no-sort" style="width: ${20 + (hasRepro || isLocal ? 18 : 0) + (hasAnyProfile ? 18 : 0)}px"></th>`;
         html += '</tr></thead><tbody>';
 
         for (const test of tests) {
@@ -1621,7 +1679,9 @@ self.onmessage = function(e) {
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
             }
             html += '</td>';
-            html += `<td class="repro-cell"><span id="repro-icon-${escapeAttr(test.path)}">${hasRepro ? reproIconHtml(test.path) : ''}</span><span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command${isLocal ? ' (Alt+click: copy Claude prompt)' : ''}">&#x1F4CB;</span></td>`;
+            const rowProfile = findUploadedProfile(test.instances);
+            const profilerIcon = rowProfile ? profilerLinkHtml(test.path, null, rowProfile) : '';
+            html += `<td class="repro-cell"><span id="repro-icon-${escapeAttr(test.path)}">${hasRepro ? reproIconHtml(test.path) : ''}</span>${profilerIcon}<span class="copy-cmd" onclick="event.stopPropagation(); copyMachCmd('${escapeAttr(test.path)}', event)" title="Copy mach test command${isLocal ? ' (Alt+click: copy Claude prompt)' : ''}">&#x1F4CB;</span></td>`;
             html += '</tr>';
 
             // Detail rows - one per job, using the same column structure
@@ -1908,9 +1968,26 @@ self.onmessage = function(e) {
                 }
             }
 
+            const jobKey = `${job.taskId}.${job.retryId}`;
+
+            // A test that fails is rerun in the harness's "retry" phase, marked on
+            // each instance via isRetry. Split the failures into the initial run and
+            // the retry, ordered by time. When it failed initially but ultimately
+            // passed, the passing run isn't a failure instance, so we say so.
+            const sortedInstances = [...job.instances].sort((a, b) => a.timestamp - b.timestamp);
+            const initialInstances = sortedInstances.filter(i => !i.isRetry);
+            const retryInstances = sortedInstances.filter(i => i.isRetry);
+            const passedOnRetry = sortedInstances.some(i => i.passedOnRetry);
+            const showRuns = retryInstances.length > 0 || (passedOnRetry && initialInstances.length > 0);
+
+            const jobProfile = findUploadedProfile(job.instances);
+
             html += '<td class="test-info">';
             html += '<div class="job-header">';
             html += `<span class="job-name">${escapeHtml(job.jobName)}</span>`;
+            // For a lone failure run, the test-run failure profile sits by the job
+            // name; the links below are job-level (resource profile, crash, job).
+            if (!showRuns && jobProfile) html += profilerLinkHtml(test.path, jobKey, jobProfile);
             html += ' <span class="job-links">';
             html += `<a href="${escapeAttr(profilerUrl)}" target="_blank">Profile</a>`;
             for (const crashUrl of crashUrls) {
@@ -1920,24 +1997,43 @@ self.onmessage = function(e) {
             html += '</span>';
             html += '</div>';
 
-            // All assertions — collect then cap
+            // All assertions — collect then cap, grouped by run with a header that
+            // carries that run's own failure-profile icon.
             const allItems = [];
-            for (const inst of job.instances) {
+            const appendInstance = (inst, cls) => {
                 if (inst.crashSignature) {
                     const crashViewerUrl = inst.minidump ? getCrashViewerUrl({ taskId: inst.taskId, retryId: inst.retryId, minidump: inst.minidump }) : '';
                     if (crashViewerUrl) {
-                        allItems.push({ html: `<a href="${escapeAttr(crashViewerUrl)}" target="_blank" class="crash-sig">${escapeHtml(inst.crashSignature)}</a>` });
+                        allItems.push({ cls, html: `<a href="${escapeAttr(crashViewerUrl)}" target="_blank" class="crash-sig">${escapeHtml(inst.crashSignature)}</a>` });
                     } else {
-                        allItems.push({ html: `<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>` });
+                        allItems.push({ cls, html: `<span class="crash-sig">${escapeHtml(inst.crashSignature)}</span>` });
                     }
                 }
-                if (inst.allMessages && inst.allMessages.length > 0) {
-                    for (const msg of inst.allMessages) {
-                        allItems.push({ html: escapeHtml(msg.message), stack: msg.stack });
-                    }
-                } else if (inst.message) {
-                    allItems.push({ html: escapeHtml(inst.message) });
+                const msgs = inst.allMessages && inst.allMessages.length
+                    ? inst.allMessages
+                    : (inst.message ? [{ message: inst.message }] : []);
+                for (const m of msgs) {
+                    // The "profile uploaded in ..." notice is shown as the icon instead.
+                    if (extractUploadedProfileName(m.message)) continue;
+                    allItems.push({ cls, html: escapeHtml(m.message), stack: m.stack });
                 }
+            };
+            const appendGroup = (label, cls, instances) => {
+                if (!instances.length) return;
+                if (showRuns) {
+                    const withProfile = instances.find(instanceUploadedProfile);
+                    const icon = withProfile ? profilerLinkHtml(test.path, jobKey, instanceUploadedProfile(withProfile)) : '';
+                    allItems.push({ separator: true, label, cls, icon });
+                }
+                for (const inst of instances) appendInstance(inst, showRuns ? cls : '');
+            };
+            appendGroup('Initial', 'phase-initial', initialInstances);
+            appendGroup('Retry', 'phase-retry', retryInstances);
+            // Failed initially but passed on the retry: no failure instance exists
+            // for the retry, so note the outcome on a single plain line (it's a
+            // non-issue — no badge, no vertical rule).
+            if (showRuns && passedOnRetry && retryInstances.length === 0) {
+                allItems.push({ html: '<span class="repro-pass">Passed on retry</span>' });
             }
 
             // Known prefix → searchfox source path mapping (prefix is hidden)
@@ -2025,23 +2121,36 @@ self.onmessage = function(e) {
             }
 
             function renderItem(item) {
+                if (item.separator) {
+                    return `<span class="chip">${escapeHtml(item.label)}</span>${item.icon || ''}`;
+                }
                 let li = item.html;
                 if (item.stack) {
                     li += `<pre class="assertion-stack">${colorizeStack(item.stack)}</pre>`;
                 }
                 return li;
             }
+            const itemLi = (item, hiddenId) => {
+                const classes = [];
+                if (item.separator) classes.push('phase-label');
+                else if (item.cls) classes.push('phase-body');
+                if (item.cls) classes.push(item.cls);
+                if (hiddenId) classes.push('assertion-hidden');
+                const classAttr = classes.length ? ` class="${classes.join(' ')}"` : '';
+                const hiddenAttr = hiddenId ? ` data-group="${hiddenId}" style="display:none"` : '';
+                return `<li${classAttr}${hiddenAttr}>${renderItem(item)}</li>`;
+            };
 
             const MAX_VISIBLE = 10;
             html += '<ul class="assertion-list">';
             for (let i = 0; i < Math.min(allItems.length, MAX_VISIBLE); i++) {
-                html += `<li>${renderItem(allItems[i])}</li>`;
+                html += itemLi(allItems[i]);
             }
             if (allItems.length > MAX_VISIBLE) {
                 const hiddenId = `hidden-${job.taskId}-${job.retryId}`;
                 const remaining = allItems.length - MAX_VISIBLE;
                 for (let i = MAX_VISIBLE; i < allItems.length; i++) {
-                    html += `<li class="assertion-hidden" data-group="${hiddenId}" style="display:none">${renderItem(allItems[i])}</li>`;
+                    html += itemLi(allItems[i], hiddenId);
                 }
                 html += `</ul><a class="show-more-link" onclick="toggleAssertions(this, '${hiddenId}')">show ${remaining} more</a>`;
             } else {
@@ -2457,6 +2566,124 @@ self.onmessage = function(e) {
         const parts = ['./mach test', testPath, '--headless'];
         if (extra.length) parts.push(...extra);
         return parts.join(' ');
+    }
+
+    // When a test fails, the harness captures a Gecko profile at the moment of
+    // failure and uploads it as a task artifact, logging a message like:
+    //   "Found unexpected failures during the test; profile uploaded in profile_foo.js.json"
+    // Extract the artifact filename from such a message.
+    function extractUploadedProfileName(message) {
+        const m = message && message.match(/profile uploaded in (profile_\S+\.json)/);
+        return m ? m[1] : null;
+    }
+
+    function uploadedProfileArtifactUrl(taskId, retryId, filename) {
+        return `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/${filename}`;
+    }
+
+    function messagesOf(inst) {
+        return inst.allMessages && inst.allMessages.length
+            ? inst.allMessages.map(m => m.message)
+            : (inst.message ? [inst.message] : []);
+    }
+
+    // List the messages logged on a set of instances (deduped, excluding the
+    // "profile uploaded" notice itself).
+    function instanceMessages(instances) {
+        const seen = new Set();
+        const out = [];
+        for (const inst of instances) {
+            for (const m of messagesOf(inst)) {
+                if (!m || extractUploadedProfileName(m) || seen.has(m)) continue;
+                seen.add(m);
+                out.push(m);
+            }
+        }
+        return out;
+    }
+
+    // The failure profile uploaded by a single test run (instance), or null.
+    // Each run uploads its own artifact, so this is read per-instance.
+    function instanceUploadedProfile(inst) {
+        for (const msg of messagesOf(inst)) {
+            const filename = extractUploadedProfileName(msg);
+            if (filename) {
+                return { taskId: inst.taskId, retryId: inst.retryId, filename, jobName: inst.jobName };
+            }
+        }
+        return null;
+    }
+
+    // Find the first instance that uploaded a failure profile, or null.
+    function findUploadedProfile(instances) {
+        for (const inst of instances) {
+            const up = instanceUploadedProfile(inst);
+            if (up) return up;
+        }
+        return null;
+    }
+
+    // The Firefox Profiler URL for an uploaded failure profile. No markerSearch:
+    // this is a captured Gecko profile, not the resource-usage timeline.
+    function failureProfilerUrl(testPath, prof) {
+        const artifactUrl = uploadedProfileArtifactUrl(prof.taskId, prof.retryId, prof.filename);
+        const leaf = testPath.split('/').pop();
+        return getProfilerUrl({ profile: artifactUrl, profileName: `${prof.jobName} — ${leaf}` });
+    }
+
+    // Real link that opens the uploaded failure profile in the Firefox Profiler
+    // (so the destination shows in the status bar on hover). Alt+click locally
+    // copies a profiler-cli debugging prompt instead of navigating.
+    // jobKey restricts to a single run; null means the whole test (aggregate row).
+    function profilerLinkHtml(testPath, jobKey, prof) {
+        const url = failureProfilerUrl(testPath, prof);
+        const hint = isLocal ? ' (Alt+click: copy profiler-cli debug prompt)' : '';
+        const keyArg = jobKey ? `'${escapeAttr(jobKey)}'` : 'null';
+        return `<a class="profiler-cmd" href="${escapeAttr(url)}" target="_blank" rel="noopener" onclick="return onProfilerClick(event, '${escapeAttr(testPath)}', ${keyArg})" title="Open the failure profile in the Firefox Profiler${hint}"></a>`;
+    }
+
+    // Returns true to let the link navigate normally; intercepts Alt+click
+    // locally to copy a profiler-cli debugging prompt.
+    function onProfilerClick(event, testPath, jobKey) {
+        event.stopPropagation();
+        if (isLocal && event.altKey) {
+            event.preventDefault();
+            copyProfilerDebugPrompt(testPath, jobKey, event.currentTarget);
+            return false;
+        }
+        return true;
+    }
+
+    function copyProfilerDebugPrompt(testPath, jobKey, el) {
+        const test = currentFailures?.tests.find(t => t.path === testPath);
+        if (!test) return;
+        const scope = jobKey
+            ? test.instances.filter(i => `${i.taskId}.${i.retryId}` === jobKey)
+            : test.instances;
+        const prof = findUploadedProfile(scope);
+        if (!prof) return;
+        const artifactUrl = uploadedProfileArtifactUrl(prof.taskId, prof.retryId, prof.filename);
+
+        // Messages from the same run that produced the profile.
+        const profKey = `${prof.taskId}.${prof.retryId}`;
+        const runInstances = test.instances.filter(i => `${i.taskId}.${i.retryId}` === profKey);
+        const msg = instanceMessages(runInstances).join('\n') || test.commonMessage || '';
+        const prompt = `Use profiler-cli to debug this Firefox test failure.
+
+Test: ${testPath}
+Job: ${prof.jobName}
+
+Failure message:
+${msg}
+
+A Gecko profile was captured at the moment of failure. Load it with:
+\`profiler-cli load "${artifactUrl}"\`
+
+Then investigate the cause: look at the markers around the failure (TestStatus/FAIL/ERROR markers and the failing test's own "test" marker), inspect the test thread's activity and stacks at that time, and check any relevant log markers. Run \`profiler-cli guide\` if you need a refresher on the commands. Explain the most likely cause of the failure.`;
+        navigator.clipboard.writeText(prompt).then(() => {
+            el.classList.add('copied');
+            setTimeout(() => el.classList.remove('copied'), 1000);
+        });
     }
 
     function copyMachCmd(testPath, event) {
