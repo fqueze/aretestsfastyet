@@ -1,29 +1,59 @@
 # Are Tests Fast Yet?
 
-A dashboard for visualizing Firefox test job performance metrics over time.
+A collection of dashboards for visualizing the health and performance of
+Firefox's automated tests, built from data generated in Firefox CI.
 
-## Features
+Live site: <https://tests.firefox.dev/>, where the data is refreshed every
+night. There is also a staging instance at
+<https://fqueze.github.io/aretestsfastyet/> used to develop the dashboards
+themselves; its data is regenerated whenever work-in-progress patches to the
+data generator are pushed to Try.
 
-- **Interactive scatter plots** showing test duration trends for each platform (Android, Linux, Windows, macOS)
-- **Repository comparison** - Switch between `autoland` and `mozilla-central` repositories
-- **Build type visualization** - Different colors for debug (red) and opt (teal) builds
-- **Resource usage profiling** - Click any data point to view detailed performance profiles in Firefox Profiler
+## Dashboards
 
-## Usage
+Every page is listed on [`help.html`](help.html); the most useful ones are
+also reachable from the "Dashboards ▾" menu in the top-right corner of each
+page. The main ones:
 
-1. Visit https://fqueze.github.io/aretestsfastyet/
-2. Use the repository buttons to switch between autoland and mozilla-central
-3. Click the platform links to jump to specific charts
-4. Hover over data points to see test details
-5. Click on any data point to open its resource usage profile
+- **Test Health** (`index.html`) — the landing page. Trend charts and a 7-day
+  summary of flaky test-failure, flaky job-failure, skip and invalid-job rates
+  for XPCShell and Mochitest.
+- **Test Issues** (`issues.html`) — every non-passing test outcome (failures,
+  timeouts, crashes, skips) over the last 21 days, grouped by Bugzilla
+  component and by directory tree. The best place to start triaging
+  intermittents.
+- **Test Info** (`test.html`) — a deep dive on a single test
+  (`?test=path/to/test`): failure/skip/crash history, per-run timings, and a
+  pass/fail breakdown across job configurations.
+- **Try Push Results** (`try.html`) — aggregates the failed tests from a single
+  Try push, perma-fails first, matched against historical data.
+- **Failures** (`failures.html`) / **Crashes** (`crashes.html`) — failures
+  grouped by message, and crashes grouped by signature.
+- **Test Timings** (`xpcshell-timings.html`) — per-test run times with a tree
+  view and scatter charts.
+- **Build Times** (`builds.html`), **Mochitest Jobs** (`mochitest-jobs.html`),
+  **XPCShell Jobs** (`xpcshell-jobs.html`), **Manifest Runtimes**
+  (`manifests.html`), **Worker Pools** (`workers.html`) — job- and
+  infrastructure-level timing views.
 
-## URL Parameters
+A number of older or more specialized dashboards (Perma-Fails, Variant Impact,
+Errors & Warnings, Resource Usage, and others) are listed under "Less
+frequently used dashboards" on `help.html`.
 
-- `#autoland` - Show autoland repository data
-- `#mozilla-central` - Show mozilla-central repository data
-- `#autoland:linux` - Show autoland data and scroll to Linux chart
-- `#mozilla-central:windows` - Show mozilla-central data and scroll to Windows chart
+## How it works
 
-## Data Source
+The site is a set of static HTML pages with inline CSS and JavaScript, sharing
+a few scripts (`fetch-utils.js`, `shared.js`, `common-ui.js`, `dashboards.js`,
+…). There is no build step.
 
-The dashboard fetches test performance data from the [Treeherder database](https://treeherder.mozilla.org/), displaying xpcshell test execution times from the last 21 days.
+Each page fetches pre-aggregated JSON data from the Firefox CI (Taskcluster)
+index at runtime — there is no server. The data is produced by
+[`fetch-test-data.js`](https://searchfox.org/mozilla-central/source/testing/timings/fetch-test-data.js)
+in mozilla-central, which queries Firefox CI and writes the compact,
+table-encoded JSON files the dashboards consume.
+
+## Data format
+
+The JSON file formats are documented in
+[`JSON_FORMAT.md`](https://searchfox.org/mozilla-central/source/testing/timings/JSON_FORMAT.md),
+which lives next to the generator in mozilla-central.
