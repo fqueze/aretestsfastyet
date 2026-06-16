@@ -1214,12 +1214,18 @@ self.onmessage = function(e) {
                 isTestJob(j.jobName)
             );
 
-            const successfulJobNames = new Set(
-                jobs.filter(j => j.state === 'completed' && j.result === 'success' && isTestJob(j.jobName))
-                    .map(j => j.jobName)
+            const successfulTestJobs = jobs.filter(j =>
+                j.state === 'completed' && j.result === 'success' && isTestJob(j.jobName)
             );
+            const successfulJobNames = new Set(successfulTestJobs.map(j => j.jobName));
 
-            if (failedTestJobs.length === 0) {
+            // With ?alljobs, also fetch profiles of jobs that ultimately succeeded,
+            // so tests that failed initially but passed on retry surface too.
+            const fetchPassing = new URLSearchParams(window.location.search).has('alljobs');
+            const passingTestJobs = fetchPassing ? successfulTestJobs : [];
+            const jobsToProcess = failedTestJobs.concat(passingTestJobs);
+
+            if (jobsToProcess.length === 0) {
                 const completedTestJobs = jobs.filter(j =>
                     j.state === 'completed' && isTestJob(j.jobName)
                 );
@@ -1230,10 +1236,11 @@ self.onmessage = function(e) {
                 return;
             }
 
-            setStatus(`Found ${failedTestJobs.length} failed test jobs. Fetching profiles...`);
+            const passingNote = passingTestJobs.length ? ` and ${passingTestJobs.length} passing test jobs` : '';
+            setStatus(`Found ${failedTestJobs.length} failed test jobs${passingNote}. Fetching profiles...`);
             setProgress(0);
 
-            const result = await processJobsWithWorkers(failedTestJobs, (done, total) => {
+            const result = await processJobsWithWorkers(jobsToProcess, (done, total) => {
                 setStatus(`Fetching & parsing profiles... (${done}/${total})`);
                 setProgress(done / total);
             });
@@ -1244,11 +1251,11 @@ self.onmessage = function(e) {
             // that specific test (failed on different tests instead).
             //
             // Build per-jobName, per-run sets of failing test paths.
-            // Seed with all failed test jobs so that runs whose profiles had no
+            // Seed with every processed job so that runs whose profiles had no
             // parseable test-level failures (e.g. harness crashes) still count as
             // separate runs for intermittent detection.
             const failsByJobAndRun = new Map(); // jobName -> Map<runKey, Set<testPath>>
-            for (const job of failedTestJobs) {
+            for (const job of jobsToProcess) {
                 const runKey = `${job.taskId}.${job.retryId}`;
                 if (!failsByJobAndRun.has(job.jobName)) failsByJobAndRun.set(job.jobName, new Map());
                 const runs = failsByJobAndRun.get(job.jobName);
@@ -1306,7 +1313,7 @@ self.onmessage = function(e) {
             // Compute global platform/build sets from ALL failed test jobs we processed
             const globalPlatforms = new Set();
             const globalBuildTypes = new Set();
-            for (const job of failedTestJobs) {
+            for (const job of jobsToProcess) {
                 globalPlatforms.add(extractPlatform(job.jobName));
                 for (const bt of extractBuildTypes(job.jobName)) globalBuildTypes.add(bt);
             }
