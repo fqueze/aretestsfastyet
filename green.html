@@ -552,6 +552,7 @@
 
     </style>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="shared.js"></script>
 </head>
 <body>
     <div class="container">
@@ -1792,7 +1793,7 @@
                 const encodedUrl = encodeURIComponent(baseUrl);
                 const profileName = `${group.testName} (${latestJob.taskId}.${latestJob.retryId || 0})`;
                 const encodedName = encodeURIComponent(profileName);
-                const profilerUrl = `https://profiler.firefox.com/from-url/${encodedUrl}?profileName=${encodedName}`;
+                const profilerUrl = `${getProfilerOrigin()}/from-url/${encodedUrl}?profileName=${encodedName}`;
 
                 jobsHtml += `
                     <tr class="job-row" data-task-id="${latestJob.taskId}" data-retry-id="${latestJob.retryId || 0}" data-test-name="${escapeHtml(group.testName)}">
@@ -1883,7 +1884,7 @@
                 const encodedUrl = encodeURIComponent(baseUrl);
                 const profileName = `${testName} (${job.taskId}.${job.retryId || 0})`;
                 const encodedName = encodeURIComponent(profileName);
-                const profilerUrl = `https://profiler.firefox.com/from-url/${encodedUrl}?profileName=${encodedName}`;
+                const profilerUrl = `${getProfilerOrigin()}/from-url/${encodedUrl}?profileName=${encodedName}`;
 
                 return `
                     <li class="failure-item">

@@ -375,7 +375,7 @@
                 <tr${isFlavor ? ' class="flavor-row"' : ''}>
                     <td class="harness-name">${name}</td>
                     <td title="Percentage of test runs that failed">
-                        ${isFlavor ? '' : `<a href="${withDataSource(`issues.html?kind=${kind}#date=21days`)}" class="stat-link">`}
+                        ${isFlavor ? '' : `<a href="${withDevParams(`issues.html?kind=${kind}#date=21days`)}" class="stat-link">`}
                             <div class="stat-cell">
                                 <div class="stat-value">${testFailRate}%</div>
                                 <div class="stat-secondary">${totalFailed.toLocaleString()} / ${totalTests.toLocaleString()}</div>

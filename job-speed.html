@@ -470,6 +470,7 @@
     <div id="histogramTooltip" class="histogram-tooltip"></div>
 
     <script src="fetch-utils.js"></script>
+    <script src="shared.js"></script>
     <script>
         let currentData = null;
         let sortColumn = null;
@@ -1875,7 +1876,7 @@
                         const [taskId, retryId = '0'] = taskIdString.split('.');
                         const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
                         const profileName = `${job.jobName} (${taskIdString})`;
-                        const profileUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
+                        const profileUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
 
                         const repository = currentData.tables.repositories[job.repositoryId];
                         const jobTimeoutFactor = baselineMedian ? (job.median / baselineMedian).toFixed(2) : '-';

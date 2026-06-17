@@ -250,6 +250,7 @@
     </table>
 
     <script src="fetch-utils.js"></script>
+    <script src="shared.js"></script>
     <script>
         let currentData = null;
         let expandedGroups = new Set();
@@ -700,7 +701,7 @@
                         jobRow.className = 'job-row';
                         const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId.split('.')[0]}/runs/${taskId.includes('.') ? taskId.split('.')[1] : '0'}/artifacts/public/test_info/profile_resource-usage.json`;
                         const profileName = `${displayName} (${taskId})`;
-                        const profileUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
+                        const profileUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
 
                         const jobMemoryPercent = formatMemoryPercent(maxMemory, stats.machineInfo.mainMemory);
                         const jobMemoryTooltip = `${formatGB(maxMemory)} GB`;

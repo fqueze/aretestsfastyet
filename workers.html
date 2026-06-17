@@ -274,6 +274,7 @@ th.sortable.sort-desc::after {
   </div>
 </div>
 <script src="fetch-utils.js"></script>
+<script src="shared.js"></script>
 <script src="dashboards.js"></script>
 <script>
 
@@ -827,7 +828,7 @@ function generateProfile(tasks, threadName, timeSeries) {
 async function openInProfiler(tasks, name, timeSeries) {
   const profile = generateProfile(tasks, name, timeSeries);
 
-  const origin = 'https://profiler.firefox.com';
+  const origin = getProfilerOrigin();
   const profilerWindow = window.open(origin + '/from-post-message/', '_blank');
 
   if (!profilerWindow) {

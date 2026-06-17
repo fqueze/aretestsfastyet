@@ -3,10 +3,8 @@
  * Shared between crashes.html, failures.html, etc.
  */
 
-function getProfilerOrigin() {
-    return (window.location.protocol === 'file:' || window.location.hostname === 'localhost')
-        ? 'http://localhost:4242' : 'https://profiler.firefox.com';
-}
+// getProfilerOrigin() lives in shared.js (loaded by every page that loads
+// common-links.js); it resolves the ?profiler= override used below.
 
 /**
  * Generate Firefox Profiler URL for a test run

@@ -18,6 +18,32 @@ const platforms = {
     'mac': 'macOS'
 };
 
+// Which Firefox Profiler instance to open profiles in. Defaults to the
+// production profiler; ?profiler= overrides it (handy for testing a deploy
+// preview), accepting a few conveniences:
+//   localhost   -> http://localhost:4242 (a locally-run profiler)
+//   dp<N>        -> https://deploy-preview-<N>--perf-html.netlify.app
+//   <hostname>   -> https://<hostname>
+//   <full URL>   -> used as-is
+// This is the single source of truth for the profiler origin; common-links.js's
+// getProfilerUrl() and every inline profiler link build on it. The raw value is
+// also parsed separately in fetch-utils.js so it can be propagated onto nav
+// links; only the normalization below lives here.
+function getProfilerOrigin() {
+    const profiler = (new URLSearchParams(window.location.search).get('profiler') || '').replace(/\/$/, '');
+    if (!profiler) {
+        return 'https://profiler.firefox.com';
+    }
+    if (profiler === 'localhost') {
+        return 'http://localhost:4242';
+    }
+    const deployPreview = profiler.match(/^dp(\d+)$/);
+    if (deployPreview) {
+        return `https://deploy-preview-${deployPreview[1]}--perf-html.netlify.app`;
+    }
+    return profiler.includes('://') ? profiler : `https://${profiler}`;
+}
+
 function createProfileUrl(taskId, retryId, jobName, useTaskClusterTools = false) {
     // Use TaskCluster tools if requested, for decision tasks, or for Android artifact builds
     if (useTaskClusterTools ||
@@ -38,7 +64,7 @@ function createProfileUrl(taskId, retryId, jobName, useTaskClusterTools = false)
     const encodedUrl = encodeURIComponent(baseUrl);
     const profileName = `${jobName} (${taskId}.${retryId})`;
     const encodedName = encodeURIComponent(profileName);
-    return `https://profiler.firefox.com/from-url/${encodedUrl}?profileName=${encodedName}`;
+    return `${getProfilerOrigin()}/from-url/${encodedUrl}?profileName=${encodedName}`;
 }
 
 function extractPlatform(name) {

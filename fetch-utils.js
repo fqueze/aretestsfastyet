@@ -7,9 +7,14 @@ function getHarnessType() {
     return urlParams.get('kind') || 'xpcshell';
 }
 
-// The raw ?data-source= URL parameter, parsed once (it can't change without a
-// page load). Empty string when absent.
-const _dataSourceParam = new URLSearchParams(window.location.search).get('data-source') || '';
+// The raw ?data-source= and ?profiler= URL parameters, parsed once (they can't
+// change without a page load). Empty string when absent.
+const _urlParams = new URLSearchParams(window.location.search);
+const _dataSourceParam = _urlParams.get('data-source') || '';
+// Raw ?profiler= value, kept only so withDevParams() can propagate it onto nav
+// links. Its meaning (hostname / full URL / shorthand) is interpreted by
+// getProfilerOrigin() in shared.js; here we just carry the value through.
+const _profilerParam = _urlParams.get('profiler') || '';
 
 // Determine where test data is fetched from. Possible values:
 //   'try'     - CI data from the try repository
@@ -29,19 +34,26 @@ function getDataSource() {
     return window.location.hostname === 'fqueze.github.io' ? 'try' : 'central';
 }
 
-// Propagate the active ?data-source= parameter onto an internal link so that
-// navigating between dashboards keeps the same data source. Only appended when
-// the parameter is explicitly present in the current URL, leaving normal
+// Propagate the active dev-override parameters (?data-source=, ?profiler=) onto
+// an internal link so that navigating between dashboards keeps them. Each is
+// only appended when explicitly present in the current URL, leaving normal
 // browsing URLs untouched. Inserts before any #hash so the query stays valid.
-function withDataSource(url) {
-    if (!_dataSourceParam) {
+function withDevParams(url) {
+    const params = [];
+    if (_dataSourceParam) {
+        params.push(`data-source=${encodeURIComponent(_dataSourceParam)}`);
+    }
+    if (_profilerParam) {
+        params.push(`profiler=${encodeURIComponent(_profilerParam)}`);
+    }
+    if (!params.length) {
         return url;
     }
     const hashIndex = url.indexOf('#');
     const base = hashIndex === -1 ? url : url.slice(0, hashIndex);
     const hash = hashIndex === -1 ? '' : url.slice(hashIndex);
     const sep = base.includes('?') ? '&' : '?';
-    return `${base}${sep}data-source=${encodeURIComponent(_dataSourceParam)}${hash}`;
+    return `${base}${sep}${params.join('&')}${hash}`;
 }
 
 // Helper function to fetch from Firefox CI

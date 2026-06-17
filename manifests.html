@@ -831,7 +831,7 @@
             // Construct the raw profile URL
             const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${baseTaskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
             const profileName = `${jobName} (${taskId})`;
-            const profilerUrl = `https://profiler.firefox.com/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(manifestName)}`;
+            const profilerUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(manifestName)}`;
 
             window.open(profilerUrl, '_blank');
         }

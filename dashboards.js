@@ -157,12 +157,13 @@ function currentDashboardFile() {
     return base === '' ? 'index.html' : base;
 }
 
-// Propagate ?data-source= onto nav links via fetch-utils' withDataSource(),
-// but only when that script is loaded. Pages that fetch test data load it;
-// the few that don't (builds, help, mochitest-jobs, xpcshell-jobs) simply emit
-// plain links, which is fine since they don't read the parameter anyway.
+// Propagate the dev-override parameters (?data-source=, ?profiler=) onto nav
+// links via fetch-utils' withDevParams(), but only when that script is loaded.
+// Pages that fetch test data load it; the few that don't (builds, help,
+// mochitest-jobs, xpcshell-jobs) simply emit plain links, which is fine since
+// they don't read the parameters anyway.
 function dashLink(url) {
-    return typeof withDataSource === 'function' ? withDataSource(url) : url;
+    return typeof withDevParams === 'function' ? withDevParams(url) : url;
 }
 
 function escapeDashAttr(s) {

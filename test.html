@@ -879,7 +879,7 @@
             const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
             const profileName = `${jobName} (${taskIdString})`;
             const testName = testPath.split('/').pop();
-            const profileLink = `https://profiler.firefox.com/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
+            const profileLink = `${getProfilerOrigin()}/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;
 
             let crashLink = null;
             if (issueType === 'CRASH' && minidump) {
@@ -2859,7 +2859,7 @@
             let selectedIdx = -1;
 
             function navigate(path) {
-                window.location.href = withDataSource(`test.html?test=${encodeURIComponent(path)}`);
+                window.location.href = withDevParams(`test.html?test=${encodeURIComponent(path)}`);
             }
 
             function highlightMatches(text, terms) {
@@ -3088,7 +3088,7 @@
                             }
                         }
                         if (count === 1 && match !== testPath) {
-                            window.location.replace(withDataSource(`test.html?test=${encodeURIComponent(match)}`));
+                            window.location.replace(withDevParams(`test.html?test=${encodeURIComponent(match)}`));
                             return;
                         }
                     } catch (e) {}
