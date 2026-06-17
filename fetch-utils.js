@@ -7,6 +7,43 @@ function getHarnessType() {
     return urlParams.get('kind') || 'xpcshell';
 }
 
+// The raw ?data-source= URL parameter, parsed once (it can't change without a
+// page load). Empty string when absent.
+const _dataSourceParam = new URLSearchParams(window.location.search).get('data-source') || '';
+
+// Determine where test data is fetched from. Possible values:
+//   'try'     - CI data from the try repository
+//   'central' - CI data from mozilla-central
+//   'local'   - local ./data/ files
+// Override with ?data-source=try|central|local (handy while developing). When
+// the parameter is absent we fall back to the default for the deployment:
+// local files when not served over https, try on the staging site, otherwise
+// mozilla-central.
+function getDataSource() {
+    if (_dataSourceParam) {
+        return _dataSourceParam;
+    }
+    if (window.location.protocol !== 'https:') {
+        return 'local';
+    }
+    return window.location.hostname === 'fqueze.github.io' ? 'try' : 'central';
+}
+
+// Propagate the active ?data-source= parameter onto an internal link so that
+// navigating between dashboards keeps the same data source. Only appended when
+// the parameter is explicitly present in the current URL, leaving normal
+// browsing URLs untouched. Inserts before any #hash so the query stays valid.
+function withDataSource(url) {
+    if (!_dataSourceParam) {
+        return url;
+    }
+    const hashIndex = url.indexOf('#');
+    const base = hashIndex === -1 ? url : url.slice(0, hashIndex);
+    const hash = hashIndex === -1 ? '' : url.slice(hashIndex);
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}data-source=${encodeURIComponent(_dataSourceParam)}${hash}`;
+}
+
 // Helper function to fetch from Firefox CI
 // indexName is the test-info-* suffix, e.g. 'xpcshell-timings', 'worker-data'
 // Caches the resolved base URL after the first redirect to avoid repeated redirects.
@@ -16,7 +53,7 @@ async function fetchFromCI(indexName, filename) {
     if (cached) {
         return fetch(`${cached}${filename}`);
     }
-    const repository = window.location.hostname === 'fqueze.github.io' ? 'try' : 'mozilla-central';
+    const repository = getDataSource() === 'try' ? 'try' : 'mozilla-central';
     const prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.latest.source.test-info-${indexName}/artifacts/public/`;
     const response = await fetch(`${prefix}${filename}`);
     // Cache the resolved base URL from the final (redirected) URL.
@@ -121,7 +158,7 @@ async function findTimingsJobsForRevision(revision) {
 // Fetch data file with appropriate prefix based on page protocol
 // For try runs, if xpcshell data doesn't exist, falls back to mochitest data
 async function fetchData(filename) {
-    if (window.location.protocol === 'https:') {
+    if (getDataSource() !== 'local') {
         // Check if this is a try revision file (format: xpcshell-try-<revision>.json or mochitest-try-<revision>.json)
         const tryMatch = filename.match(/^(xpcshell|mochitest)-try-([a-f0-9]{40})\.json$/);
 

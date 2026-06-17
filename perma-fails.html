@@ -827,7 +827,7 @@
 
             // Render entries
             for (const entry of entries) {
-                const testPageUrl = `test.html?test=${encodeURIComponent(entry.fullPath)}`;
+                const testPageUrl = withDataSource(`test.html?test=${encodeURIComponent(entry.fullPath)}`);
                 const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${entry.fullPath}`;
 
                 html += `<div class="result-row">`;

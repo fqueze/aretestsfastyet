@@ -157,6 +157,14 @@ function currentDashboardFile() {
     return base === '' ? 'index.html' : base;
 }
 
+// Propagate ?data-source= onto nav links via fetch-utils' withDataSource(),
+// but only when that script is loaded. Pages that fetch test data load it;
+// the few that don't (builds, help, mochitest-jobs, xpcshell-jobs) simply emit
+// plain links, which is fine since they don't read the parameter anyway.
+function dashLink(url) {
+    return typeof withDataSource === 'function' ? withDataSource(url) : url;
+}
+
 function escapeDashAttr(s) {
     return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -181,7 +189,7 @@ function renderDashboardMenu() {
                         <span class="dash-menu-desc">${descText}</span>
                     </span>`;
         }
-        return `<a class="dash-menu-item" href="${d.file}" title="${descAttr}">
+        return `<a class="dash-menu-item" href="${dashLink(d.file)}" title="${descAttr}">
                     <span class="dash-menu-title">${title}</span>
                     <span class="dash-menu-desc">${descText}</span>
                 </a>`;
@@ -193,7 +201,7 @@ function renderDashboardMenu() {
         <button type="button" class="dash-menu-trigger" aria-haspopup="true" aria-expanded="false">Dashboards ▾</button>
         <div class="dash-menu-panel" role="menu">
             ${links}
-            <a class="dash-menu-item dash-menu-all" href="help.html">
+            <a class="dash-menu-item dash-menu-all" href="${dashLink('help.html')}">
                 <span class="dash-menu-title">All dashboards…</span>
                 <span class="dash-menu-desc">See the full list, including older ones.</span>
             </a>
@@ -225,7 +233,7 @@ function renderDashboardList(container) {
         if (isCurrent) {
             return `<div class="dash-list-item dash-list-current">${inner}</div>`;
         }
-        return `<a class="dash-list-item" href="${d.file}">${inner}</a>`;
+        return `<a class="dash-list-item" href="${dashLink(d.file)}">${inner}</a>`;
     }
 
     const tier1 = DASHBOARDS.filter(d => d.tier === 1).map(item).join('');
@@ -245,10 +253,10 @@ function renderDashboardTeaser(container) {
     const current = currentDashboardFile();
     const chips = DASHBOARDS
         .filter(d => d.featured && d.file !== current)
-        .map(d => `<a class="dash-chip" href="${d.file}" title="${escapeDashAttr(d.desc)}">${escapeDashText(d.title)}</a>`)
+        .map(d => `<a class="dash-chip" href="${dashLink(d.file)}" title="${escapeDashAttr(d.desc)}">${escapeDashText(d.title)}</a>`)
         .join('');
     container.innerHTML =
-        `<h2>Dashboards</h2>${chips}<a class="dash-teaser-all" href="help.html">See all</a>`;
+        `<h2>Dashboards</h2>${chips}<a class="dash-teaser-all" href="${dashLink('help.html')}">See all</a>`;
 }
 
 // Pages that already display the dashboard list/teaser inline (index.html,

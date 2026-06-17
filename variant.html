@@ -960,7 +960,7 @@
             html += `</div></div>`;
 
             for (const g of groups) {
-                const testPageUrl = `test.html?test=${encodeURIComponent(g.fullPath)}`;
+                const testPageUrl = withDataSource(`test.html?test=${encodeURIComponent(g.fullPath)}`);
                 const searchfoxUrl = `https://searchfox.org/mozilla-central/source/${g.fullPath}`;
                 const single = g.rows.length === 1;
 

@@ -1680,7 +1680,7 @@ self.onmessage = function(e) {
             html += `<td class="flakiness-cell" id="flakiness-${escapeAttr(test.path)}"></td>`;
             html += '<td class="test-info">';
             html += `<span class="test-path"><a href="${getSearchfoxUrl(test.path)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(test.path)}</a></span>`;
-            html += ` <a class="history-link" href="test.html?test=${encodeURIComponent(test.path)}" target="_blank" onclick="event.stopPropagation()">history</a>`;
+            html += ` <a class="history-link" href="${withDataSource(`test.html?test=${encodeURIComponent(test.path)}`)}" target="_blank" onclick="event.stopPropagation()">history</a>`;
             if (test.commonMessage) {
                 const firstLine = test.commonMessage.split('\n')[0];
                 html += `<div class="inline-message" title="${escapeAttr(test.commonMessage)}">${escapeHtml(firstLine)}</div>`;
@@ -2527,7 +2527,7 @@ self.onmessage = function(e) {
         const el = document.getElementById(`flakiness-${testPath}`);
         if (!el) return;
 
-        const histUrl = `test.html?test=${encodeURIComponent(testPath)}`;
+        const histUrl = withDataSource(`test.html?test=${encodeURIComponent(testPath)}`);
 
         if (!stats) {
             el.textContent = '';
