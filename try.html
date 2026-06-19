@@ -977,11 +977,34 @@ function extractTestTimings(profile) {
                      c.startTime <= markers.endTime[i]
             );
             if (matchingCrash) {
+                matchingCrash.consumed = true;
                 if (matchingCrash.signature) timing.crashSignature = matchingCrash.signature;
                 if (matchingCrash.minidump) timing.minidump = matchingCrash.minidump;
             }
         }
 
+        timings.push(timing);
+    }
+
+    // Surface crashes that weren't attributed to a running test (e.g. crashes
+    // during manifest teardown/shutdown, recorded against a .toml/.ini path).
+    // Without this they'd be invisible whenever the job also has another test
+    // failure, since the log-based fallback only runs for jobs with no blamed
+    // failure at all. Emit one synthetic CRASH timing per such crash.
+    for (const c of crashMarkers) {
+        if (c.consumed || !c.testPath) continue;
+        const timing = {
+            path: c.testPath,
+            duration: 0,
+            status: 'CRASH',
+            timestamp: profile.meta.startTime + c.startTime,
+            allMessages: [],
+        };
+        if (c.signature) {
+            timing.crashSignature = c.signature;
+            timing.message = c.signature;
+        }
+        if (c.minidump) timing.minidump = c.minidump;
         timings.push(timing);
     }
     return timings;
