@@ -914,6 +914,17 @@
 
         // ---- Search ----
 
+        // Persist the search filter in the URL so it survives reload and sharing.
+        function updateUrl() {
+            const url = new URL(window.location);
+            if (searchQuery) {
+                url.searchParams.set('q', searchQuery);
+            } else {
+                url.searchParams.delete('q');
+            }
+            window.history.replaceState(null, '', url);
+        }
+
         let searchTimeout = null;
         function onSearchInput() {
             clearTimeout(searchTimeout);
@@ -921,6 +932,7 @@
                 searchQuery = document.getElementById('search-box').value.trim();
                 const clearBtn = document.getElementById('search-clear');
                 clearBtn.style.display = searchQuery ? 'flex' : 'none';
+                updateUrl();
                 renderResults();
             }, 300);
         }
@@ -929,6 +941,7 @@
             document.getElementById('search-box').value = '';
             searchQuery = '';
             document.getElementById('search-clear').style.display = 'none';
+            updateUrl();
             renderResults();
         }
 
@@ -1159,6 +1172,14 @@
         // Set up search
         document.getElementById('search-box').addEventListener('input', onSearchInput);
         document.getElementById('search-clear').addEventListener('click', clearSearch);
+
+        // Restore the search filter from the URL.
+        const initialQuery = new URLSearchParams(window.location.search).get('q');
+        if (initialQuery) {
+            searchQuery = initialQuery;
+            document.getElementById('search-box').value = initialQuery;
+            document.getElementById('search-clear').style.display = 'flex';
+        }
 
         // Set up harness switcher
         initHarnessSwitcher('Perma-Fails');

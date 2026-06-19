@@ -1191,6 +1191,29 @@ self.onmessage = function(e) {
         return input;
     }
 
+    // Persist the current revision, repo, and test filter in the URL so the
+    // view can be shared and restored on reload.
+    function updateUrlState() {
+        const url = new URL(window.location);
+        if (currentRevision) {
+            url.searchParams.set('rev', currentRevision);
+        } else {
+            url.searchParams.delete('rev');
+        }
+        if (currentRepo !== 'try') {
+            url.searchParams.set('repo', currentRepo);
+        } else {
+            url.searchParams.delete('repo');
+        }
+        const filter = document.getElementById('search-box').value;
+        if (filter) {
+            url.searchParams.set('filter', filter);
+        } else {
+            url.searchParams.delete('filter');
+        }
+        window.history.replaceState(null, '', url);
+    }
+
     async function loadRevision() {
         const input = document.getElementById('revision-input').value;
         const revision = extractRevision(input);
@@ -1201,14 +1224,7 @@ self.onmessage = function(e) {
 
         currentRevision = revision;
 
-        const url = new URL(window.location);
-        url.searchParams.set('rev', revision);
-        if (currentRepo !== 'try') {
-            url.searchParams.set('repo', currentRepo);
-        } else {
-            url.searchParams.delete('repo');
-        }
-        window.history.replaceState(null, '', url);
+        updateUrlState();
 
         document.getElementById('load-btn').disabled = true;
         document.getElementById('results').innerHTML = '';
@@ -1566,7 +1582,7 @@ self.onmessage = function(e) {
                 currentSearchTerm = currentSearchNegate ? raw.slice(1) : raw;
                 renderTable(); renderUnblamedJobs();
             },
-            updateUrlHash: () => {},
+            updateUrlHash: updateUrlState,
         });
 
         reproState.clear();
@@ -3411,6 +3427,15 @@ Error: ${msg}`;
         const params = new URLSearchParams(window.location.search);
         const rev = params.get('rev');
         const repo = params.get('repo');
+        // Seed the filter from the URL before loading so updateUrlState() (called
+        // during load, before the filter UI is shown) doesn't clear the param.
+        const filter = params.get('filter');
+        if (filter) {
+            document.getElementById('search-box').value = filter;
+            const raw = filter.toLowerCase();
+            currentSearchNegate = raw.startsWith('!');
+            currentSearchTerm = currentSearchNegate ? raw.slice(1) : raw;
+        }
         if (rev) {
             const prefix = repo && repo !== 'try' ? repo + ':' : '';
             document.getElementById('revision-input').value = prefix + rev;
