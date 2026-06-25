@@ -134,7 +134,7 @@ function createScatterPlot(container, platformData, platform, currentRepository,
             x: filteredData.map(d => new Date(d.date)),
             y: filteredData.map(d => d.duration_seconds / 60), // Convert to minutes
             mode: 'markers',
-            type: 'scatter',
+            type: 'scattergl',
             name: buildType.toUpperCase().replace(/-/g, ' '),
             marker: {
                 color: colors[buildType],

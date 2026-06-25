@@ -246,7 +246,7 @@
                             x: filteredData.map(d => new Date(d.date)),
                             y: filteredData.map(d => d.duration_seconds / 60),
                             mode: 'markers',
-                            type: 'scatter',
+                            type: 'scattergl',
                             name: subType.charAt(0).toUpperCase() + subType.slice(1),
                             marker: {
                                 color: specialColors[subType],
@@ -282,7 +282,7 @@
                             x: platformData.map(d => new Date(d.date)),
                             y: platformData.map(d => d.duration_seconds / 60),
                             mode: 'markers',
-                            type: 'scatter',
+                            type: 'scattergl',
                             name: platforms[platform] || platform,
                             marker: {
                                 color: platformColors[platform],
