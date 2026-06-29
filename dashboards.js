@@ -60,6 +60,14 @@ const DASHBOARDS = [
             'over time. Use it to find the slowest tests, watch how a test’s runtime trends ' +
             'across pushes and platforms, and see whether a test’s run time is consistent or ' +
             'varies randomly.' },
+    { file: 'screenshots.html', tier: 1, title: 'UI Screenshots', featured: true,
+      desc: 'Firefox UI screenshots from mozscreenshots, compared across Linux/Windows/macOS.',
+      long: 'Screenshots of the Firefox UI captured by the mochitest-browser-screenshots ' +
+            'jobs (mozscreenshots) on Linux, Windows and macOS. Pick a theme and the ' +
+            'platforms you care about to line up the same UI configuration side by side ' +
+            'across operating systems, so visual differences and regressions are easy to ' +
+            'spot. Always shows the latest indexed run per platform — no revision needed. ' +
+            'WIP for bug 2050672.' },
     { file: 'manifests.html', tier: 1, title: 'Manifest Runtimes',
       desc: 'Per-manifest runtimes, as used by the dynamic chunking algorithm.',
       long: 'Runtime aggregated by test manifest. Mainly useful for visualizing the data ' +

@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firefox UI Screenshots</title>
+    <link rel="icon" href="favicon-screenshots.svg">
+    <script src="fetch-utils.js"></script>
+    <script defer src="dashboards.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        /* Controls bar: a few labelled groups of toggle buttons. */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px 28px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .control-group > .label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        /* Compact toggle buttons (the shared `button` rule is roomier). */
+        .controls button {
+            padding: 5px 12px;
+            font-size: 0.9rem;
+        }
+        .controls button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+
+        .summary {
+            color: #666;
+            font-size: 0.9rem;
+            margin: 0 0 16px;
+        }
+
+        /* One collapsible section per mozscreenshots job (Primary UI, ...). */
+        .section-shots {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        /* A single UI configuration, with its screenshots laid out per platform. */
+        .combo {
+            background: white;
+            border-radius: 8px;
+            padding: 12px 14px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .combo-head {
+            font-size: 0.92rem;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .combo-head .nn {
+            font-family: monospace;
+            color: #999;
+            margin-right: 8px;
+        }
+        .shots {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+        .shot-img {
+            display: block;
+            /* `max-width` (not `width`) so the slider scales screenshots *down*
+               without ever upscaling past their natural size; at the slider max
+               (--shot-width: 100%) a wide-enough window shows them 1:1. */
+            width: auto;
+            max-width: var(--shot-width, 900px);
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+            cursor: zoom-in;
+        }
+
+        .note {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        /* Click-to-zoom overlay: shows the clicked screenshot full-size,
+           centred, dimming the page. Click anywhere or press Esc to close. */
+        #lightbox {
+            position: fixed;
+            inset: 0;
+            z-index: 2000;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: zoom-out;
+        }
+        #lightbox.open {
+            display: flex;
+        }
+        #lightbox img {
+            max-width: 96vw;
+            max-height: 96vh;
+            border-radius: 4px;
+            background: #fff;
+            box-shadow: 0 4px 30px rgba(0,0,0,0.6);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Firefox UI Screenshots</h1>
+
+        <div class="controls" id="controls" style="display: none;">
+            <div class="control-group" id="platform-group">
+                <span class="label">Platform:</span>
+            </div>
+            <div class="control-group" id="theme-group">
+                <span class="label">Theme:</span>
+            </div>
+            <div class="control-group" id="density-group">
+                <span class="label">Density:</span>
+            </div>
+            <div class="control-group" id="section-group">
+                <span class="label">Section:</span>
+            </div>
+            <div class="control-group">
+                <span class="label">Size:</span>
+                <input type="range" id="size-range" min="300" max="1800" step="20" value="900"
+                       title="Screenshot size (drag to the right edge for full size)">
+            </div>
+        </div>
+
+        <p class="summary" id="summary"></p>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="gallery">
+            <div class="loading">Resolving the latest screenshots run per platform…</div>
+        </div>
+    </div>
+
+    <div id="lightbox"><img alt=""></div>
+
+    <script>
+        // --- Data source ----------------------------------------------------
+        //
+        // The mochitest-browser-screenshots jobs upload their PNGs to
+        // MOZ_UPLOAD_DIR (surfaced as the `public/test_info/` artifacts) and
+        // register a per-platform Taskcluster index route, so we can always
+        // fetch the latest run without knowing a revision. See bug 2050672.
+        const TC = 'https://firefox-ci-tc.services.mozilla.com/api';
+        const INDEX = `${TC}/index/v1`;
+        const QUEUE = `${TC}/queue/v1`;
+
+        // `try` on the staging site, `mozilla-central` otherwise — matching
+        // fetchFromCI()'s convention. Override locally with ?data-source=try.
+        const REPO = getDataSource() === 'try' ? 'try' : 'mozilla-central';
+
+        // The three test platforms the screenshots job runs on. The index
+        // job-name has the test-platform appended (see the test transform), so
+        // each platform has its own namespace. The label is what we show in the
+        // UI; `id` keys our per-platform data.
+        const PLATFORMS = [
+            { id: 'linux',   label: 'Linux',   testPlatform: 'linux2404-64/opt' },
+            { id: 'windows', label: 'Windows', testPlatform: 'windows11-64-25h2/opt' },
+            { id: 'macos',   label: 'macOS',   testPlatform: 'macosx1500-aarch64/opt' },
+        ];
+
+        // The LightweightThemes configuration tokens that can appear in a combo
+        // name, mapped to the friendly theme label used by the Theme toggle.
+        const THEME_NAMES = {
+            noLWT: 'Default',
+            compactLight: 'Light',
+            compactDark: 'Dark',
+            alpenGlow: 'AlpenGlow',
+        };
+        const THEME_ORDER = ['Default', 'Light', 'Dark', 'AlpenGlow'];
+
+        // The UIDensities configuration tokens (only present in the primaryUI
+        // job), mapped to the friendly density label used by the Density toggle.
+        // Screenshots with no density token are treated as the normal density.
+        const DENSITY_NAMES = {
+            normalDensity: 'Normal',
+            touchDensity: 'Touch',
+            compactDensity: 'Compact',
+        };
+        const DENSITY_ORDER = ['Normal', 'Touch', 'Compact'];
+
+        // Size slider bounds; at the maximum the screenshots render at full size
+        // (--shot-width becomes 100%) rather than being scaled down.
+        const SIZE_MIN = 300, SIZE_MAX = 1800, SIZE_DEFAULT = 900;
+
+        // mozscreenshots job name (the part after the build ID) -> section label,
+        // and the order sections are shown in. Any section seen in the data but
+        // not listed here still renders (appended after these, raw name).
+        const SECTION_LABELS = {
+            primaryUI: 'Primary UI',
+            controlCenter: 'Control Center',
+            permissionPrompts: 'Permission Prompts',
+            preferences: 'Preferences',
+            devtools: 'DevTools',
+            other: 'Other',
+        };
+        const SECTION_ORDER = Object.keys(SECTION_LABELS);
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
+        }
+
+        // --- Fetching -------------------------------------------------------
+
+        // Resolve the latest task for a test platform via its index namespace.
+        // The test-platform is e.g. `linux2404-64/opt`, but a Taskcluster index
+        // namespace segment may only contain [a-zA-Z0-9_!~*'()%-] — no slash —
+        // so the patch sanitizes `/`→`-` before appending it to the index
+        // job-name, giving `…mochitest-browser-screenshots.linux2404-64-opt`.
+        // We must build the identical sanitized namespace here.
+        async function findTaskId(testPlatform) {
+            const suffix = testPlatform.replace(/\//g, '-');
+            const ns = `gecko.v2.${REPO}.latest.source.mochitest-browser-screenshots.${suffix}`;
+            const data = await fetchJson(`${INDEX}/task/${encodeURIComponent(ns)}`);
+            return data && data.taskId ? data.taskId : null;
+        }
+
+        // List all of a task's artifacts, following continuation tokens (a
+        // screenshots run produces well over the default page size of images).
+        async function listArtifacts(taskId) {
+            const artifacts = [];
+            let continuationToken = '';
+            do {
+                let url = `${QUEUE}/task/${taskId}/artifacts?limit=1000`;
+                if (continuationToken) {
+                    url += `&continuationToken=${encodeURIComponent(continuationToken)}`;
+                }
+                const data = await fetchJson(url);
+                if (!data) {
+                    break;
+                }
+                artifacts.push(...(data.artifacts || []));
+                continuationToken = data.continuationToken || '';
+            } while (continuationToken);
+            return artifacts;
+        }
+
+        // --- Filename parsing ----------------------------------------------
+        //
+        // A screenshot artifact is named
+        //   public/test_info/<buildID>-<job>_<NN>_<config>_<config>….png
+        // (or `<buildID>_<NN>_…` when the job ran without a job name). <buildID>
+        // is the 14-digit appBuildID, <NN> the zero-padded combo index, and the
+        // remaining underscore-separated tokens are the applied configurations.
+        function parseArtifact(name) {
+            const file = name.replace(/^public\/test_info\//, '');
+            const base = file.replace(/\.png$/i, '');
+
+            let m = base.match(/^\d{8,}-([A-Za-z][A-Za-z0-9]*)_(\d+)_(.+)$/);
+            let section, nn, tokensStr;
+            if (m) {
+                [, section, nn, tokensStr] = m;
+            } else {
+                m = base.match(/^\d{8,}_(\d+)_(.+)$/);
+                if (m) {
+                    section = 'other';
+                    [, nn, tokensStr] = m;
+                } else {
+                    // Anything that doesn't look like a combo screenshot (e.g.
+                    // the boundingbox/cropping reference images) is shown as-is.
+                    return {
+                        file, section: 'other', nn: '', tokens: [base],
+                        theme: 'Default', density: 'Normal', comboKey: `other|${base}`,
+                    };
+                }
+            }
+
+            const tokens = tokensStr.split('_');
+            let theme = 'Default';
+            let density = 'Normal';
+            for (const t of tokens) {
+                if (THEME_NAMES[t]) {
+                    theme = THEME_NAMES[t];
+                }
+                if (DENSITY_NAMES[t]) {
+                    density = DENSITY_NAMES[t];
+                }
+            }
+            // The combo index is identical across platforms (same configuration
+            // product), so (section, NN) lines the same shot up across OSes.
+            return { file, section, nn, tokens, theme, density, comboKey: `${section}|${nn}` };
+        }
+
+        // --- State ----------------------------------------------------------
+        let allRows = [];              // [{ section, nn, tokens, theme, density, byPlatform }]
+        const availableSections = [];  // section ids present in the data, in order
+        const availableThemes = [];    // theme labels present in the data
+        const availableDensities = []; // density labels present in the data
+        const platformHasData = {};    // id -> bool
+
+        const params = new URLSearchParams(location.search);
+        // Platform, theme and density are single-select (radio buttons); the
+        // empty defaults for theme/density are resolved to the first available
+        // value once we know what the data contains. Windows is shown by default.
+        let selectedPlatform = params.get('platform') || 'windows';
+        let selectedTheme = params.get('theme') || '';
+        let selectedDensity = params.get('density') || '';
+        let selectedSection = params.get('section') || 'all';
+        let shotWidth = parseInt(params.get('size'), 10) || SIZE_DEFAULT;
+
+        // Drive the screenshot max-width from the size slider. At the maximum we
+        // use 100% so a wide-enough window shows the screenshots at full size
+        // instead of scaling them down.
+        function applyShotWidth() {
+            const value = shotWidth >= SIZE_MAX ? '100%' : `${shotWidth}px`;
+            document.documentElement.style.setProperty('--shot-width', value);
+        }
+
+        // Persist the toggle state in the URL without dropping ?data-source= etc.
+        function syncUrl() {
+            const p = new URLSearchParams(location.search);
+            p.set('platform', selectedPlatform);
+            p.set('theme', selectedTheme);
+            p.set('density', selectedDensity);
+            p.set('section', selectedSection);
+            p.set('size', String(shotWidth));
+            history.replaceState(null, '', `${location.pathname}?${p.toString()}${location.hash}`);
+        }
+
+        // --- Rendering ------------------------------------------------------
+
+        // Populate a control group with radio-style buttons: clicking one makes
+        // it the sole active button. `onpick(value)` updates the backing state;
+        // the caller re-renders the gallery.
+        function buildRadioGroup(group, values, isActive, label, onpick) {
+            for (const value of values) {
+                const btn = document.createElement('button');
+                btn.textContent = label(value);
+                btn.dataset.value = value;
+                btn.classList.toggle('active', isActive(value));
+                btn.onclick = () => {
+                    group.querySelectorAll('button').forEach(b =>
+                        b.classList.toggle('active', b === btn));
+                    onpick(value);
+                    syncUrl();
+                    renderGallery();
+                };
+                group.appendChild(btn);
+            }
+        }
+
+        // Themes/densities that actually have screenshots in the current section
+        // (or across everything when "All" is selected), in their canonical order.
+        function valuesInSection(order, key) {
+            const rows = selectedSection === 'all'
+                ? allRows : allRows.filter(r => r.section === selectedSection);
+            return order.filter(v => rows.some(r => r[key] === v));
+        }
+
+        // Reconcile the Theme/Density selection with what the current section
+        // offers — e.g. DevTools only has the default theme, so selecting it
+        // moves the Theme toggle off Dark — and grey out the buttons that have
+        // no data in this section. Avoids landing on an empty gallery.
+        function refreshRadioGroup(groupId, availableValues, selectedValue) {
+            document.getElementById(groupId).querySelectorAll('button').forEach(b => {
+                const enabled = availableValues.includes(b.dataset.value);
+                b.disabled = !enabled;
+                b.classList.toggle('active', enabled && b.dataset.value === selectedValue);
+            });
+        }
+        function syncFacetAvailability() {
+            const themes = valuesInSection(THEME_ORDER, 'theme');
+            const densities = valuesInSection(DENSITY_ORDER, 'density');
+            if (!themes.includes(selectedTheme)) {
+                selectedTheme = themes[0];
+            }
+            if (!densities.includes(selectedDensity)) {
+                selectedDensity = densities[0];
+            }
+            refreshRadioGroup('theme-group', themes, selectedTheme);
+            refreshRadioGroup('density-group', densities, selectedDensity);
+        }
+
+        function renderControls() {
+            // Platforms are radio-style too, but a platform with no indexed run
+            // is shown disabled rather than omitted, so handle it separately.
+            const platformGroup = document.getElementById('platform-group');
+            for (const p of PLATFORMS) {
+                const btn = document.createElement('button');
+                btn.textContent = p.label;
+                btn.disabled = !platformHasData[p.id];
+                btn.classList.toggle('active', p.id === selectedPlatform && !btn.disabled);
+                btn.title = platformHasData[p.id] ? '' : 'No indexed run found for this platform';
+                btn.onclick = () => {
+                    selectedPlatform = p.id;
+                    platformGroup.querySelectorAll('button').forEach(b =>
+                        b.classList.toggle('active', b === btn));
+                    syncUrl();
+                    renderGallery();
+                };
+                platformGroup.appendChild(btn);
+            }
+
+            buildRadioGroup(document.getElementById('theme-group'), availableThemes,
+                t => t === selectedTheme, t => t, t => { selectedTheme = t; });
+
+            buildRadioGroup(document.getElementById('density-group'), availableDensities,
+                d => d === selectedDensity, d => d, d => { selectedDensity = d; });
+
+            buildRadioGroup(document.getElementById('section-group'), ['all', ...availableSections],
+                s => s === selectedSection,
+                s => s === 'all' ? 'All' : (SECTION_LABELS[s] || s),
+                s => { selectedSection = s; syncFacetAvailability(); });
+
+            // Reflect the initial section's theme/density availability.
+            syncFacetAvailability();
+
+            const sizeRange = document.getElementById('size-range');
+            sizeRange.min = SIZE_MIN;
+            sizeRange.max = SIZE_MAX;
+            sizeRange.value = shotWidth;
+            applyShotWidth();
+            sizeRange.oninput = () => {
+                shotWidth = parseInt(sizeRange.value, 10);
+                applyShotWidth();
+                syncUrl();
+            };
+
+            document.getElementById('controls').style.display = '';
+        }
+
+        function renderGallery() {
+            const gallery = document.getElementById('gallery');
+            const platform = PLATFORMS.find(p => p.id === selectedPlatform && platformHasData[p.id]);
+
+            const rows = platform ? allRows.filter(r =>
+                r.theme === selectedTheme &&
+                r.density === selectedDensity &&
+                (selectedSection === 'all' || r.section === selectedSection) &&
+                r.byPlatform[platform.id]
+            ) : [];
+
+            const summary = document.getElementById('summary');
+            if (!rows.length) {
+                summary.textContent = '';
+                gallery.innerHTML = '<div class="loading">No screenshots match the current filters.</div>';
+                return;
+            }
+            summary.textContent =
+                `Showing ${rows.length} screenshot${rows.length === 1 ? '' : 's'} · ` +
+                `${platform.label} · ${selectedTheme} theme · ${selectedDensity} density`;
+
+            // Group the matching rows by section so each job gets its own header.
+            const sections = selectedSection === 'all' ? availableSections : [selectedSection];
+            let html = '';
+            for (const sec of sections) {
+                const secRows = rows.filter(r => r.section === sec)
+                    .sort((a, b) => (parseInt(a.nn, 10) || 0) - (parseInt(b.nn, 10) || 0));
+                if (!secRows.length) {
+                    continue;
+                }
+                html += `<h2>${escapeHtml(SECTION_LABELS[sec] || sec)} ` +
+                        `<span class="note">(${secRows.length})</span></h2>`;
+                html += '<div class="section-shots">';
+                for (const r of secRows) {
+                    // Theme and density are already chosen via the toggles, so
+                    // drop those tokens from the label and show what's left.
+                    const label = r.tokens
+                        .filter(t => !THEME_NAMES[t] && !DENSITY_NAMES[t])
+                        .join(' · ') || '(default)';
+                    const url = r.byPlatform[platform.id];
+                    html += '<div class="combo">';
+                    html += `<div class="combo-head">` +
+                            (r.nn ? `<span class="nn">#${escapeHtml(r.nn)}</span>` : '') +
+                            escapeHtml(label) + '</div>';
+                    html += '<div class="shots">' +
+                            `<img class="shot-img" loading="lazy" src="${escapeHtml(url)}" ` +
+                            `alt="${escapeHtml(platform.label)}: ${escapeHtml(label)}">` +
+                            '</div></div>';
+                }
+                html += '</div>';
+            }
+            gallery.innerHTML = html;
+        }
+
+        // --- Load -----------------------------------------------------------
+        async function load() {
+            const errorEl = document.getElementById('error');
+            let platformData;
+            try {
+                platformData = await Promise.all(PLATFORMS.map(async p => {
+                    const taskId = await findTaskId(p.testPlatform);
+                    if (!taskId) {
+                        return { ...p, taskId: null, shots: [] };
+                    }
+                    const artifacts = await listArtifacts(taskId);
+                    const shots = artifacts
+                        .filter(a => a.name.startsWith('public/test_info/') && /\.png$/i.test(a.name))
+                        .map(a => ({
+                            ...parseArtifact(a.name),
+                            url: `${QUEUE}/task/${taskId}/artifacts/${encodeURI(a.name)}`,
+                        }));
+                    return { ...p, taskId, shots };
+                }));
+            } catch (e) {
+                errorEl.style.display = '';
+                errorEl.textContent = `Failed to load screenshots: ${e.message}`;
+                document.getElementById('gallery').innerHTML = '';
+                return;
+            }
+
+            // Merge every platform's shots into rows keyed by (section, NN).
+            const rowsByKey = new Map();
+            for (const p of platformData) {
+                platformHasData[p.id] = p.shots.length > 0;
+                for (const s of p.shots) {
+                    let row = rowsByKey.get(s.comboKey);
+                    if (!row) {
+                        row = { section: s.section, nn: s.nn, tokens: s.tokens,
+                                theme: s.theme, density: s.density, byPlatform: {} };
+                        rowsByKey.set(s.comboKey, row);
+                    }
+                    row.byPlatform[p.id] = s.url;
+                }
+            }
+            allRows = [...rowsByKey.values()];
+
+            // Discover which sections/themes are actually present, in a stable
+            // order, so the toggles only offer meaningful choices.
+            const sectionsPresent = new Set(allRows.map(r => r.section));
+            for (const sec of SECTION_ORDER) {
+                if (sectionsPresent.has(sec)) {
+                    availableSections.push(sec);
+                }
+            }
+            for (const sec of sectionsPresent) {
+                if (!availableSections.includes(sec)) {
+                    availableSections.push(sec);
+                }
+            }
+            for (const theme of THEME_ORDER) {
+                if (allRows.some(r => r.theme === theme)) {
+                    availableThemes.push(theme);
+                }
+            }
+            for (const density of DENSITY_ORDER) {
+                if (allRows.some(r => r.density === density)) {
+                    availableDensities.push(density);
+                }
+            }
+
+            if (!allRows.length) {
+                const where = REPO === 'try' ? 'the latest Try push' : REPO;
+                document.getElementById('gallery').innerHTML =
+                    `<div class="loading">No screenshots are indexed yet for ${escapeHtml(where)}. ` +
+                    `The mochitest-browser-screenshots jobs (bug 2050672) may not have run here yet.</div>`;
+                return;
+            }
+
+            // Default/repair the selected toggles against what's available.
+            if (!platformHasData[selectedPlatform]) {
+                const firstWithData = PLATFORMS.find(p => platformHasData[p.id]);
+                if (firstWithData) {
+                    selectedPlatform = firstWithData.id;
+                }
+            }
+            if (!availableThemes.includes(selectedTheme)) {
+                selectedTheme = availableThemes[0];
+            }
+            if (!availableDensities.includes(selectedDensity)) {
+                selectedDensity = availableDensities[0];
+            }
+            if (selectedSection !== 'all' && !availableSections.includes(selectedSection)) {
+                selectedSection = 'all';
+            }
+
+            // renderControls() runs syncFacetAvailability(), which may move the
+            // theme/density selection to fit the section, so persist afterwards.
+            renderControls();
+            syncUrl();
+            renderGallery();
+        }
+
+        // --- Lightbox (click a screenshot to zoom in locally) ---------------
+        const lightbox = document.getElementById('lightbox');
+        const lightboxImg = lightbox.querySelector('img');
+        function openLightbox(src, alt) {
+            lightboxImg.src = src;
+            lightboxImg.alt = alt || '';
+            lightbox.classList.add('open');
+        }
+        function closeLightbox() {
+            lightbox.classList.remove('open');
+            lightboxImg.removeAttribute('src');
+        }
+        lightbox.addEventListener('click', closeLightbox);
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                closeLightbox();
+            }
+        });
+        // Event delegation: the gallery is re-rendered on every filter change.
+        document.getElementById('gallery').addEventListener('click', e => {
+            const img = e.target.closest('img.shot-img');
+            if (img) {
+                openLightbox(img.src, img.alt);
+            }
+        });
+
+        load();
+    </script>
+</body>
+</html>
