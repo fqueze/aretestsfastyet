@@ -224,7 +224,7 @@
         // We must build the identical sanitized namespace here.
         async function findTaskId(testPlatform) {
             const suffix = testPlatform.replace(/\//g, '-');
-            const ns = `gecko.v2.${REPO}.latest.source.mochitest-browser-screenshots.${suffix}`;
+            const ns = `gecko.v2.${REPO}.latest.test.mochitest-browser-screenshots.${suffix}`;
             const data = await fetchJson(`${INDEX}/task/${encodeURIComponent(ns)}`);
             return data && data.taskId ? data.taskId : null;
         }
