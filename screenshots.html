@@ -160,15 +160,21 @@
         // `try` on the staging site, `mozilla-central` otherwise — matching
         // fetchFromCI()'s convention. Override locally with ?data-source=try.
         const REPO = getDataSource() === 'try' ? 'try' : 'mozilla-central';
+        const REPO_KEY = REPO === 'try' ? 'try' : 'central';
 
         // The three test platforms the screenshots job runs on. The index
         // job-name has the test-platform appended (see the test transform), so
-        // each platform has its own namespace. The label is what we show in the
-        // UI; `id` keys our per-platform data.
+        // each platform has its own namespace. The test-platform differs by
+        // repo: on central Linux/Windows run on the shippable builds, while Try
+        // runs plain opt (macOS is plain opt on both). The label is what we show
+        // in the UI; `id` keys our per-platform data.
         const PLATFORMS = [
-            { id: 'linux',   label: 'Linux',   testPlatform: 'linux2404-64/opt' },
-            { id: 'windows', label: 'Windows', testPlatform: 'windows11-64-25h2/opt' },
-            { id: 'macos',   label: 'macOS',   testPlatform: 'macosx1500-aarch64/opt' },
+            { id: 'linux',   label: 'Linux',
+              testPlatform: { try: 'linux2404-64/opt', central: 'linux2404-64-shippable/opt' } },
+            { id: 'windows', label: 'Windows',
+              testPlatform: { try: 'windows11-64-25h2/opt', central: 'windows11-64-25h2-shippable/opt' } },
+            { id: 'macos',   label: 'macOS',
+              testPlatform: { try: 'macosx1500-aarch64/opt', central: 'macosx1500-aarch64/opt' } },
         ];
 
         // The LightweightThemes configuration tokens that can appear in a combo
@@ -493,7 +499,7 @@
             let platformData;
             try {
                 platformData = await Promise.all(PLATFORMS.map(async p => {
-                    const taskId = await findTaskId(p.testPlatform);
+                    const taskId = await findTaskId(p.testPlatform[REPO_KEY]);
                     if (!taskId) {
                         return { ...p, taskId: null, shots: [] };
                     }
