@@ -299,15 +299,18 @@ test('the guide is right that errors defaults to mochitest', async () => {
 });
 
 test('the guide is right about which commands have a surprising harness default', async () => {
-    // `errors` and `intermittent` should carry `defaultHarness`. If another
-    // command's default changed and the guide were not updated, this notices.
+    // Only `errors` should carry `defaultHarness`. If another command's default
+    // changed and the guide were not updated, this notices.
     //
-    // `intermittent` defaults to mochitest for a different reason from
-    // `errors`: its harness filter is a per-bug scan rather than a file choice,
-    // so "both harnesses" would double the requests and leave a row's count
-    // ambiguous. The default is checked against behaviour below.
+    // `intermittent` carried it too, saying "defaults to --harness mochitest",
+    // and it never did: `--harness` there is a client-side scan over bugs the
+    // ranking API returns without a harness parameter, and omitting it ranks
+    // mochitest, xpcshell and `unknown` together. The guide printed that false
+    // line directly above a trap whose last sentence said the opposite. The old
+    // assertion could not catch it because it compared the table with a copy of
+    // itself; this one requires a behavioural check per entry.
     const surprising = COMMAND_FACTS.filter((fact) => fact.defaultHarness !== undefined);
-    assert.deepEqual(surprising.map((fact) => fact.name), ['intermittent', 'errors']);
+    assert.deepEqual(surprising.map((fact) => fact.name), ['errors']);
 
     // …and the ordinary default really is xpcshell for a tree-wide command.
     const { requested } = await invoke(['issues', '--json', '--limit', '1']);

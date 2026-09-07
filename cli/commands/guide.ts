@@ -96,7 +96,14 @@ export interface CommandFact {
      */
     reads: string;
     answers: string;
-    /** Set where the harness default is not the usual `xpcshell`. */
+    /**
+     * Set where the harness default is not the usual `xpcshell`.
+     *
+     * Only where the command really picks a harness on its own. `intermittent`
+     * carried `mochitest` here and does not have a default at all — omitting
+     * `--harness` ranks mochitest, xpcshell and `unknown` together — so the
+     * guide printed a line contradicting its own trap two screens later.
+     */
     defaultHarness?: string;
     /** The default row limit, where the command has one. */
     defaultLimit?: number;
@@ -163,7 +170,6 @@ export const COMMAND_FACTS: readonly CommandFact[] = [
         reads: 'Treeherder /api/failures/ + /api/failuresbybug/ + Bugzilla /rest/bug',
         answers:
             'Which annotated intermittents cost sheriffs the most, tree-wide, and with which bug?',
-        defaultHarness: 'mochitest',
         defaultLimit: 20,
     },
     {
@@ -255,9 +261,8 @@ export const TRAPS: readonly TrapFact[] = [
         body: [
             'A test failing **every time** on one platform and passing everywhere else still',
             'reads as a low single-digit percentage overall, because the rate divides failures',
-            'from every config by runs from every config. So a small overall rate is not',
-            'evidence a test is healthy, and `fx-tests test` leads with a verdict and a',
-            'per-config table rather than one number.',
+            'from every config by runs from every config. So a small rate is not evidence of',
+            'health, and `fx-tests test` leads with a verdict and a per-config table.',
         ],
     },
     {
@@ -301,8 +306,7 @@ export const TRAPS: readonly TrapFact[] = [
             'size. xpcshell runs its tests in parallel, so stdout cannot be streamed as it is',
             'produced and is replayed **only when a test fails** — the xpcshell errors file is',
             'failing tests’ output and nothing else. That is a biased population, not a smaller',
-            'sample of the same one: ranking it answers "what do failing tests print", not',
-            '"what is noisy in CI", which is what a reader of a ranking assumes.',
+            'sample: it answers "what do failing tests print", not "what is noisy in CI".',
         ],
     },
     {
@@ -567,9 +571,8 @@ export function render(): string {
     lines.push('  Lists are truncated by default and say so (`… 47 more (--limit 0 for all)`).');
     lines.push('  If a list looks short, check for that line before believing it is complete.');
     lines.push('');
-    lines.push('  Messages are cut to the terminal width, and the cut takes the end — which is');
-    lines.push('  often the discriminator. COLUMNS widens it; --full-messages turns it off, as');
-    lines.push('  does --markdown, which never truncates.');
+    lines.push('  Messages are cut to the terminal width, and the cut takes the end — often');
+    lines.push('  the discriminator. COLUMNS widens it; --full-messages and --markdown do not cut.');
 
     return joinLines(lines);
 }
