@@ -390,6 +390,17 @@ const WORKFLOWS: readonly Workflow[] = [
         ],
     },
     {
+        // The single most useful flag in this CLI, by the report of five agents
+        // who used it, and it appeared nowhere in this guide. Kept to one line
+        // because the guide has a hard 200-line budget and `--history` earns
+        // its place by being run, not by being described.
+        title: 'Is this failure getting worse, and since when',
+        steps: [
+            'fx-tests test <path> --history',
+            '    Per-day pass and fail counts — the only time axis, and what dates a regression.',
+        ],
+    },
+    {
         title: 'A job is timing out',
         steps: [
             'fx-tests manifests --job <config> --sort median',

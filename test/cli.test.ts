@@ -120,6 +120,37 @@ function fixtureSource(): DataSource & { requested: string[] } {
     };
 }
 
+/**
+ * An intermittents client that throws if anything touches it.
+ *
+ * Two jobs. It keeps this file offline: without a stub, `run()` builds a real
+ * client against `nodeFetch`, so any command that reached the intermittents API
+ * would have this suite hitting Treeherder and Bugzilla for real — slower,
+ * flakier, and different on a plane.
+ *
+ * And it is how "the default path makes no request" is *asserted* rather than
+ * assumed. A stub returning empty results would let a regression that resolves
+ * the annotations by default pass silently; one that throws turns that
+ * regression into a failure. `fx-tests test --bugs` is the only thing in here
+ * that may touch it, and those tests pass their own client.
+ *
+ * `test/intermittent.test.ts` has the recorded fixture client and is where the
+ * ranking's behaviour is actually pinned.
+ */
+function silentIntermittents(): NonNullable<Parameters<typeof run>[0]['intermittents']> {
+    const refuse = (method: string) => (): never => {
+        throw new Error(
+            `intermittents.${method} was called, but this command should make no live request`
+        );
+    };
+    return {
+        rankBugs: refuse('rankBugs'),
+        occurrencesOfBug: refuse('occurrencesOfBug'),
+        runIdsOfJobs: refuse('runIdsOfJobs'),
+        bugSummaries: refuse('bugSummaries'),
+    };
+}
+
 /** Runs one invocation and returns everything a test might assert on. */
 async function invoke(
     argv: string[],
@@ -128,6 +159,7 @@ async function invoke(
     const streams = captureStreams();
     const source = (overrides.source as DataSource & { requested: string[] }) ?? fixtureSource();
     const code = await run({
+        intermittents: silentIntermittents(),
         argv,
         streams,
         source,
@@ -1576,7 +1608,13 @@ test('--profiles text says what the list is and where per-test profiles are', as
     // Claiming an absence instead read as "no profile exists" and readers
     // stopped looking.
     assert.match(stdout, /these are resource-usage profiles/);
-    assert.match(stdout, /fx-tests try <rev> --profiles/);
+    // `intermittent --test <path>`, not `try <rev>`: the try route needs a
+    // revision, and every report of this footnote came from someone looking at
+    // a trunk intermittent with no try push at all. The path is printed
+    // literally so the line can be pasted — never rebuilt from the test name,
+    // which `lib/links.ts` forbids and the `-2` rerun suffix would break.
+    assert.match(stdout, new RegExp(`fx-tests intermittent --test ${TEST_PATH} --profiles`));
+    assert.doesNotMatch(stdout, /fx-tests try <rev> --profiles/);
 });
 
 test('--profiles text omits the caveat when a per-test profile IS found', async () => {
@@ -1651,6 +1689,214 @@ test('--durations reports a distribution ordered min <= median <= p95 <= max', a
         assert.ok(row.p95 <= row.max, `p95 ${row.p95} <= max ${row.max}`);
         assert.ok(row.runCount > 0);
     }
+});
+
+// --- the flat-counts hint, and the bugs naming this test -------------------
+
+test('the default view points at --history when the daily counts are not flat', async () => {
+    const { stdout } = await invoke(['test', TEST_PATH]);
+    // The default view has no time axis, so a failure that started last Tuesday
+    // and one that has been there three weeks read identically. This is the
+    // line that separates them, and it is the only pointer to `--history`
+    // anywhere in the command's own output.
+    assert.match(stdout, /Daily counts are not flat; --history shows the per-day breakdown\./);
+});
+
+test('the flat-counts hint is a reading of the same rows --history prints', async () => {
+    // Not a second per-day tally: the hint and the table are one computation,
+    // so they cannot disagree about which day was the outlier.
+    const { stdout } = await invoke(['test', TEST_PATH, '--history', '--json']);
+    const result = json(stdout);
+    const history = result['history'] as { fail: number; timeout: number; crash: number }[];
+    const counts = history.map((row) => row.fail + row.timeout + row.crash);
+    const sorted = [...counts].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    const median =
+        sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+    // Zero-run days are in the median on purpose: a test that stopped running,
+    // or only started on Friday, is exactly the discontinuity the hint exists
+    // to advertise, and excluding those days would hide it.
+    const flat =
+        median === 0 ? false : counts.every((c) => c <= median * 10 && c * 10 >= median);
+    assert.equal(result['dailyCountsAreFlat'], flat);
+});
+
+test('a test with no failures at all is neither flat nor not flat', async () => {
+    // `null`, not `true`: "the counts are level" and "there are no counts" are
+    // different claims, and only one of them is worth a line of output.
+    const args = ['test', MULTI_CONFIG_TEST, '--config', CLEAN_CONFIG];
+    const { stdout } = await invoke([...args, '--json']);
+    const result = json(stdout);
+    assert.equal((result['totals'] as Record<string, number>)['failCount'], 0);
+    assert.equal(result['dailyCountsAreFlat'], null);
+    const { stdout: text } = await invoke(args);
+    assert.doesNotMatch(text, /Daily counts are not flat/);
+});
+
+/** A ranking in which two of three bugs name `TEST_PATH`. */
+function bugNamingClient(): NonNullable<Parameters<typeof run>[0]['intermittents']> {
+    return {
+        rankBugs: () =>
+            Promise.resolve([
+                { bugId: 2063582, count: 252 },
+                { bugId: 2059110, count: 12 },
+                { bugId: 1, count: 999 },
+            ]),
+        occurrencesOfBug: () => Promise.resolve([]),
+        runIdsOfJobs: () => Promise.resolve(new Map()),
+        bugSummaries: () =>
+            Promise.resolve(
+                new Map([
+                    [2063582, `Intermittent ${TEST_PATH} | single tracking bug`],
+                    [2059110, `Intermittent ${TEST_PATH} | application terminated`],
+                    [1, 'Intermittent some/other/test.js | unrelated'],
+                ])
+            ),
+    };
+}
+
+test('the default path makes no intermittents request at all', async () => {
+    // The load-bearing assertion of the whole flag. `test` is run constantly,
+    // and resolving the annotations by default put traffic on the machines
+    // serving Treeherder's API that they did not previously carry — a cost no
+    // local cache gives back, because it is per user rather than per run.
+    //
+    // Asserted rather than assumed: `silentIntermittents()` throws on every
+    // method, and `fetchAnnotatedBugs` catches, so a regression here would be
+    // invisible if the client returned empty results instead. The whole default
+    // view is rendered, so a request anywhere in it would fail this.
+    const { code, stdout, stderr } = await invoke(['test', TEST_PATH]);
+    assert.equal(code, ExitCode.Success);
+    assert.doesNotMatch(stderr, /should make no live request/);
+    assert.doesNotMatch(stdout, /Bugs naming this test/);
+    // The flags that read the same published file must stay quiet too.
+    for (const flag of ['--coverage', '--history', '--task-ids', '--durations', '--executions']) {
+        const withFlag = await invoke(['test', TEST_PATH, flag]);
+        assert.equal(withFlag.code, ExitCode.Success, `${flag} exited ${withFlag.code}`);
+        assert.doesNotMatch(withFlag.stderr, /should make no live request/, flag);
+    }
+});
+
+test('--bugs is what asks, and the default leaves the field null', async () => {
+    const quiet = await invoke(['test', TEST_PATH, '--json']);
+    // The key is *absent*, not `null`. Both `null` and `[]` read as "no bugs"
+    // at a glance, and `null` is the more natural spelling of it, so it
+    // suggested the opposite of what it meant. Absence cannot be misread.
+    assert.ok(
+        !('annotatedBugs' in json(quiet.stdout)),
+        'the default output must omit annotatedBugs, not set it to null'
+    );
+
+    const asked = await invoke(['test', TEST_PATH, '--bugs', '--json'], {
+        intermittents: bugNamingClient(),
+    });
+    const bugs = json(asked.stdout)['annotatedBugs'] as {
+        bugId: number;
+        bugSummary: string;
+    }[];
+    assert.deepEqual(bugs.map((bug) => bug.bugId), [2063582, 2059110]);
+    // The summaries are paid for — resolving which bugs name the test means
+    // reading them — so they are carried through rather than discarded. The
+    // triage prefix and the path are stripped, leaving what the caller did not
+    // already type.
+    assert.deepEqual(bugs.map((bug) => bug.bugSummary), [
+        'single tracking bug',
+        'application terminated',
+    ]);
+});
+
+test('the bugs naming this test come from the intermittent ranking', async () => {
+    // Item 10: the first question anyone asks about a failing test, and until
+    // now the only way to answer it was to pull the whole ranking as JSON and
+    // grep it. Resolved through `bugsNamingTest`, the same lookup
+    // `intermittent --test` uses — a second resolver is the failure this is
+    // meant to prevent.
+    const { stdout } = await invoke(['test', TEST_PATH, '--bugs'], {
+        intermittents: bugNamingClient(),
+    });
+    assert.match(stdout, /^Bugs naming this test$/m);
+    // A block, not a line: more than one bug can name one test, and picking
+    // the largest would hide the one the reader did not get.
+    assert.match(stdout, /2063582\s+252 annotations, last 7 days\s+fx-tests intermittent --bug 2063582/);
+    assert.match(stdout, /2059110\s+12 annotations, last 7 days\s+fx-tests intermittent --bug 2059110/);
+    // The summary, on its own line under each bug. Without it a reader has to
+    // run the suggested command just to learn what the bug is — a second
+    // command, and a second full ranking fetch, for data already in hand.
+    assert.match(stdout, /^ +single tracking bug$/m);
+    assert.match(stdout, /^ +application terminated$/m);
+    // The bug naming a different test is not in the block.
+    assert.doesNotMatch(stdout, /fx-tests intermittent --bug 1$/m);
+});
+
+test('a long bug summary is truncated, not wrapped', async () => {
+    // Truncation rather than wrapping is a deliberate split from
+    // `intermittent --bug`, whose headline wraps because there the summary *is*
+    // the content. Here it is one row among several and the reader is scanning
+    // bug numbers, so a summary must not push the next bug off the screen.
+    const long = 'x'.repeat(400);
+    const client = () => ({
+        rankBugs: () => Promise.resolve([{ bugId: 42, count: 7 }]),
+        occurrencesOfBug: () => Promise.resolve([]),
+        runIdsOfJobs: () => Promise.resolve(new Map<number, number>()),
+        bugSummaries: () =>
+            Promise.resolve(new Map([[42, `Intermittent ${TEST_PATH} | ${long}`]])),
+    });
+    const summaryOf = (stdout: string): string | undefined =>
+        stdout.split('\n').find((line) => line.includes('xxx'));
+
+    const { stdout } = await invoke(['test', TEST_PATH, '--bugs'], {
+        intermittents: client(),
+    });
+    assert.match(stdout, /Bugs naming this test/);
+    const cut = summaryOf(stdout);
+    assert.ok(cut !== undefined, 'the summary line should be printed');
+    // Cut with an ellipsis, and onto one line — never re-flowed across several.
+    assert.match(cut, /…$/);
+    assert.ok(cut.length < long.length, `the summary should be cut, got ${cut.length}`);
+
+    // `--full-messages` opts out, as it does everywhere else. Pinned because
+    // the first version of this test passed the flag by mistake and read the
+    // uncut output as a truncation bug — the flag was working.
+    const full = await invoke(['test', TEST_PATH, '--bugs', '--full-messages'], {
+        intermittents: client(),
+    });
+    const whole = summaryOf(full.stdout);
+    assert.ok(whole !== undefined && whole.includes(long), '--full-messages must not cut');
+});
+
+test('no block is printed when no annotated bug names the test', async () => {
+    // "Print nothing", per the spec — not "no bugs found", which reads as a
+    // measurement and would be one more line on every healthy test. Asked for
+    // here, so this is the empty *answer* rather than the unasked default.
+    const { stdout } = await invoke(['test', TEST_PATH, '--bugs'], {
+        intermittents: {
+            rankBugs: () => Promise.resolve([{ bugId: 1, count: 999 }]),
+            occurrencesOfBug: () => Promise.resolve([]),
+            runIdsOfJobs: () => Promise.resolve(new Map()),
+            bugSummaries: () =>
+                Promise.resolve(new Map([[1, 'Intermittent some/other/test.js | unrelated']])),
+        },
+    });
+    assert.doesNotMatch(stdout, /Bugs naming this test/);
+});
+
+test('a Treeherder outage costs the bug block, not the whole answer', async () => {
+    // Everything else `test` prints comes from a published file. Exiting 3
+    // because a live API is down would lose an answer the command already had.
+    const { code, stdout, stderr } = await invoke(['test', TEST_PATH, '--bugs', '--json'], {
+        intermittents: {
+            rankBugs: () => Promise.reject(new Error('treeherder is down')),
+            occurrencesOfBug: () => Promise.resolve([]),
+            runIdsOfJobs: () => Promise.resolve(new Map()),
+            bugSummaries: () => Promise.resolve(new Map()),
+        },
+    });
+    assert.equal(code, ExitCode.Success);
+    // Three states, all distinguishable: `null` is nobody asked, `[]` is asked
+    // and nothing names it, `{ error }` is asked and could not be answered.
+    // Collapsing the last two would report a healthy test during an outage.
+    assert.deepEqual(json(stdout)['annotatedBugs'], { error: 'treeherder is down' });
+    assert.match(stderr, /treeherder is down/);
 });
 
 // --- limits and truncation -------------------------------------------------

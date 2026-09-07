@@ -1,5 +1,306 @@
 #!/usr/bin/env node
 
+// lib/sources/treeherder.ts
+var TREEHERDER_ROOT = "https://treeherder.mozilla.org";
+var FAILED_JOB_RESULTS = /* @__PURE__ */ new Set([
+  "testfailed",
+  "busted",
+  "exception"
+]);
+var TreeherderError = class extends Error {
+  url;
+  status;
+  constructor(message, url, status) {
+    super(message);
+    this.name = "TreeherderError";
+    this.url = url;
+    this.status = status;
+  }
+};
+var PushNotFoundError = class extends Error {
+  revision;
+  repository;
+  constructor(revision, repository) {
+    super(`no push found for revision ${revision} on ${repository}`);
+    this.name = "PushNotFoundError";
+    this.revision = revision;
+    this.repository = repository;
+  }
+};
+function treeherderClient(options) {
+  const root = options.root ?? TREEHERDER_ROOT;
+  const maxPages = options.maxPages ?? 100;
+  async function getJson(url) {
+    let response;
+    try {
+      response = await options.fetch(url);
+    } catch (error) {
+      throw new TreeherderError(
+        `request to Treeherder failed: ${error.message}`,
+        url
+      );
+    }
+    if (!response.ok) {
+      throw new TreeherderError(
+        `Treeherder returned HTTP ${response.status}`,
+        url,
+        response.status
+      );
+    }
+    const text = new TextDecoder().decode(await response.arrayBuffer());
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new TreeherderError(
+        `Treeherder response is not valid JSON: ${error.message}`,
+        url
+      );
+    }
+  }
+  return {
+    async findPush(repository, revision) {
+      const url = `${root}/api/project/${encodeURIComponent(repository)}/push/?full=true&count=10&revision=${encodeURIComponent(revision)}`;
+      const data = await getJson(url);
+      const first = data.results?.[0];
+      if (first === void 0) {
+        throw new PushNotFoundError(revision, repository);
+      }
+      if (typeof first.id !== "number") {
+        throw new TreeherderError(
+          `push for ${revision} has no numeric id`,
+          url
+        );
+      }
+      return {
+        pushId: first.id,
+        revision: first.revision ?? revision,
+        repository,
+        revisions: first.revisions ?? []
+      };
+    },
+    async jobsOfPush(pushId) {
+      const jobs = [];
+      let url = `${root}/api/jobs/?push_id=${pushId}`;
+      let propertyNames = null;
+      let pages = 0;
+      while (url !== null) {
+        if (++pages > maxPages) {
+          throw new TreeherderError(
+            `job listing for push ${pushId} exceeded ${maxPages} pages; refusing to keep following "next"`,
+            url
+          );
+        }
+        const data = await getJson(url);
+        propertyNames ??= data.job_property_names ?? null;
+        if (propertyNames === null) {
+          throw new TreeherderError(
+            `Treeherder returned jobs with no job_property_names, so the positional rows cannot be decoded`,
+            url
+          );
+        }
+        const columns = jobColumns(propertyNames, url);
+        for (const row of data.results ?? []) {
+          jobs.push(readJob(row, columns));
+        }
+        url = data.next ?? null;
+      }
+      return jobs;
+    }
+  };
+}
+function jobColumns(propertyNames, url) {
+  const required = ["id", "job_type_name", "task_id", "retry_id", "state", "result"];
+  const missing = required.filter((name) => !propertyNames.includes(name));
+  if (missing.length > 0) {
+    throw new TreeherderError(
+      `Treeherder's job_property_names is missing ${missing.join(", ")}; got: ${propertyNames.join(", ")}`,
+      url
+    );
+  }
+  return {
+    jobId: propertyNames.indexOf("id"),
+    jobName: propertyNames.indexOf("job_type_name"),
+    taskId: propertyNames.indexOf("task_id"),
+    retryId: propertyNames.indexOf("retry_id"),
+    state: propertyNames.indexOf("state"),
+    result: propertyNames.indexOf("result")
+  };
+}
+function readJob(row, columns) {
+  return {
+    jobId: Number(row[columns.jobId] ?? 0),
+    jobName: String(row[columns.jobName] ?? ""),
+    taskId: String(row[columns.taskId] ?? ""),
+    // A null `retry_id` means run 0, which is how Treeherder writes the
+    // first run of a task.
+    retryId: Number(row[columns.retryId] ?? 0),
+    state: String(row[columns.state] ?? ""),
+    result: String(row[columns.result] ?? "")
+  };
+}
+
+// lib/sources/intermittents.ts
+var BUGZILLA_ROOT = "https://bugzilla.mozilla.org";
+var UNKNOWN_TASK_ID = "unknown";
+var IntermittentsError = class extends Error {
+  url;
+  status;
+  constructor(message, url, status) {
+    super(message);
+    this.name = "IntermittentsError";
+    this.url = url;
+    this.status = status;
+  }
+};
+var TREE_GROUPS = ["trunk", "firefox-releases", "comm-releases"];
+function intermittentsClient(options) {
+  const root = options.root ?? TREEHERDER_ROOT;
+  const bugzillaRoot = options.bugzillaRoot ?? BUGZILLA_ROOT;
+  async function getJson(url) {
+    let response;
+    try {
+      response = await options.fetch(url);
+    } catch (error) {
+      throw new IntermittentsError(
+        `request failed: ${error.message}`,
+        url
+      );
+    }
+    if (!response.ok) {
+      throw new IntermittentsError(`HTTP ${response.status}`, url, response.status);
+    }
+    const text = new TextDecoder().decode(await response.arrayBuffer());
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new IntermittentsError(
+        `response is not valid JSON: ${error.message}`,
+        url
+      );
+    }
+  }
+  return {
+    async rankBugs(tree, range) {
+      const url = `${root}/api/failures/?${rangeQuery(tree, range)}`;
+      const rows2 = await getJson(url);
+      return rows2.map((row) => ({ bugId: row.bug_id, count: row.bug_count }));
+    },
+    async occurrencesOfBug(tree, range, bug) {
+      const url = `${root}/api/failuresbybug/?${rangeQuery(tree, range)}&bug=${bug}`;
+      const rows2 = await getJson(url);
+      return rows2.map((row) => ({
+        bugId: row.bug_id,
+        jobId: row.job_id,
+        testSuite: row.test_suite,
+        platform: row.platform,
+        buildType: row.build_type,
+        revision: row.revision,
+        tree: row.tree,
+        pushTime: row.push_time,
+        machineName: row.machine_name,
+        taskId: row.task_id,
+        runId: null,
+        lines: row.lines
+      }));
+    },
+    async runIdsOfJobs(jobIds) {
+      const found = /* @__PURE__ */ new Map();
+      for (const batch of chunk([...new Set(jobIds)], JOB_BATCH_SIZE)) {
+        if (batch.length === 0) {
+          continue;
+        }
+        const url = `${root}/api/jobs/?id__in=${batch.join(",")}`;
+        const data = await getJson(url);
+        if (data.next != null) {
+          throw new IntermittentsError(
+            `Treeherder paginated a ${batch.length}-job request, so ${JOB_BATCH_SIZE} is above its current page size; lower JOB_BATCH_SIZE or follow "next"`,
+            url
+          );
+        }
+        const names = data.job_property_names ?? [];
+        const idColumn = names.indexOf("id");
+        const retryColumn = names.indexOf("retry_id");
+        if (idColumn === -1 || retryColumn === -1) {
+          throw new IntermittentsError(
+            `Treeherder's job_property_names is missing id or retry_id, so the positional rows cannot be decoded; got: ${names.join(", ")}`,
+            url
+          );
+        }
+        for (const row of data.results ?? []) {
+          found.set(Number(row[idColumn]), Number(row[retryColumn] ?? 0));
+        }
+      }
+      return found;
+    },
+    async bugSummaries(bugs) {
+      const found = /* @__PURE__ */ new Map();
+      for (const batch of chunk(bugs, BUG_BATCH_SIZE)) {
+        if (batch.length === 0) {
+          continue;
+        }
+        const url = `${bugzillaRoot}/rest/bug?id=${batch.join(",")}&include_fields=id,summary`;
+        const data = await getJson(url);
+        for (const bug of data.bugs ?? []) {
+          found.set(bug.id, bug.summary);
+        }
+      }
+      return found;
+    }
+  };
+}
+var BUG_BATCH_SIZE = 100;
+var JOB_BATCH_SIZE = 200;
+function rangeQuery(tree, range) {
+  return `startday=${encodeURIComponent(range.start)}&endday=${encodeURIComponent(range.end)}&tree=${encodeURIComponent(tree)}`;
+}
+function chunk(items, size) {
+  const batches = [];
+  for (let i = 0; i < items.length; i += size) {
+    batches.push(items.slice(i, i + size));
+  }
+  return batches;
+}
+function harnessOfOccurrence(testSuite) {
+  if (/(^|-)mochitest(-|$)/.test(testSuite)) {
+    return "mochitest";
+  }
+  return /(^|-)xpcshell(-|$)/.test(testSuite) ? "xpcshell" : null;
+}
+function stripSuiteChunk(testSuite) {
+  return testSuite.replace(/-\d+$/, "");
+}
+function testPathCandidates(summary) {
+  const found = [];
+  for (const match of summary.matchAll(TEST_PATH_TOKEN)) {
+    const path = match[1];
+    if (!found.includes(path)) {
+      found.push(path);
+    }
+  }
+  return found;
+}
+var TEST_PATH_TOKEN = /\b((?:[\w.+-]+\/)+[\w.+-]+\.(?:js|mjs|html|xhtml|xul|sjs|py|toml|ini))\b/g;
+function summaryRemainder(summary, path) {
+  let rest = summary.replace(TRIAGE_PREFIX, "");
+  if (path !== null) {
+    rest = rest.replace(path, "");
+  }
+  return rest.replace(/^[\s|:-]+/, "").replace(/[\s|]+$/, "").trim();
+}
+var TRIAGE_PREFIX = /^(?:(?:perma(?:nent|fail)[a-z]*\b|perma\b|frequent[a-z]*\b|intermittent[a-z]*\b|high frequ[en]*cy\b|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
+function testPathOfLine(line) {
+  const marker = line.indexOf("TEST-UNEXPECTED-FAIL");
+  if (marker === -1) {
+    return null;
+  }
+  const fields2 = line.slice(marker).split("|");
+  const candidate = fields2[1]?.trim();
+  if (candidate === void 0 || candidate.length === 0) {
+    return null;
+  }
+  return candidate;
+}
+
 // cli/errors.ts
 var ExitCode = {
   /** Success. */
@@ -41,6 +342,25 @@ function upstreamError(message, hint) {
 }
 function goneError(message, hint) {
   return new CliError(ExitCode.Gone, message, hint);
+}
+async function withUpstreamErrors(work, tree) {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof IntermittentsError) {
+      if (error.status === 400) {
+        throw usageError(
+          `Treeherder rejected the query, which for these endpoints means an unknown tree: "${tree}"`,
+          `--tree takes a repository name (autoland, mozilla-central, \u2026), a repo group (${TREE_GROUPS.join(", ")}), or all.`
+        );
+      }
+      throw upstreamError(
+        `${error.message} from ${error.url}`,
+        "Treeherder\u2019s intermittents API and Bugzilla are both live services; retrying may work."
+      );
+    }
+    throw error;
+  }
 }
 
 // cli/args.ts
@@ -159,6 +479,25 @@ function listOption(args, name) {
   return Array.isArray(value) ? value : [];
 }
 
+// lib/model/test-path.ts
+var MANIFEST_PREFIX = /^[^:]+\.(?:toml|ini):/;
+function stripManifestPrefix(id) {
+  return id.replace(MANIFEST_PREFIX, "").replace(/\s+\(finished\)$/, "").trim();
+}
+function isTestFilePath(path) {
+  return /\.(js|html|xhtml)$/.test(path);
+}
+function normalizeTestPath(id) {
+  if (id === null || id === void 0 || id === "") {
+    return null;
+  }
+  const path = stripManifestPrefix(id);
+  return isTestFilePath(path) ? path : null;
+}
+function describeTestPathDrop(id) {
+  return id === null || id === void 0 || id === "" ? "no-id" : "not-a-test-path";
+}
+
 // lib/model/harness.ts
 function detectHarness(testPath) {
   const fileName = testPath.split("/").pop() ?? testPath;
@@ -172,6 +511,21 @@ function detectHarness(testPath) {
 }
 function otherHarness(harness) {
   return harness === "xpcshell" ? "mochitest" : "xpcshell";
+}
+function isDirectoryPath(path) {
+  return !isTestFilePath(path);
+}
+function harnessesForPathFilter(pathPrefix, explicit) {
+  if (explicit !== void 0) {
+    return { required: explicit, speculative: [] };
+  }
+  if (pathPrefix === void 0 || pathPrefix === "" || !isDirectoryPath(pathPrefix)) {
+    return { required: "xpcshell", speculative: [] };
+  }
+  return { required: "xpcshell", speculative: ["mochitest"] };
+}
+function describeSearchedFiles(files, formatCount) {
+  return files.map((file) => `${formatCount(file.testCount)} tests in ${file.harness}-issues.json`).join(" and ");
 }
 
 // cli/options.ts
@@ -925,6 +1279,68 @@ function truncate(value, maxWidth) {
   }
   return `${value.slice(0, Math.max(0, limit - 1))}\u2026`;
 }
+var GROUP_PREFIX_MIN = 60;
+function messageLines(messages, width) {
+  const out = [];
+  const leaderOf = /* @__PURE__ */ new Map();
+  for (let i = 0; i < messages.length; i++) {
+    for (let j = i - 1; j >= 0; j--) {
+      if (leaderOf.has(j)) {
+        continue;
+      }
+      if (commonPrefixLength([messages[i], messages[j]]) >= GROUP_PREFIX_MIN) {
+        leaderOf.set(i, j);
+        break;
+      }
+    }
+  }
+  for (let i = 0; i < messages.length; i++) {
+    const leader = leaderOf.get(i);
+    if (leader === void 0) {
+      for (const [n, text] of wrapText(messages[i], width).entries()) {
+        out.push({ index: i, text, first: n === 0 });
+      }
+      continue;
+    }
+    const shared = commonPrefixLength([messages[i], messages[leader]]);
+    const cut = wordsBefore(messages[i], shared, 2);
+    const difference2 = messages[i].slice(cut).trimStart();
+    const label = `\u2191 same as ${leader + 1}, but `;
+    const lines = wrapText(
+      difference2,
+      width === null ? null : Math.max(MIN_DIFFERENCE_WIDTH, width - label.length)
+    );
+    out.push({ index: i, text: label + (lines[0] ?? ""), first: true });
+    for (const text of lines.slice(1)) {
+      out.push({ index: i, text, first: false });
+    }
+  }
+  return out;
+}
+var MIN_DIFFERENCE_WIDTH = 24;
+function commonPrefixLength(values) {
+  const first = values[0] ?? "";
+  let length = first.length;
+  for (const value of values.slice(1)) {
+    let i = 0;
+    while (i < length && i < value.length && value[i] === first[i]) {
+      i++;
+    }
+    length = i;
+  }
+  return length;
+}
+function wordBoundaryBefore(value, at2) {
+  const space = value.lastIndexOf(" ", Math.max(0, at2 - 1));
+  return space < 0 ? 0 : space + 1;
+}
+function wordsBefore(value, at2, count2) {
+  let cut = at2;
+  for (let n = 0; n < count2 && cut > 0; n++) {
+    cut = wordBoundaryBefore(value, cut - 1);
+  }
+  return cut;
+}
 function truncatePath(value, maxWidth) {
   if (maxWidth <= 0 || value.length <= maxWidth) {
     return value;
@@ -1312,6 +1728,10 @@ function parseTaskId(raw) {
   }
   return { taskId: raw.slice(0, dot), retryId: Number(suffix) };
 }
+function normalizeTaskId(raw) {
+  const { taskId, retryId } = parseTaskId(raw);
+  return `${taskId}.${retryId}`;
+}
 
 // lib/model/crash-signature.ts
 var ABORT_SIGNATURES = [
@@ -1531,10 +1951,18 @@ function uploadedProfileUrl(taskId, retryId, message) {
 function minidumpJsonUrl(taskId, retryId, minidumpId) {
   return testInfoArtifactUrl(taskId, retryId, `${minidumpId}.json`);
 }
-var TREEHERDER_ROOT = "https://treeherder.mozilla.org";
+var TREEHERDER_ROOT2 = "https://treeherder.mozilla.org";
+function treeherderJobUrl(repository, revision, taskId, retryId) {
+  const params = new URLSearchParams({
+    repo: repository,
+    selectedTaskRun: `${taskId}.${retryId}`,
+    revision
+  });
+  return `${TREEHERDER_ROOT2}/jobs?${params.toString()}`;
+}
 function treeherderPushUrl(repository, revision) {
   const params = new URLSearchParams({ repo: repository, revision });
-  return `${TREEHERDER_ROOT}/jobs?${params.toString()}`;
+  return `${TREEHERDER_ROOT2}/jobs?${params.toString()}`;
 }
 
 // lib/sources/http.ts
@@ -1620,6 +2048,9 @@ function taskArtifactUrl2(name, root = FIREFOX_CI_ROOT2) {
 }
 function taskArtifactName(taskId, retryId, artifactPath) {
   return { index: taskId, filename: `runs/${retryId}/artifacts/${artifactPath}` };
+}
+function taskDefinitionName(taskId) {
+  return { index: taskId, filename: "" };
 }
 
 // cli/commands/crash.ts
@@ -2883,6 +3314,16 @@ async function loadIssues(context, harness) {
   const raw = await fetchJson(context.source, name);
   return { file: decodeIssues(raw), raw, name };
 }
+async function ifPublished(loading) {
+  try {
+    return await loading;
+  } catch (error) {
+    if (error instanceof DataFileNotFoundError) {
+      return null;
+    }
+    throw error;
+  }
+}
 async function loadIndex(context, harness) {
   return fetchJson(context.source, {
     index: timingsIndex(harness),
@@ -3999,9 +4440,39 @@ var FLAKY_NOTES = [
   "  breakdown of one test, or --json for the raw counters.",
   "",
   "--group-by days is the exception: its flaky, stable and skipped columns are mutually",
-  "exclusive and do sum to total."
+  "exclusive and do sum to total.",
+  "",
+  // The reciprocal of the paragraph `intermittent --help` carries, since an
+  // agent asked for the most commonly failing tests ranked them from a
+  // failure-count command and then reasoned about sheriff priority from it.
+  // One sentence ending in a pointer: the explanation is `fx-tests guide`'s
+  // `annotations-are-not-failures` trap and paraphrasing it here would be a
+  // copy to keep in step.
+  //
+  // NOT the same sentence as `ISSUES_NOTES`, and the difference is the point.
+  // This command does not count failures: a row is TESTS carrying a flaky
+  // verdict — a per-day mean of them on the folder views, a literal 1 or 0 per
+  // test on the per-test view, with `failures` a separate column the ranking
+  // is not ordered by. The first version of this note was `issues`' sentence
+  // copied verbatim, and its "rather than the failures counted here" was false
+  // of the very command it printed on, which is exactly the confusion the
+  // pointer exists to prevent. Each sentence names its own unit.
+  "`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with rather than",
+  'the tests counted flaky here \u2014 see `fx-tests guide`, "`intermittent` counts sheriff',
+  'annotations, not failures".'
 ];
 var FLAKY_OPTIONS = {
+  // The global's shared wording is wrong here, restated rather than left to
+  // mislead — the same mechanism `intermittent` uses, since a command's own
+  // spec wins the merge in `dispatch()`. This command reads no test path: it
+  // takes a directory prefix, which has no filename for `detectHarness` to
+  // classify, so it reads both aggregates instead of inferring. See
+  // `harnessesForPathFilter`.
+  harness: {
+    type: "string",
+    placeholder: "<xpcshell|mochitest>",
+    describe: "Which harness\u2019s data to read. Omit it and a directory path reads both, printing whichever has rows."
+  },
   path: {
     type: "string",
     placeholder: "<prefix>",
@@ -4038,8 +4509,8 @@ var FLAKY_OPTIONS = {
 };
 var DEFAULT_LIMIT2 = 20;
 var TREND_WINDOW = 7;
-async function loadFlakyQuery(context, args) {
-  const harness = context.globals.harness ?? "xpcshell";
+async function loadFlakyQuery(context, args, harnessOverride) {
+  const harness = harnessOverride ?? context.globals.harness ?? "xpcshell";
   progress(context, `Reading ${harness}-issues.json\u2026`);
   const { file } = await loadIssues(context, harness);
   if (context.globals.config.length > 0 || context.globals.excludeConfig.length > 0) {
@@ -4176,24 +4647,63 @@ async function runFlaky(context, args) {
       "Drop --sort, or use --group-by list to rank folders."
     );
   }
-  const query = await loadFlakyQuery(context, args);
+  const pathPrefix = stringOption(args, "path") ?? positional;
+  const { required, speculative } = harnessesForPathFilter(pathPrefix, context.globals.harness);
   const limit = context.globals.limit ?? DEFAULT_LIMIT2;
-  if (groupBy === "days") {
-    emitResult(context, trendResult(query, context, limit), (result2) => renderTrend(result2));
+  const oneHarness = async (harness) => oneView(context, args, await loadFlakyQuery(context, args, harness), groupBy, sort, limit);
+  const views = [await oneHarness(required)];
+  for (const harness of speculative) {
+    const extra = await ifPublished(oneHarness(harness));
+    if (extra !== null) {
+      views.push(extra);
+    }
+  }
+  const withRows = views.filter((view) => view.rowCount > 0);
+  const shown = withRows.length > 0 ? withRows : views.slice(0, 1);
+  const alsoSearched = views.filter((view) => !shown.includes(view)).map((view) => view.file);
+  if (context.globals.format === "json" && shown.length > 1) {
+    emit(context, toJson(roundForJson({ harnesses: shown.map((view) => view.result) })));
     return;
   }
+  for (const [index, view] of shown.entries()) {
+    if (index > 0) {
+      emit(context, "\n");
+    }
+    emitResult(context, view.result, () => view.render(alsoSearched));
+  }
+}
+function oneView(context, args, query, groupBy, sort, limit) {
+  const file = {
+    harness: query.header.harness,
+    testCount: query.header.testCount
+  };
+  if (groupBy === "days") {
+    const result2 = trendResult(query, context, limit);
+    return {
+      result: result2,
+      rowCount: result2.testDays,
+      file,
+      render: (alsoSearched) => renderTrend(result2, alsoSearched)
+    };
+  }
   if (groupBy === "tests") {
-    emitResult(
-      context,
-      testResult(query, listingTree(query), boolOption(args, "here-only"), sort, limit),
-      renderTests
+    const result2 = testResult(
+      query,
+      listingTree(query),
+      boolOption(args, "here-only"),
+      sort,
+      limit
     );
-    return;
+    return {
+      result: result2,
+      rowCount: result2.consideredTests,
+      file,
+      render: (alsoSearched) => renderTests(result2, alsoSearched)
+    };
   }
   const root = classifiedTree(query);
   const rows2 = groupBy === "list" ? listRows(root) : treeRows(root);
   const sorted = sortRows(rows2, sort);
-  const shown = applyLimit(sorted, limit);
   const result = {
     header: query.header,
     groupBy,
@@ -4209,9 +4719,14 @@ async function runFlaky(context, args) {
       testCount: root.testCount
     },
     rowCount: sorted.length,
-    rows: shown
+    rows: applyLimit(sorted, limit)
   };
-  emitResult(context, result, renderFolders);
+  return {
+    result,
+    rowCount: sorted.length,
+    file,
+    render: (alsoSearched) => renderFolders(result, alsoSearched)
+  };
 }
 function classifiedTree(query) {
   const noise = {
@@ -4306,7 +4821,7 @@ function sortTestRows(rows2, sort) {
   }
   return sorted;
 }
-function renderTests(result) {
+function renderTests(result, alsoSearched = []) {
   const sortColumn = {
     flaky: "flaky",
     // `share` ranked a percentage that is gone from this view; it orders as
@@ -4341,7 +4856,7 @@ function renderTests(result) {
     total: result.rowCount,
     shown: result.rows.length,
     epilogue: testEpilogue(result),
-    empty: testEmptyMessage(result)
+    empty: testEmptyMessage(result, alsoSearched)
   };
 }
 function suggestion(command, header, options = {}) {
@@ -4386,12 +4901,18 @@ function testEpilogue(result) {
   }
   return lines;
 }
-function testEmptyMessage(result) {
+function searchedFiles(header, alsoSearched) {
+  return describeSearchedFiles(
+    [{ harness: header.harness, testCount: header.testCount }, ...alsoSearched],
+    count
+  );
+}
+function testEmptyMessage(result, alsoSearched = []) {
   const { header } = result;
   const where = result.pathPrefix === null ? "the tree" : result.pathPrefix;
   const over = header.scope === "day" ? `on ${header.scopeDates[0] ?? header.endDate}` : header.scope === "all-days" ? `over all ${header.dayCount} days` : `over the last ${header.scopeDates.length} days`;
   if (result.consideredTests === 0) {
-    return `No test ran under ${where} ${over}. Searched ${count(header.testCount)} tests in ${header.harness}-issues.json. Check the path (a directory prefix) for typos` + (result.hereOnly ? ", and note that --here-only needs the path to name a directory exactly \u2014 drop it for the subtree." : ".");
+    return `No test ran under ${where} ${over}. Searched ${searchedFiles(header, alsoSearched)}. Check the path (a directory prefix) for typos` + (result.hereOnly ? ", and note that --here-only needs the path to name a directory exactly \u2014 drop it for the subtree." : ".");
   }
   return `All ${count(result.consideredTests)} tests under ${where} passed everywhere they ran ${over}, so there is nothing to list. Nothing is flaky and nothing is disabled here.`;
 }
@@ -4466,7 +4987,7 @@ function sortRows(rows2, sort) {
   }
   return sorted;
 }
-function renderFolders(result) {
+function renderFolders(result, alsoSearched = []) {
   const sortColumn = {
     flaky: "flaky",
     share: "flaky%",
@@ -4513,7 +5034,7 @@ function renderFolders(result) {
     total: result.rowCount,
     shown: result.rows.length,
     epilogue: epilogueFor(result),
-    empty: emptyMessage(result)
+    empty: emptyMessage(result, alsoSearched)
   };
 }
 function epilogueFor(result) {
@@ -4553,10 +5074,12 @@ function trendResult(query, context, limit) {
     pathPrefix: query.pathPrefix ?? null,
     averageWindow: TREND_WINDOW,
     rowCount: rows2.length,
-    rows: shown
+    rows: shown,
+    // Summed over `rows`, never `shown`: see `TrendResult.testDays`.
+    testDays: rows2.reduce((sum, row) => sum + row.total, 0)
   };
 }
-function renderTrend(result) {
+function renderTrend(result, alsoSearched = []) {
   const lines = headerLines2(result);
   return {
     preamble: lines,
@@ -4585,7 +5108,7 @@ function renderTrend(result) {
     epilogue: [
       "  --group-by list ranks the folders behind these numbers."
     ],
-    empty: `No day had any test run. Searched ${count(result.header.testCount)} tests in ${result.header.harness}-issues.json over ${result.header.startDate} \u2026 ${result.header.endDate}. Check --path (a directory prefix) for typos.`
+    empty: "No day had any test run. Searched " + searchedFiles(result.header, alsoSearched) + ` over ${result.header.startDate} \u2026 ${result.header.endDate}. Check --path (a directory prefix) for typos.`
   };
 }
 function headerLines2(result) {
@@ -4659,10 +5182,10 @@ function wrapCaveat(text, indent = "  ") {
   }
   return out;
 }
-function emptyMessage(result) {
+function emptyMessage(result, alsoSearched = []) {
   const { header } = result;
   const over = header.scope === "day" ? `on ${header.scopeDates[0] ?? header.endDate}` : header.scope === "all-days" ? `over all ${header.dayCount} days` : `over the last ${header.averageDays ?? 0} days`;
-  return `No folder matched. Searched ${count(header.testCount)} tests in ${header.harness}-issues.json, classified ${over}. Check --path (a directory prefix) for typos \u2014 and note that a folder whose tests did not run at all in that window has no row, since it has no rate.`;
+  return `No folder matched. Searched ${searchedFiles(header, alsoSearched)}, classified ${over}. Check --path (a directory prefix) for typos \u2014 and note that a folder whose tests did not run at all in that window has no row, since it has no rate.`;
 }
 function readGroupBy(args) {
   const fallback = args.positionals.length > 0 ? "tests" : "list";
@@ -4767,6 +5290,12 @@ var COMMAND_FACTS = [
     answers: "Which failures in my push are mine, and which already fail on central?"
   },
   {
+    name: "task",
+    reads: "a job\u2019s profile_resource-usage.json artifact",
+    answers: "What happened in one job \u2014 every test\u2019s outcome, pass or fail?",
+    defaultLimit: 20
+  },
+  {
     name: "issues",
     reads: "{harness}-issues.json",
     answers: "What is failing across the tree?",
@@ -4800,7 +5329,6 @@ var COMMAND_FACTS = [
     name: "intermittent",
     reads: "Treeherder /api/failures/ + /api/failuresbybug/ + Bugzilla /rest/bug",
     answers: "Which annotated intermittents cost sheriffs the most, tree-wide, and with which bug?",
-    defaultHarness: "mochitest",
     defaultLimit: 20
   },
   {
@@ -4847,7 +5375,7 @@ var EXIT_CODE_FACTS = [
   },
   {
     code: ExitCode.Gone,
-    meaning: "Data permanently gone: an expired or never-uploaded Taskcluster artifact. Only `fx-tests crash` produces this. Retrying will not help."
+    meaning: "Data permanently gone: an expired or never-uploaded Taskcluster artifact. Only `crash` and `task` produce it. Retrying will not help."
   }
 ];
 var TRAPS = [
@@ -4857,9 +5385,8 @@ var TRAPS = [
     body: [
       "A test failing **every time** on one platform and passing everywhere else still",
       "reads as a low single-digit percentage overall, because the rate divides failures",
-      "from every config by runs from every config. So a small overall rate is not",
-      "evidence a test is healthy, and `fx-tests test` leads with a verdict and a",
-      "per-config table rather than one number."
+      "from every config by runs from every config. So a small rate is not evidence of",
+      "health, and `fx-tests test` leads with a verdict and a per-config table."
     ]
   },
   {
@@ -4903,8 +5430,7 @@ var TRAPS = [
       "size. xpcshell runs its tests in parallel, so stdout cannot be streamed as it is",
       "produced and is replayed **only when a test fails** \u2014 the xpcshell errors file is",
       "failing tests\u2019 output and nothing else. That is a biased population, not a smaller",
-      'sample of the same one: ranking it answers "what do failing tests print", not',
-      '"what is noisy in CI", which is what a reader of a ranking assumes.'
+      'sample: it answers "what do failing tests print", not "what is noisy in CI".'
     ]
   },
   {
@@ -4975,10 +5501,13 @@ var WORKFLOWS = [
       "    the same way on that same config and it probably is not.",
       "",
       "fx-tests try <revision> --all-jobs",
-      "    Reads the passing test jobs too. A test that failed and then passed when the",
-      "    harness reran it leaves the job GREEN, so the default run never sees it \u2014 it",
-      "    is missing, not ranked low. Costs one profile per test job on the push rather",
-      "    than one per failed job, so reach for it when burning down flakiness.",
+      "    Reads the passing test jobs too. A test that failed and then passed on the",
+      "    harness rerun leaves the job GREEN, so the default never sees it \u2014 missing,",
+      "    not ranked low. One profile per test job rather than per failed job: slow.",
+      "",
+      "fx-tests task <taskId>",
+      "    What ELSE failed in one of those jobs. The push view ranks across configs",
+      "    and cannot say; this reads the one job\u2019s own profile.",
       "",
       "fx-tests test <path>",
       "    Whether it already fails on central, and how. Two things change the reading:",
@@ -4988,6 +5517,17 @@ var WORKFLOWS = [
       "fx-tests test <path> --coverage",
       "    Before concluding a platform is unaffected, check the test runs there at all.",
       '    "No Android row" and "passes on Android" look identical without this.'
+    ]
+  },
+  {
+    // The single most useful flag in this CLI, by the report of five agents
+    // who used it, and it appeared nowhere in this guide. Kept to one line
+    // because the guide has a hard 200-line budget and `--history` earns
+    // its place by being run, not by being described.
+    title: "Is this failure getting worse, and since when",
+    steps: [
+      "fx-tests test <path> --history",
+      "    Per-day pass and fail counts \u2014 the only time axis, and what dates a regression."
     ]
   },
   {
@@ -5127,9 +5667,8 @@ function render() {
   lines.push("  Lists are truncated by default and say so (`\u2026 47 more (--limit 0 for all)`).");
   lines.push("  If a list looks short, check for that line before believing it is complete.");
   lines.push("");
-  lines.push("  Messages are cut to the terminal width, and the cut takes the end \u2014 which is");
-  lines.push("  often the discriminator. COLUMNS widens it; --full-messages turns it off, as");
-  lines.push("  does --markdown, which never truncates.");
+  lines.push("  Messages are cut to the terminal width, and the cut takes the end \u2014 often");
+  lines.push("  the discriminator. COLUMNS widens it; --full-messages and --markdown do not cut.");
   return joinLines(lines);
 }
 
@@ -5142,6 +5681,9 @@ function stripChunkSuffix(jobName) {
   const head = jobName.slice(0, slash + 1);
   const tail = jobName.slice(slash + 1);
   return head + tail.replace(/-\d+$/, "");
+}
+function withChunkSuffix(jobName, chunk2) {
+  return chunk2 === null ? jobName : `${jobName}-${chunk2}`;
 }
 function chunkNumber(jobName) {
   const slash = jobName.indexOf("/");
@@ -5290,25 +5832,22 @@ function summarize(byJob, minRecentRuns, forcedRecentDays) {
     windowDays = Math.max(1, forcedRecentDays);
   } else {
     for (const entry of byJob.values()) {
-      let runs = 0;
-      let needed = 0;
-      for (const day of [...entry.byDay.keys()].sort((a, b) => b - a)) {
-        const bucket = entry.byDay.get(day);
-        runs += bucket[0] + bucket[1];
-        needed = newestDay - day + 1;
-        if (runs >= minRecentRuns) {
-          break;
-        }
-      }
-      if (runs >= minRecentRuns) {
+      const needed = daysToReach(entry, minRecentRuns, newestDay);
+      if (needed !== null) {
         windowDays = Math.max(windowDays, needed);
       }
     }
   }
+  const liveWindow = liveWindowDays(byJob, minRecentRuns, newestDay, windowDays);
   const configs = [];
   for (const entry of byJob.values()) {
     const runCount = entry.passCount + entry.failCount;
     const from = newestDay - windowDays + 1;
+    let lastActiveDay = -Infinity;
+    for (const day of entry.byDay.keys()) {
+      lastActiveDay = Math.max(lastActiveDay, day);
+    }
+    const stillRunning = lastActiveDay > newestDay - liveWindow;
     let recentPass = 0;
     let recentFail = 0;
     let recentSameMsg = 0;
@@ -5321,7 +5860,7 @@ function summarize(byJob, minRecentRuns, forcedRecentDays) {
       recentSameMsg += sameMsg;
     }
     const recentRunCount = recentPass + recentFail;
-    const enough = recentRunCount >= minRecentRuns;
+    const enough = recentRunCount >= minRecentRuns && stillRunning;
     configs.push({
       jobName: entry.jobName,
       runCount,
@@ -5337,6 +5876,29 @@ function summarize(byJob, minRecentRuns, forcedRecentDays) {
   }
   configs.sort((a, b) => b.failRate - a.failRate);
   return configs;
+}
+function daysToReach(entry, minRecentRuns, newestDay) {
+  let runs = 0;
+  let needed = 0;
+  for (const day of [...entry.byDay.keys()].sort((a, b) => b - a)) {
+    const bucket = entry.byDay.get(day);
+    runs += bucket[0] + bucket[1];
+    needed = newestDay - day + 1;
+    if (runs >= minRecentRuns) {
+      return needed;
+    }
+  }
+  return null;
+}
+function liveWindowDays(byJob, minRecentRuns, newestDay, windowDays) {
+  let live = 0;
+  for (const entry of byJob.values()) {
+    if (!entry.byDay.has(newestDay)) {
+      continue;
+    }
+    live = Math.max(live, daysToReach(entry, minRecentRuns, newestDay) ?? 1);
+  }
+  return live === 0 ? windowDays : live;
 }
 function canAttributeConfigs(file) {
   return file.family !== "issues";
@@ -5912,6 +6474,11 @@ var SHARED_OPTIONS = {
     describe: "Only tests under this directory prefix."
   }
 };
+var ISSUES_NOTES = [
+  "`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with rather than",
+  'the issues counted here \u2014 see `fx-tests guide`, "`intermittent` counts sheriff',
+  'annotations, not failures".'
+];
 var ISSUES_OPTIONS = {
   ...SHARED_OPTIONS,
   type: {
@@ -5937,6 +6504,17 @@ var ISSUES_OPTIONS = {
 };
 var FAILURES_OPTIONS = {
   ...SHARED_OPTIONS,
+  // The global's shared wording is wrong here, restated rather than left to
+  // mislead — the same mechanism `intermittent` uses, since a command's own
+  // spec wins the merge in `dispatch()`. This command reads no test path: it
+  // takes a directory prefix, which has no filename for `detectHarness` to
+  // classify, so it reads both aggregates instead of inferring. See
+  // `harnessesForPathFilter`.
+  harness: {
+    type: "string",
+    placeholder: "<xpcshell|mochitest>",
+    describe: "Which harness\u2019s data to read. Omit it and a directory path reads both, printing whichever has rows."
+  },
   message: {
     type: "string",
     placeholder: "<substring>",
@@ -5972,8 +6550,8 @@ var SKIPS_OPTIONS = {
   }
 };
 var DEFAULT_LIMIT3 = 20;
-async function loadTreeQuery(context, args, commandName) {
-  const harness = context.globals.harness ?? "xpcshell";
+async function loadTreeQuery(context, args, commandName, harnessOverride) {
+  const harness = harnessOverride ?? context.globals.harness ?? "xpcshell";
   progress(context, `Reading ${harness}-issues.json\u2026`);
   const { file } = await loadIssues(context, harness);
   if ((context.globals.config.length > 0 || context.globals.excludeConfig.length > 0) && !canAttributeConfigs(file)) {
@@ -6234,34 +6812,65 @@ function renderIssueGroups(result) {
     empty: emptyMessage2(result.header, result.types)
   };
 }
-function emptyMessage2(header, types, subject = "test", extraFilters = "") {
-  const searched = `${count(header.testCount)} tests in ${header.harness}-issues.json`;
+function emptyMessage2(header, types, subject = "test", extraFilters = "", alsoSearched = []) {
+  const searched = describeSearchedFiles(
+    [{ harness: header.harness, testCount: header.testCount }, ...alsoSearched],
+    count
+  );
   const typeNote = types !== void 0 && types.length < DEFAULT_TYPES.length ? ` Only ${types.join(", ")} counted as issues, so --type may be why.` : "";
   return `No ${subject} matched. Searched ${searched} over ${header.startDate} \u2026 ${header.endDate}.${typeNote} Check --path (a directory prefix)${extraFilters} and --component (a substring) for typos.`;
 }
 async function runFailures(context, args) {
   rejectPositionals(args, "failures");
-  const query = await loadTreeQuery(context, args, "failures");
-  const limit = context.globals.limit ?? DEFAULT_LIMIT3;
-  const groups = groupFailuresByMessage(query.file, {
-    ...sharedOptions(query),
-    ...optional2("message", stringOption(args, "message")),
-    maxTestsPerGroup: maxTestsFor(context)
-  });
-  const shown = applyLimit(groups, limit);
-  const result = {
-    header: query.header,
-    groupBy: "message",
-    sort: "count",
-    types: ["fail"],
-    rowCount: groups.length,
-    rows: shown.map(failureGroupJson)
-  };
-  emitResult2(
-    context,
-    result,
-    () => renderFailures(result, "failures by message", boolOption(args, "tests"))
+  const { required, speculative } = harnessesForPathFilter(
+    stringOption(args, "path"),
+    context.globals.harness
   );
+  const limit = context.globals.limit ?? DEFAULT_LIMIT3;
+  const oneHarness = async (harness) => {
+    const query = await loadTreeQuery(context, args, "failures", harness);
+    const groups = groupFailuresByMessage(query.file, {
+      ...sharedOptions(query),
+      ...optional2("message", stringOption(args, "message")),
+      maxTestsPerGroup: maxTestsFor(context)
+    });
+    return {
+      header: query.header,
+      groupBy: "message",
+      sort: "count",
+      types: ["fail"],
+      rowCount: groups.length,
+      rows: applyLimit(groups, limit).map(failureGroupJson)
+    };
+  };
+  const results = [await oneHarness(required)];
+  for (const harness of speculative) {
+    const extra = await ifPublished(oneHarness(harness));
+    if (extra !== null) {
+      results.push(extra);
+    }
+  }
+  const withRows = results.filter((result) => result.rows.length > 0);
+  const shown = withRows.length > 0 ? withRows : results.slice(0, 1);
+  const alsoSearched = results.filter((result) => !shown.includes(result)).map((result) => ({
+    harness: result.header.harness,
+    testCount: result.header.testCount
+  }));
+  const wantTests = boolOption(args, "tests");
+  if (context.globals.format === "json" && shown.length > 1) {
+    emit(context, toJson({ harnesses: shown }));
+    return;
+  }
+  for (const [index, result] of shown.entries()) {
+    if (index > 0) {
+      emit(context, "\n");
+    }
+    emitResult2(
+      context,
+      result,
+      () => renderFailures(result, "failures by message", wantTests, alsoSearched)
+    );
+  }
 }
 function maxTestsFor(context) {
   return context.globals.format === "json" ? 0 : TEXT_MAX_TESTS_PER_GROUP;
@@ -6281,7 +6890,7 @@ function failureGroupJson(group) {
     taskIds: group.taskIds
   };
 }
-function renderFailures(result, subject, wantTests = false) {
+function renderFailures(result, subject, wantTests = false, alsoSearched = []) {
   return {
     preamble: headerLines3(result.header, subject),
     // `tests` is the discriminator here for the same reason it is in
@@ -6304,7 +6913,13 @@ function renderFailures(result, subject, wantTests = false) {
     total: result.rowCount,
     shown: result.rows.length,
     epilogue: testListLines(result.rows, wantTests),
-    empty: emptyMessage2(result.header, void 0, "failure", ", --message (a substring)")
+    empty: emptyMessage2(
+      result.header,
+      void 0,
+      "failure",
+      ", --message (a substring)",
+      alsoSearched
+    )
   };
 }
 function testListLines(rows2, wantTests) {
@@ -6737,307 +7352,6 @@ function oneLine2(value) {
   return value.replace(/\s*\r?\n\s*/g, " \u23CE ").trim();
 }
 
-// lib/sources/treeherder.ts
-var TREEHERDER_ROOT2 = "https://treeherder.mozilla.org";
-var FAILED_JOB_RESULTS = /* @__PURE__ */ new Set([
-  "testfailed",
-  "busted",
-  "exception"
-]);
-var TreeherderError = class extends Error {
-  url;
-  status;
-  constructor(message, url, status) {
-    super(message);
-    this.name = "TreeherderError";
-    this.url = url;
-    this.status = status;
-  }
-};
-var PushNotFoundError = class extends Error {
-  revision;
-  repository;
-  constructor(revision, repository) {
-    super(`no push found for revision ${revision} on ${repository}`);
-    this.name = "PushNotFoundError";
-    this.revision = revision;
-    this.repository = repository;
-  }
-};
-function treeherderClient(options) {
-  const root = options.root ?? TREEHERDER_ROOT2;
-  const maxPages = options.maxPages ?? 100;
-  async function getJson(url) {
-    let response;
-    try {
-      response = await options.fetch(url);
-    } catch (error) {
-      throw new TreeherderError(
-        `request to Treeherder failed: ${error.message}`,
-        url
-      );
-    }
-    if (!response.ok) {
-      throw new TreeherderError(
-        `Treeherder returned HTTP ${response.status}`,
-        url,
-        response.status
-      );
-    }
-    const text = new TextDecoder().decode(await response.arrayBuffer());
-    try {
-      return JSON.parse(text);
-    } catch (error) {
-      throw new TreeherderError(
-        `Treeherder response is not valid JSON: ${error.message}`,
-        url
-      );
-    }
-  }
-  return {
-    async findPush(repository, revision) {
-      const url = `${root}/api/project/${encodeURIComponent(repository)}/push/?full=true&count=10&revision=${encodeURIComponent(revision)}`;
-      const data = await getJson(url);
-      const first = data.results?.[0];
-      if (first === void 0) {
-        throw new PushNotFoundError(revision, repository);
-      }
-      if (typeof first.id !== "number") {
-        throw new TreeherderError(
-          `push for ${revision} has no numeric id`,
-          url
-        );
-      }
-      return {
-        pushId: first.id,
-        revision: first.revision ?? revision,
-        repository,
-        revisions: first.revisions ?? []
-      };
-    },
-    async jobsOfPush(pushId) {
-      const jobs = [];
-      let url = `${root}/api/jobs/?push_id=${pushId}`;
-      let propertyNames = null;
-      let pages = 0;
-      while (url !== null) {
-        if (++pages > maxPages) {
-          throw new TreeherderError(
-            `job listing for push ${pushId} exceeded ${maxPages} pages; refusing to keep following "next"`,
-            url
-          );
-        }
-        const data = await getJson(url);
-        propertyNames ??= data.job_property_names ?? null;
-        if (propertyNames === null) {
-          throw new TreeherderError(
-            `Treeherder returned jobs with no job_property_names, so the positional rows cannot be decoded`,
-            url
-          );
-        }
-        const columns = jobColumns(propertyNames, url);
-        for (const row of data.results ?? []) {
-          jobs.push(readJob(row, columns));
-        }
-        url = data.next ?? null;
-      }
-      return jobs;
-    }
-  };
-}
-function jobColumns(propertyNames, url) {
-  const required = ["id", "job_type_name", "task_id", "retry_id", "state", "result"];
-  const missing = required.filter((name) => !propertyNames.includes(name));
-  if (missing.length > 0) {
-    throw new TreeherderError(
-      `Treeherder's job_property_names is missing ${missing.join(", ")}; got: ${propertyNames.join(", ")}`,
-      url
-    );
-  }
-  return {
-    jobId: propertyNames.indexOf("id"),
-    jobName: propertyNames.indexOf("job_type_name"),
-    taskId: propertyNames.indexOf("task_id"),
-    retryId: propertyNames.indexOf("retry_id"),
-    state: propertyNames.indexOf("state"),
-    result: propertyNames.indexOf("result")
-  };
-}
-function readJob(row, columns) {
-  return {
-    jobId: Number(row[columns.jobId] ?? 0),
-    jobName: String(row[columns.jobName] ?? ""),
-    taskId: String(row[columns.taskId] ?? ""),
-    // A null `retry_id` means run 0, which is how Treeherder writes the
-    // first run of a task.
-    retryId: Number(row[columns.retryId] ?? 0),
-    state: String(row[columns.state] ?? ""),
-    result: String(row[columns.result] ?? "")
-  };
-}
-
-// lib/sources/intermittents.ts
-var BUGZILLA_ROOT = "https://bugzilla.mozilla.org";
-var UNKNOWN_TASK_ID = "unknown";
-var IntermittentsError = class extends Error {
-  url;
-  status;
-  constructor(message, url, status) {
-    super(message);
-    this.name = "IntermittentsError";
-    this.url = url;
-    this.status = status;
-  }
-};
-var TREE_GROUPS = ["trunk", "firefox-releases", "comm-releases"];
-function intermittentsClient(options) {
-  const root = options.root ?? TREEHERDER_ROOT2;
-  const bugzillaRoot = options.bugzillaRoot ?? BUGZILLA_ROOT;
-  async function getJson(url) {
-    let response;
-    try {
-      response = await options.fetch(url);
-    } catch (error) {
-      throw new IntermittentsError(
-        `request failed: ${error.message}`,
-        url
-      );
-    }
-    if (!response.ok) {
-      throw new IntermittentsError(`HTTP ${response.status}`, url, response.status);
-    }
-    const text = new TextDecoder().decode(await response.arrayBuffer());
-    try {
-      return JSON.parse(text);
-    } catch (error) {
-      throw new IntermittentsError(
-        `response is not valid JSON: ${error.message}`,
-        url
-      );
-    }
-  }
-  return {
-    async rankBugs(tree, range) {
-      const url = `${root}/api/failures/?${rangeQuery(tree, range)}`;
-      const rows2 = await getJson(url);
-      return rows2.map((row) => ({ bugId: row.bug_id, count: row.bug_count }));
-    },
-    async occurrencesOfBug(tree, range, bug) {
-      const url = `${root}/api/failuresbybug/?${rangeQuery(tree, range)}&bug=${bug}`;
-      const rows2 = await getJson(url);
-      return rows2.map((row) => ({
-        bugId: row.bug_id,
-        jobId: row.job_id,
-        testSuite: row.test_suite,
-        platform: row.platform,
-        buildType: row.build_type,
-        revision: row.revision,
-        tree: row.tree,
-        pushTime: row.push_time,
-        machineName: row.machine_name,
-        taskId: row.task_id,
-        runId: null,
-        lines: row.lines
-      }));
-    },
-    async runIdsOfJobs(jobIds) {
-      const found = /* @__PURE__ */ new Map();
-      for (const batch of chunk([...new Set(jobIds)], JOB_BATCH_SIZE)) {
-        if (batch.length === 0) {
-          continue;
-        }
-        const url = `${root}/api/jobs/?id__in=${batch.join(",")}`;
-        const data = await getJson(url);
-        if (data.next != null) {
-          throw new IntermittentsError(
-            `Treeherder paginated a ${batch.length}-job request, so ${JOB_BATCH_SIZE} is above its current page size; lower JOB_BATCH_SIZE or follow "next"`,
-            url
-          );
-        }
-        const names = data.job_property_names ?? [];
-        const idColumn = names.indexOf("id");
-        const retryColumn = names.indexOf("retry_id");
-        if (idColumn === -1 || retryColumn === -1) {
-          throw new IntermittentsError(
-            `Treeherder's job_property_names is missing id or retry_id, so the positional rows cannot be decoded; got: ${names.join(", ")}`,
-            url
-          );
-        }
-        for (const row of data.results ?? []) {
-          found.set(Number(row[idColumn]), Number(row[retryColumn] ?? 0));
-        }
-      }
-      return found;
-    },
-    async bugSummaries(bugs) {
-      const found = /* @__PURE__ */ new Map();
-      for (const batch of chunk(bugs, BUG_BATCH_SIZE)) {
-        if (batch.length === 0) {
-          continue;
-        }
-        const url = `${bugzillaRoot}/rest/bug?id=${batch.join(",")}&include_fields=id,summary`;
-        const data = await getJson(url);
-        for (const bug of data.bugs ?? []) {
-          found.set(bug.id, bug.summary);
-        }
-      }
-      return found;
-    }
-  };
-}
-var BUG_BATCH_SIZE = 100;
-var JOB_BATCH_SIZE = 200;
-function rangeQuery(tree, range) {
-  return `startday=${encodeURIComponent(range.start)}&endday=${encodeURIComponent(range.end)}&tree=${encodeURIComponent(tree)}`;
-}
-function chunk(items, size) {
-  const batches = [];
-  for (let i = 0; i < items.length; i += size) {
-    batches.push(items.slice(i, i + size));
-  }
-  return batches;
-}
-function harnessOfOccurrence(testSuite) {
-  if (/(^|-)mochitest(-|$)/.test(testSuite)) {
-    return "mochitest";
-  }
-  return /(^|-)xpcshell(-|$)/.test(testSuite) ? "xpcshell" : null;
-}
-function stripSuiteChunk(testSuite) {
-  return testSuite.replace(/-\d+$/, "");
-}
-function testPathCandidates(summary) {
-  const found = [];
-  for (const match of summary.matchAll(TEST_PATH_TOKEN)) {
-    const path = match[1];
-    if (!found.includes(path)) {
-      found.push(path);
-    }
-  }
-  return found;
-}
-var TEST_PATH_TOKEN = /\b((?:[\w.+-]+\/)+[\w.+-]+\.(?:js|mjs|html|xhtml|xul|sjs|py|toml|ini))\b/g;
-function summaryRemainder(summary, path) {
-  let rest = summary.replace(TRIAGE_PREFIX, "");
-  if (path !== null) {
-    rest = rest.replace(path, "");
-  }
-  return rest.replace(/^[\s|:-]+/, "").replace(/[\s|]+$/, "").trim();
-}
-var TRIAGE_PREFIX = /^(?:(?:perma(?:nent|fail)[a-z]*\b|perma\b|frequent[a-z]*\b|intermittent[a-z]*\b|high frequ[en]*cy\b|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
-function testPathOfLine(line) {
-  const marker = line.indexOf("TEST-UNEXPECTED-FAIL");
-  if (marker === -1) {
-    return null;
-  }
-  const fields2 = line.slice(marker).split("|");
-  const candidate = fields2[1]?.trim();
-  if (candidate === void 0 || candidate.length === 0) {
-    return null;
-  }
-  return candidate;
-}
-
 // lib/model/marker-messages.ts
 function partitionMarkerMessages(messages) {
   const seenMessage = /* @__PURE__ */ new Set();
@@ -7066,6 +7380,21 @@ function partitionMarkerMessages(messages) {
 }
 
 // lib/query/intermittents.ts
+async function loadHarnessOfPath(source) {
+  const known = /* @__PURE__ */ new Map();
+  for (const harness of ["mochitest", "xpcshell"]) {
+    const file = await fetchJson(source, {
+      index: timingsIndex(harness),
+      filename: `${harness}-issues.json`
+    });
+    for (const path of collectTestPaths([file])) {
+      if (!known.has(path)) {
+        known.set(path, harness);
+      }
+    }
+  }
+  return (path) => known.get(path) ?? null;
+}
 function scanBugs(options) {
   const { ranking, summaries, harnessOfPath } = options;
   const noBugCount = ranking.filter((row) => row.bugId === null).reduce((sum, row) => sum + row.count, 0);
@@ -7375,7 +7704,7 @@ async function runRanking(context, client, tree, range, args) {
   progress(context, `Reading ${candidates.length} bug summaries\u2026`);
   const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
   progress(context, "Reading the mochitest and xpcshell test lists\u2026");
-  const harnessOfPath = await loadHarnessOfPath(context);
+  const harnessOfPath = await loadHarnessOfPath(context.source);
   const scan = scanBugs({ ranking, summaries, harnessOfPath });
   const selected = selectHarness(scan.rows, harness);
   const shown = applyLimit(selected, limit);
@@ -7412,21 +7741,6 @@ function readHarnessSelector(args) {
   }
   return value;
 }
-async function loadHarnessOfPath(context) {
-  const known = /* @__PURE__ */ new Map();
-  for (const harness of ["mochitest", "xpcshell"]) {
-    const file = await fetchJson(context.source, {
-      index: timingsIndex(harness),
-      filename: `${harness}-issues.json`
-    });
-    for (const path of collectTestPaths([file])) {
-      if (!known.has(path)) {
-        known.set(path, harness);
-      }
-    }
-  }
-  return (path) => known.get(path) ?? null;
-}
 async function runTestDrilldown(context, client, tree, range, test, args) {
   progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}\u2026`);
   const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
@@ -7434,7 +7748,7 @@ async function runTestDrilldown(context, client, tree, range, test, args) {
   progress(context, `Reading ${candidates.length} bug summaries\u2026`);
   const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
   progress(context, "Reading the mochitest and xpcshell test lists\u2026");
-  const harnessOfPath = await loadHarnessOfPath(context);
+  const harnessOfPath = await loadHarnessOfPath(context.source);
   const matches = bugsNamingTest(scanBugs({ ranking, summaries, harnessOfPath }).rows, test);
   if (matches.length === 0) {
     throw notFoundError(
@@ -7591,25 +7905,6 @@ function resolveRange(day, since, today = /* @__PURE__ */ new Date()) {
 }
 function isoDay(date) {
   return date.toISOString().slice(0, 10);
-}
-async function withUpstreamErrors(work, tree) {
-  try {
-    return await work();
-  } catch (error) {
-    if (error instanceof IntermittentsError) {
-      if (error.status === 400) {
-        throw usageError(
-          `Treeherder rejected the query, which for these endpoints means an unknown tree: "${tree}"`,
-          `--tree takes a repository name (autoland, mozilla-central, \u2026), a repo group (${TREE_GROUPS.join(", ")}), or all.`
-        );
-      }
-      throw upstreamError(
-        `${error.message} from ${error.url}`,
-        "Treeherder\u2019s intermittents API and Bugzilla are both live services; retrying may work."
-      );
-    }
-    throw error;
-  }
 }
 function coverageLines(coverage, harness, selected) {
   const sentences = [];
@@ -9085,6 +9380,11 @@ var TEST_OPTIONS = {
     type: "boolean",
     describe: "Print the task IDs behind each failure, and the minidump IDs of any crashes."
   },
+  issue: {
+    type: "number",
+    placeholder: "<n>",
+    describe: "With --task-ids, only the tasks behind row <n> of the Issues block."
+  },
   profiles: {
     type: "boolean",
     describe: "Print raw profile artifact URLs for each failure."
@@ -9093,9 +9393,23 @@ var TEST_OPTIONS = {
     type: "boolean",
     describe: "Per-config run-time distribution from the pass durations."
   },
-  history: { type: "boolean", describe: "A per-day sparkline of pass/fail counts." }
+  history: { type: "boolean", describe: "A per-day sparkline of pass/fail counts." },
+  // Opt-in, unlike every other section on this command, and for a reason
+  // that is not about this process: it is the only flag here that reaches a
+  // live API rather than the published aggregate the rest of the command
+  // reads. `test` is run constantly, so resolving the annotations by default
+  // would put a per-user load on the machines serving Treeherder's
+  // `/api/failures/` that they did not previously carry — a cost a local
+  // cache TTL cannot give back, because it is upstream rather than local.
+  bugs: {
+    type: "boolean",
+    describe: "The sheriff-annotated bugs naming this test. Off by default because it queries Treeherder and Bugzilla live, several requests, where the rest of this command reads one published file."
+  }
 };
 var DEFAULT_LIMIT6 = 10;
+var SUMMARY_WIDTH = 78;
+var ISSUES_HEADER = "Issues (first failure per run)";
+var ISSUE_LABEL_WIDTH = 22;
 async function lookUpTest(context, testPath) {
   if (context.loadTimingFile !== void 0) {
     const { harness } = resolveHarness(testPath, context.globals.harness);
@@ -9213,6 +9527,7 @@ async function runTest(context, args) {
     ...window.range === null ? {} : { dayRange: window.range },
     ...hasConfigFilter ? { jobFilter } : {}
   });
+  const history = buildHistory(decoded, filteredEntries, window);
   const result = {
     test: identity.name,
     path: identity.fullPath,
@@ -9237,6 +9552,7 @@ async function runTest(context, args) {
     canAttributeConfigs: canAttributeConfigs(decoded),
     recentWindow: configs.length === 0 || window.singleDay ? null : { days: configs[0].recentDays, minRuns: 20 },
     reach: buildReach(decoded, coverage),
+    dailyCountsAreFlat: dailyCountsAreFlat(history),
     // `statsOptions` is the same day and config filter the header totals
     // used, so the list and the totals cover one population.
     issues: buildTestIssues(decoded, identity.testId, totals, statsOptions),
@@ -9254,10 +9570,23 @@ async function runTest(context, args) {
     result.durations = buildDurations(decoded, filteredEntries);
   }
   if (boolOption(args, "history")) {
-    result.history = buildHistory(decoded, filteredEntries, window);
+    result.history = history;
   }
+  if (boolOption(args, "bugs")) {
+    result.annotatedBugs = await fetchAnnotatedBugs(context, identity.fullPath);
+  }
+  const issueSelector = numberOption(args, "issue");
   if (boolOption(args, "task-ids")) {
-    result.taskIds = buildTaskIds(file, decoded, filteredEntries, window);
+    const issue = issueSelector === void 0 ? null : selectIssue(result.issues, issueSelector);
+    result.taskIds = buildTaskIds(file, decoded, filteredEntries, window, issue);
+    if (issue !== null) {
+      result.taskIdsIssue = { position: issueSelector, type: issue.type, message: issue.message };
+    }
+  } else if (issueSelector !== void 0) {
+    throw usageError(
+      "--issue selects which failure the printed task IDs belong to, so it needs --task-ids",
+      "Run the command without either flag first: --issue takes a row number from the Issues block it prints."
+    );
   }
   if (boolOption(args, "profiles")) {
     result.profiles = buildProfiles(decoded, filteredEntries);
@@ -9409,6 +9738,65 @@ function buildReach(file, coverage) {
     absentPlatforms
   };
 }
+function annotatedBugRows(annotatedBugs) {
+  return annotatedBugs === void 0 || "error" in annotatedBugs ? [] : annotatedBugs;
+}
+var ANNOTATED_BUGS_TREE = "trunk";
+async function fetchAnnotatedBugs(context, path) {
+  const client = context.intermittents;
+  if (client === void 0) {
+    return { error: "no intermittents client is configured" };
+  }
+  const range = resolveRange(void 0, void 0);
+  const tree = ANNOTATED_BUGS_TREE;
+  try {
+    progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}\u2026`);
+    const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
+    const candidates = ranking.filter((row) => row.bugId !== null).map((row) => row.bugId);
+    if (candidates.length === 0) {
+      return [];
+    }
+    progress(context, `Reading ${candidates.length} bug summaries\u2026`);
+    const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
+    progress(context, "Reading the mochitest and xpcshell test lists\u2026");
+    const harnessOfPath = await loadHarnessOfPath(context.source);
+    const matches = bugsNamingTest(
+      scanBugs({ ranking, summaries, harnessOfPath }).rows,
+      path
+    );
+    return matches.map((row) => ({
+      bugId: row.bugId,
+      count: row.count,
+      // `failure`, not `bugSummary`, and deliberately — this is A's rule
+      // on the `RankedIntermittent` docstring applied to this block:
+      // `failure` where the surrounding output already names the test,
+      // `bugSummary` standalone. Here the path is established context
+      // three times over (the caller typed it, the header prints it, and
+      // the heading is "Bugs naming this test"), so the raw summary would
+      // spend its width re-printing it. Measured: truncated to the
+      // terminal, a raw summary is cut *inside* the path on both rows of
+      // a live two-bug test, losing the description entirely.
+      //
+      // The cost is the triage prefix — `Perma` on bug 2061951 is real
+      // information — and an empty `|  |` where the path was cut out, on
+      // 7 of 300 live classified rows. Composing prefix + `failure` would
+      // fix both but needs a second copy of `TRIAGE_PREFIX` here, and a
+      // fourth spelling of one summary is what that docstring exists to
+      // prevent. If a prefix-keeping, path-stripping variant is ever
+      // wanted, it belongs in `lib/` beside `summaryRemainder`.
+      bugSummary: row.failure,
+      days: DEFAULT_DAYS,
+      tree
+    }));
+  } catch (error) {
+    const message = error.message;
+    warn(
+      context,
+      `could not read the sheriff annotations naming this test (${message}); the bug list is omitted`
+    );
+    return { error: message };
+  }
+}
 var platformCache = /* @__PURE__ */ new WeakMap();
 function platformsInFileCache(file) {
   let platforms = platformCache.get(file);
@@ -9541,12 +9929,48 @@ function buildHistory(file, entries, window) {
   }
   return [...rows2.values()];
 }
-function buildTaskIds(raw, file, entries, window) {
+function dailyCountsAreFlat(history) {
+  if (history.length < 2) {
+    return null;
+  }
+  const counts = history.map((row) => row.fail + row.timeout + row.crash);
+  if (counts.every((count2) => count2 === 0)) {
+    return null;
+  }
+  const sorted = [...counts].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  if (median === 0) {
+    return false;
+  }
+  return counts.every((count2) => count2 <= median * 10 && count2 * 10 >= median);
+}
+function selectIssue(issues, position) {
+  const issue = Number.isInteger(position) ? issues[position - 1] : void 0;
+  if (issue === void 0) {
+    throw usageError(
+      `--issue ${position} is not a row of the Issues block, which has ${issues.length} ${issues.length === 1 ? "row" : "rows"}`,
+      "Rows are numbered from 1 in the order they print. Note --limit only hides rows, it does not renumber them."
+    );
+  }
+  if (issue.type === "SKIP") {
+    throw usageError(
+      `--issue ${position} is a SKIP row, and a skipped run has no task to list`,
+      "The task IDs come from the failures only. Pick a FAIL, TIMEOUT or CRASH row."
+    );
+  }
+  return issue;
+}
+function buildTaskIds(raw, file, entries, window, issue) {
   const rows2 = [];
+  const byRow = /* @__PURE__ */ new Map();
   const days = file.days;
   for (const entry of entries) {
     const { kind } = classifyStatus(entry.status);
     if (kind !== "fail" && kind !== "timeout" && kind !== "crash") {
+      continue;
+    }
+    if (issue !== null && !entryMatchesIssue(entry, kind, issue)) {
       continue;
     }
     if (entry.taskIds === void 0) {
@@ -9562,18 +9986,48 @@ function buildTaskIds(raw, file, entries, window) {
         chunk: taskIdIndex === void 0 || raw.taskInfo === void 0 ? null : chunkOfTask(raw, taskIdIndex),
         status: entry.status,
         day: entry.day === null || days === null ? null : dateOfDayIndex(file.endDate, days, entry.day),
-        message: entry.message ?? null
+        message: entry.message ?? null,
+        occurrences: 1
       };
       const minidumpId = entry.minidumps?.[i];
       if (minidumpId) {
         row.minidumpId = minidumpId;
-        row.crashCommand = `fx-tests crash ${taskId}.${retryId} ${minidumpId}`;
+        row.crashCommand = `fx-tests crash ${normalizeTaskId(raw2)} ${minidumpId}`;
       }
+      const key = JSON.stringify([
+        normalizeTaskId(raw2),
+        row.jobName,
+        row.chunk,
+        row.status,
+        row.day,
+        row.message,
+        row.minidumpId ?? null
+      ]);
+      const seen = byRow.get(key);
+      if (seen !== void 0) {
+        seen.occurrences++;
+        return;
+      }
+      byRow.set(key, row);
       rows2.push(row);
     });
   }
   void window;
   return rows2;
+}
+function entryMatchesIssue(entry, kind, issue) {
+  switch (issue.type) {
+    case "TIMEOUT":
+      return kind === "timeout";
+    case "CRASH":
+      return kind === "crash" && (issue.message === CRASH_NO_SIGNATURE ? entry.crashSignature === null || entry.crashSignature === void 0 : entry.crashSignature === issue.message);
+    case "FAIL":
+      return kind === "fail" && (issue.message === FAILURE_NO_MESSAGE ? entry.message === null || entry.message === void 0 : entry.message === issue.message);
+    // A skip is not a failing run, so no entry `buildTaskIds` looks at can
+    // belong to one. `--issue` on a SKIP row is rejected before this.
+    case "SKIP":
+      return false;
+  }
 }
 function buildProfiles(file, entries) {
   const rows2 = [];
@@ -9640,10 +10094,24 @@ function renderText7(result, limit) {
   for (const note of result.verdict.notes) {
     lines.push(`  ${note}`);
   }
+  if (result.dailyCountsAreFlat === false) {
+    lines.push("  Daily counts are not flat; --history shows the per-day breakdown.");
+  }
   const reachLine = describeReach(result.reach);
   if (reachLine !== null) {
     lines.push("");
     lines.push(reachLine);
+  }
+  const bugRows = annotatedBugRows(result.annotatedBugs);
+  if (bugRows.length > 0) {
+    lines.push("");
+    lines.push("Bugs naming this test");
+    for (const bug of bugRows) {
+      lines.push(
+        `  ${String(bug.bugId).padStart(7)}  ${count(bug.count).padStart(4)} annotations, last ${bug.days} days   fx-tests intermittent --bug ${bug.bugId}`
+      );
+      lines.push(`           ${truncate(bug.bugSummary, SUMMARY_WIDTH)}`);
+    }
   }
   if (result.configs.length > 0) {
     lines.push("");
@@ -9683,17 +10151,29 @@ function renderText7(result, limit) {
   }
   if (result.issues.length > 0) {
     lines.push("");
-    lines.push("Issues");
+    lines.push(ISSUES_HEADER);
     const shown = applyLimit(result.issues, limit);
-    for (const entry of shown) {
+    const grouped = messageLines(
+      result.issues.map((entry) => oneLine3(entry.message)),
+      renderWidth() === null ? null : renderWidth() - ISSUE_LABEL_WIDTH
+    );
+    for (const line of grouped) {
+      if (line.index >= shown.length) {
+        continue;
+      }
+      const entry = shown[line.index];
       lines.push(
-        `  ${String(entry.count).padStart(5)}x  ${entry.type.padEnd(7)} ${truncate(oneLine3(entry.message), 92)}`
+        line.first ? `  ${String(line.index + 1).padStart(2)}. ${String(entry.count).padStart(5)}x  ${entry.type.padEnd(7)} ` + line.text : (
+          // A continuation, indented to sit under the message it
+          // belongs to rather than under the count.
+          `${" ".repeat(ISSUE_LABEL_WIDTH)}${line.text}`
+        )
       );
     }
     lines.push(moreLine(result.issues.length, shown.length));
   } else if (result.configFilter !== null) {
     lines.push("");
-    lines.push("Issues");
+    lines.push(ISSUES_HEADER);
     lines.push(`  ${emptyIssuesUnderFilter()}`);
   }
   if (result.coverage !== void 0) {
@@ -9742,14 +10222,30 @@ function renderText7(result, limit) {
   }
   if (result.taskIds !== void 0) {
     lines.push("");
-    lines.push("Task IDs");
     const shown = applyLimit(result.taskIds, limit);
+    lines.push(taskIdsHeader(result.taskIds, result.taskIdsIssue));
+    let lastDay;
     for (const row of shown) {
+      if (row.day !== lastDay) {
+        lastDay = row.day;
+        lines.push(`  ${row.day ?? "(no date recorded)"}`);
+      }
+      const jobName = row.jobName === null ? "(unknown job)" : (
+        // The real Taskcluster name, chunk suffix and all.
+        // `<name> chunk 8` was a format used nowhere in
+        // Taskcluster, Treeherder or the CI logs, so it could
+        // not be pasted into a search or matched against a job
+        // name from any other source.
+        withChunkSuffix(row.jobName, row.chunk)
+      );
       lines.push(
-        `  ${row.taskId}.${row.retryId}  ${row.status.padEnd(18)} ${row.day ?? "\u2014"}  ${row.jobName ?? "(unknown job)"}` + (row.chunk === null ? "" : ` chunk ${row.chunk}`)
+        `    ${row.taskId}.${row.retryId}  ` + jobName + // `×n` rather than the same line twice. Only entries
+        // identical in every field above are folded, so this never
+        // hides a second message or a second day.
+        (row.occurrences > 1 ? `  \xD7${row.occurrences}` : "")
       );
       if (row.crashCommand !== void 0) {
-        lines.push(`    ${row.crashCommand}`);
+        lines.push(`      ${row.crashCommand}`);
       }
     }
     lines.push(moreLine(result.taskIds.length, shown.length));
@@ -9774,7 +10270,7 @@ function renderText7(result, limit) {
     lines.push(moreLine(result.profiles.length, shown.length));
     if (shown.every((row) => row.testProfile === void 0)) {
       lines.push(
-        "  (these are resource-usage profiles; per-test profiles: fx-tests try <rev> --profiles)"
+        `  (these are resource-usage profiles; per-test profiles: fx-tests intermittent --test ${result.path} --profiles)`
       );
     }
   }
@@ -9975,10 +10471,40 @@ function renderMarkdown7(result, limit) {
     lines.push("");
     lines.push(note);
   }
+  if (result.dailyCountsAreFlat === false) {
+    lines.push("");
+    lines.push("Daily counts are not flat; `--history` shows the per-day breakdown.");
+  }
   const reachLine = describeReach(result.reach);
   if (reachLine !== null) {
     lines.push("");
     lines.push(reachLine);
+  }
+  const bugRows = annotatedBugRows(result.annotatedBugs);
+  if (bugRows.length > 0) {
+    lines.push("");
+    lines.push(heading("Bugs naming this test"));
+    lines.push("");
+    lines.push(
+      ...table2(
+        [
+          { header: "bug" },
+          { header: "summary" },
+          { header: "annotations", align: "right" },
+          { header: "window" },
+          { header: "drill down" }
+        ],
+        bugRows.map((bug) => [
+          `[${bug.bugId}](https://bugzilla.mozilla.org/show_bug.cgi?id=${bug.bugId})`,
+          // Untruncated, unlike the text renderer: `--markdown` never
+          // cuts, because it is the format for pasting into a bug.
+          bug.bugSummary,
+          count(bug.count),
+          `last ${bug.days} days`,
+          `\`fx-tests intermittent --bug ${bug.bugId}\``
+        ])
+      )
+    );
   }
   if (result.configs.length > 0) {
     lines.push("");
@@ -10007,23 +10533,31 @@ function renderMarkdown7(result, limit) {
   }
   if (result.issues.length > 0) {
     lines.push("");
-    lines.push(heading("Issues"));
+    lines.push(heading(ISSUES_HEADER));
     lines.push("");
     const shown = applyLimit(result.issues, limit);
     lines.push(
       ...table2(
         [
+          // The `--issue <n>` selector, same numbering as the text
+          // renderer's, so either transcript can feed the next command.
+          { header: "#", align: "right" },
           { header: "count", align: "right" },
           { header: "kind" },
           { header: "message" }
         ],
-        shown.map((entry) => [String(entry.count), entry.type, oneLine3(entry.message)])
+        shown.map((entry, i) => [
+          String(i + 1),
+          String(entry.count),
+          entry.type,
+          oneLine3(entry.message)
+        ])
       )
     );
     lines.push(moreLine2(result.issues.length, shown.length));
   } else if (result.configFilter !== null) {
     lines.push("");
-    lines.push(heading("Issues"));
+    lines.push(heading(ISSUES_HEADER));
     lines.push("");
     lines.push(emptyIssuesUnderFilter());
   }
@@ -10097,6 +10631,17 @@ function describeReach(reach) {
   const absent = reach.absentPlatforms.length === 0 ? "" : ` \u2014 not ${reach.absentPlatforms.join(", ")}; see --coverage`;
   return `Runs on ${reach.configCount} configs across ${platforms}${absent}`;
 }
+function taskIdsHeader(rows2, issue) {
+  const jobs = new Set(rows2.map((row) => `${row.taskId}.${row.retryId}`)).size;
+  const parts = [];
+  if (jobs !== rows2.length) {
+    parts.push(`${jobs} jobs`);
+  }
+  if (issue !== void 0) {
+    parts.push(`issue ${issue.position}: ${issue.type} ${truncate(oneLine3(issue.message), 60)}`);
+  }
+  return parts.length === 0 ? "Task IDs" : `Task IDs (${parts.join(", ")})`;
+}
 function emptyIssuesUnderFilter() {
   return "(no issues on the configurations this filter matched)";
 }
@@ -10125,114 +10670,6 @@ function dirOf(path) {
 }
 function oneLine3(value) {
   return value.replace(/\s*\r?\n\s*/g, " \u23CE ").trim();
-}
-
-// lib/query/flakiness-rate.ts
-var MIN_RECENT_RUNS = 100;
-var HISTORY_DAYS = 21;
-var MAX_TOOLTIP_CONFIGS = 4;
-function pickHeadlineRate(stats, configs) {
-  const overall = overallRate(stats);
-  const rateOf = (config) => config.recentSameMsgFailRate !== null ? {
-    rate: config.recentSameMsgFailRate,
-    runs: config.recentRunCount,
-    days: config.recentDays,
-    recent: true,
-    scope: "config"
-  } : {
-    rate: config.sameMsgFailRate,
-    runs: config.runCount,
-    recent: false,
-    scope: "config"
-  };
-  const score = (rate2) => rate2.runs > 0 ? rate2.rate - 100 / Math.sqrt(rate2.runs) : 0;
-  let best = null;
-  let bestScore = -Infinity;
-  for (const config of configs ?? []) {
-    const rate2 = rateOf(config);
-    const current = score(rate2);
-    if (best === null || current > bestScore) {
-      best = { ...rate2, jobName: config.jobName };
-      bestScore = current;
-    }
-  }
-  if (best === null || best.rate === 0) {
-    return { rate: overall, runs: stats.runCount, scope: "overall" };
-  }
-  return { ...best, scope: "config", lowConfidence: best.runs < MIN_RECENT_RUNS };
-}
-function overallRate(stats) {
-  return stats.runCount > 0 ? (stats.failCount + stats.crashCount + stats.timeoutCount) / stats.runCount * 100 : 0;
-}
-function formatFailRate(rate2) {
-  return `${rate2.toFixed(1)}%`;
-}
-function dayCount(days) {
-  return days === 1 ? "the last day" : `the last ${days} days`;
-}
-function flakinessTooltip(stats, configs, headline, hasMatchingMessage, totalDays) {
-  const overall = overallRate(stats);
-  const all = totalDays || HISTORY_DAYS;
-  const lines = [];
-  lines.push(
-    hasMatchingMessage ? "This failure already happens without your changes." : "This exact failure was never seen in history \u2014 it looks new.",
-    ""
-  );
-  if (headline.scope === "config") {
-    const span = headline.recent === true ? dayCount(headline.days) : `${all} days`;
-    lines.push(
-      `It fails this way ${formatFailRate(headline.rate)} of the time over ${span} on` + (headline.lowConfidence === true ? ` (only ${headline.runs} runs, so approximate)` : ""),
-      `${headline.jobName}`
-    );
-  }
-  const rateFor = (config) => config.recentSameMsgFailRate !== null ? { rate: config.recentSameMsgFailRate, runs: config.recentRunCount } : { rate: config.sameMsgFailRate, runs: config.runCount };
-  const shown = (configs ?? []).map((config) => ({
-    ...rateFor(config),
-    jobName: config.jobName,
-    recentDays: config.recentDays
-  })).filter((config) => config.rate > 0).sort((a, b) => b.rate - a.rate);
-  if (shown.length > 0) {
-    lines.push("", `Same failure over ${dayCount(shown[0].recentDays)}, by configuration:`);
-    for (const config of shown.slice(0, MAX_TOOLTIP_CONFIGS)) {
-      lines.push(`  ${formatFailRate(config.rate)} of ${config.runs} runs \u2014 ${config.jobName}`);
-    }
-    const hidden = shown.length - MAX_TOOLTIP_CONFIGS;
-    if (hidden > 0) {
-      lines.push(`  and ${hidden} more configuration${hidden === 1 ? "" : "s"}`);
-    }
-  }
-  lines.push(
-    "",
-    `Any failure, all platforms, ${all} days: ${formatFailRate(overall)} of ${stats.runCount} runs.`
-  );
-  return lines.filter((line, index) => line !== "" || lines[index - 1] !== "").join("\n");
-}
-
-// lib/model/failure-message.ts
-function normalizeMessage(message) {
-  if (message === null || message === void 0) {
-    return null;
-  }
-  return message.replace(/\r\n/g, "\n").replace(/task_\d+/g, "task_id").replace(/\nRejection date: [^\n]+/g, "").replace(/Test ran for \d+s/g, "Test ran for Xs");
-}
-
-// lib/model/test-path.ts
-var MANIFEST_PREFIX = /^[^:]+\.(?:toml|ini):/;
-function stripManifestPrefix(id) {
-  return id.replace(MANIFEST_PREFIX, "").replace(/\s+\(finished\)$/, "").trim();
-}
-function isTestFilePath(path) {
-  return /\.(js|html|xhtml)$/.test(path);
-}
-function normalizeTestPath(id) {
-  if (id === null || id === void 0 || id === "") {
-    return null;
-  }
-  const path = stripManifestPrefix(id);
-  return isTestFilePath(path) ? path : null;
-}
-function describeTestPathDrop(id) {
-  return id === null || id === void 0 || id === "" ? "no-id" : "not-a-test-path";
 }
 
 // lib/model/try-jobs.ts
@@ -10313,175 +10750,15 @@ function selectTryJobs(jobs, options) {
   };
 }
 
-// cli/commands/try.ts
-var MESSAGE_CAP = 20;
-var TRY_OPTIONS = {
-  project: {
-    type: "string",
-    placeholder: "<try|autoland|\u2026>",
-    describe: "The Treeherder repository the push is on. Default try."
-  },
-  "perma-only": {
-    type: "boolean",
-    describe: "Only the perma-fail section \u2014 the highest-signal output."
-  },
-  "all-jobs": {
-    type: "boolean",
-    // Says what it fetches, what that buys, and what it costs. The page's
-    // tooltip is the model ("Also fetch profiles of test jobs that
-    // ultimately succeeded, so tests that failed initially but passed on
-    // retry surface too"); the cost clause is added because a terminal
-    // gives no other warning before a run that reads tens of times more
-    // artifacts. Kept to one line because the help printer does not wrap.
-    describe: "Also read profiles of test jobs that SUCCEEDED, so a test that failed then passed on retry surfaces. Reads every test job: much slower."
-  },
-  "other-jobs": {
-    type: "boolean",
-    describe: "List the non-test job failures (builds, lint) the header already counts."
-  },
-  test: {
-    type: "string",
-    placeholder: "<path>",
-    describe: "Report one test per configuration: ran/pass/fail/skip/timeout. Needs --all-jobs for the pass counts."
-  },
-  "task-ids": { type: "boolean", describe: "Print the task IDs behind each failure." },
-  profiles: { type: "boolean", describe: "Print raw profile artifact URLs." },
-  messages: {
-    type: "boolean",
-    describe: `Print every failure message per row, not just the first (cap ${MESSAGE_CAP}).`
-  },
-  concurrency: {
-    type: "number",
-    placeholder: "<n>",
-    describe: "How many job profiles to fetch at once. Default 8."
+// lib/model/failure-message.ts
+function normalizeMessage(message) {
+  if (message === null || message === void 0) {
+    return null;
   }
-};
-var DEFAULT_LIMIT7 = 10;
-var PERMA_FAIL_DESCRIPTION = "failed in every run of at least one configuration here. Each row says what central shows on that same configuration.";
-var DEFAULT_CONCURRENCY = 8;
-async function runTry(context, args) {
-  const revision = args.positionals[0];
-  if (revision === void 0) {
-    throw usageError(
-      "try requires a revision",
-      "Usage: fx-tests try <revision>, e.g. fx-tests try 4f2c1a9e8b3d"
-    );
-  }
-  if (args.positionals.length > 1) {
-    throw usageError(`try takes one revision, got ${args.positionals.length}`);
-  }
-  const treeherder = context.treeherder;
-  if (treeherder === void 0) {
-    throw new Error("try needs a Treeherder client but none was supplied");
-  }
-  const fetchUrl = context.fetchUrl;
-  if (fetchUrl === void 0) {
-    throw new Error("try needs a URL fetcher but none was supplied");
-  }
-  if (context.globals.config.length > 0 || context.globals.excludeConfig.length > 0) {
-    throw usageError(
-      "--config cannot be applied to try: this command classifies a test across the configurations a push ran, so filtering the job set would change what each section means rather than narrow it",
-      "The per-row config names and central comparison are already per configuration. For one test on one configuration over central, use `fx-tests test <path> --config <substring>`."
-    );
-  }
-  const project = stringOption(args, "project") ?? "try";
-  progress(context, `Looking up ${revision} on ${project}\u2026`);
-  const push = await treeherder.findPush(project, revision);
-  progress(context, `Fetching jobs for push ${push.pushId}\u2026`);
-  const jobs = await treeherder.jobsOfPush(push.pushId);
-  const selection = selectTryJobs(jobs, {
-    readPassingJobs: boolOption(args, "all-jobs")
-  });
-  const { failedTestJobs, successfulTestJobs, otherFailedJobs, jobsToProcess } = selection;
-  const { readPassingJobs, runsPerJobName } = selection;
-  let timings = [];
-  if (jobsToProcess.length > 0) {
-    progress(
-      context,
-      `Reading ${jobsToProcess.length} job profiles (one per ${readPassingJobs ? "completed test job, passing ones included" : "failed test job"})\u2026`
-    );
-    timings = await collectTimings(
-      context,
-      jobsToProcess,
-      fetchUrl,
-      Number(args.options.get("concurrency") ?? DEFAULT_CONCURRENCY)
-    );
-  }
-  const testPath = stringOption(args, "test");
-  if (testPath !== void 0) {
-    emit(
-      context,
-      renderTestReport(
-        context,
-        push.revision,
-        project,
-        testPath,
-        timings,
-        runsPerJobName,
-        readPassingJobs
-      )
-    );
-    return;
-  }
-  const failures = aggregateFailures(timings, runsPerJobName);
-  if (failures.length > 0) {
-    progress(context, `Comparing ${failures.length} failing tests against central\u2026`);
-    await attachCentralHistory(context, failures);
-  }
-  const asJson = context.globals.format === "json";
-  const withTaskIds = asJson || boolOption(args, "task-ids");
-  const withProfiles = asJson || boolOption(args, "profiles");
-  attachProvenance(failures, timings, withTaskIds, withProfiles);
-  const blamed = new Set(
-    timings.filter((timing) => isFailureStatus(timing.status)).map(runKeyOf)
-  );
-  const unblamedJobCount = failedTestJobs.filter((job) => !blamed.has(runKeyOf(job))).length;
-  const result = {
-    revision: push.revision,
-    pushId: push.pushId,
-    project,
-    treeherderUrl: treeherderPushUrl(project, push.revision),
-    jobCount: jobs.length,
-    failedJobCount: failedTestJobs.length + otherFailedJobs.length,
-    profilesRead: jobsToProcess.length,
-    readPassingJobs,
-    passingTestJobCount: successfulTestJobs.length,
-    unblamedJobCount,
-    otherFailedJobs: otherFailedJobs.map((job) => ({
-      jobName: job.jobName,
-      taskId: job.taskId,
-      result: job.result
-    })),
-    permaFails: failures.filter(isPermaFail),
-    knownIntermittents: failures.filter(
-      (failure) => !isPermaFail(failure) && isKnownOnCentral(failure)
-    ),
-    newIntermittents: failures.filter(
-      (failure) => !isPermaFail(failure) && !isKnownOnCentral(failure)
-    )
-  };
-  if (context.globals.format === "json") {
-    emit(context, toJson(result));
-    return;
-  }
-  const limit = context.globals.limit ?? DEFAULT_LIMIT7;
-  emit(
-    context,
-    context.globals.format === "markdown" ? renderMarkdown8(result, limit, boolOption(args, "perma-only"), boolOption(args, "other-jobs")) : renderText8(
-      result,
-      limit,
-      boolOption(args, "perma-only"),
-      boolOption(args, "other-jobs"),
-      boolOption(args, "messages")
-    )
-  );
+  return message.replace(/\r\n/g, "\n").replace(/task_\d+/g, "task_id").replace(/\nRejection date: [^\n]+/g, "").replace(/Test ran for \d+s/g, "Test ran for Xs");
 }
-function isPermaFail(failure) {
-  return failure.everyRunFailed;
-}
-function isKnownOnCentral(failure) {
-  return failure.central !== null && failure.central.failCount > 0;
-}
+
+// lib/model/test-markers.ts
 function isStreamedProfile(bytes2) {
   const head = new TextDecoder().decode(bytes2.subarray(0, 64 * 1024));
   const newline = head.indexOf("\n");
@@ -10495,68 +10772,6 @@ function isStreamedProfile(bytes2) {
     return false;
   }
   return rest.startsWith("{");
-}
-async function collectTimings(context, jobs, fetchUrl, concurrency) {
-  const timings = [];
-  const dropped = [];
-  const queue = [...jobs];
-  let done = 0;
-  let missing = 0;
-  let streamed = 0;
-  const worker = async () => {
-    for (; ; ) {
-      const job = queue.shift();
-      if (job === void 0) {
-        return;
-      }
-      const url = resourceUsageProfileUrl(job.taskId, job.retryId);
-      let bytes2 = null;
-      try {
-        bytes2 = await fetchUrl(url);
-      } catch {
-        bytes2 = null;
-      }
-      done++;
-      if (bytes2 === null) {
-        missing++;
-      } else if (isStreamedProfile(bytes2)) {
-        streamed++;
-      } else {
-        try {
-          const profile = JSON.parse(new TextDecoder().decode(bytes2));
-          timings.push(...parseTestMarkers(profile, job, dropped));
-        } catch {
-          missing++;
-        }
-      }
-      if (done % 10 === 0) {
-        progress(context, `  \u2026${done}/${jobs.length} profiles`);
-      }
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.max(1, Math.min(concurrency, jobs.length)) }, worker)
-  );
-  if (streamed > 0) {
-    warn(
-      context,
-      `${streamed} of ${jobs.length} jobs were killed for exceeding their maximum duration, so only a streamed profile exists for them and this tool does not read that format; failures in those jobs are not in this report`
-    );
-  }
-  if (missing > 0) {
-    warn(
-      context,
-      `${missing} of ${jobs.length} job profiles could not be read; failures in those jobs are not in this report`
-    );
-  }
-  if (dropped.length > 0) {
-    const shown = [...new Set(dropped.map((entry) => `${entry.status} ${entry.id}`))];
-    warn(
-      context,
-      `${dropped.length} failing marker${dropped.length === 1 ? "" : "s"} named no test path and are not in this report (a crash recorded against a manifest has no path to compare against central): ${shown.slice(0, 5).join(", ")}` + (shown.length > 5 ? `, and ${shown.length - 5} more` : "")
-    );
-  }
-  return timings;
 }
 var DROP_WORTH_REPORTING = /* @__PURE__ */ new Set(["FAIL", "TIMEOUT", "CRASH", "ERROR"]);
 function parseTestMarkers(profile, job, dropped = []) {
@@ -10712,6 +10927,1054 @@ function parseTestMarkers(profile, job, dropped = []) {
       retryId: job.retryId,
       isRerun: false
     });
+  }
+  return timings;
+}
+
+// cli/format/failure-lines.ts
+var MESSAGE_CAP = 20;
+function flatten(message) {
+  return message.replace(/\s*\n\s*/g, " \u23CE ");
+}
+function messageLines2(failure, allMessages) {
+  const all = failure.allMessages;
+  if (allMessages) {
+    const counted = new Map(all.map((entry) => [entry.message, entry.count]));
+    const ordered = [...all];
+    for (const message of failure.messages) {
+      if (!counted.has(message)) {
+        counted.set(message, 0);
+        ordered.push({ message, count: 0 });
+      }
+    }
+    if (ordered.length === 0) {
+      return [];
+    }
+    const shown2 = ordered.slice(0, MESSAGE_CAP);
+    const lines2 = shown2.map(
+      (entry) => (
+        // Blank rather than `0x` for a row with no per-execution count,
+        // since `0x` would read as "never seen".
+        `    ${(entry.count > 0 ? `${entry.count}x` : "").padStart(4)} ` + truncate(flatten(entry.message), 106)
+      )
+    );
+    if (ordered.length > shown2.length) {
+      lines2.push(
+        `    (${ordered.length - shown2.length} more messages, not shown: the cap is ${MESSAGE_CAP} per row)`
+      );
+    }
+    return lines2;
+  }
+  const shown = failure.messages.slice(0, 2);
+  const lines = shown.map((message) => `    ${truncate(flatten(message), 110)}`);
+  const union = /* @__PURE__ */ new Set([...failure.messages, ...all.map((entry) => entry.message)]);
+  for (const message of shown) {
+    union.delete(message);
+  }
+  if (union.size > 0) {
+    lines.push(
+      `    (+${union.size} more message${union.size === 1 ? "" : "s"} for this test; --messages to see them)`
+    );
+  }
+  return lines;
+}
+function droppedMarkerSummary(dropped, limit = 5) {
+  const ids = [...new Set(dropped.map((entry) => `${entry.status} ${entry.id}`))];
+  return {
+    count: dropped.length,
+    shown: ids.slice(0, limit).join(", ") + (ids.length > limit ? `, and ${ids.length - limit} more` : "")
+  };
+}
+
+// cli/commands/task.ts
+var DEFAULT_LIMIT7 = 20;
+var PROVENANCE_ROWS = 5;
+var TASK_OPTIONS = {
+  profiles: {
+    type: "boolean",
+    // Kept, narrowly. The default now names each per-test profile by
+    // filename under the header's URL, which is what a reader wants; this
+    // prints them as absolute URLs, which is what a script piping to
+    // `curl` or `profiler-cli` wants without having to join strings.
+    describe: "Print per-test profile URLs in full, rather than as filenames."
+  },
+  messages: {
+    type: "boolean",
+    describe: `Print every failure message per row, not just the first (cap ${MESSAGE_CAP}).`
+  },
+  passed: {
+    type: "boolean",
+    // The default answers "what failed", which is the question usually
+    // asked. The profile also records every PASS and SKIP, and "did this
+    // test even run in this chunk" is the other thing a task ID gets
+    // asked, so the data is there behind a flag rather than thrown away.
+    //
+    // "passed and were skipped" described one test as both; these are two
+    // disjoint groups of tests, and the flag lists the union of them.
+    describe: "Also list the tests that passed or were skipped, not just the failures."
+  }
+};
+async function runTask(context, args) {
+  const rawTaskId = args.positionals[0];
+  if (rawTaskId === void 0) {
+    throw usageError(
+      "task requires a task ID",
+      "Usage: fx-tests task <taskId>[.<retryId>]. Task IDs come from `fx-tests test <path> --task-ids`, `fx-tests try <rev> --task-ids` or a Treeherder job URL."
+    );
+  }
+  if (args.positionals.length > 1) {
+    throw usageError(
+      `task takes one task ID, got ${args.positionals.length}: ` + args.positionals.join(", ")
+    );
+  }
+  const { taskId, retryId } = parseTaskId(rawTaskId);
+  const source = context.taskArtifacts;
+  if (source === void 0) {
+    throw new Error("task needs a task-artifact source but none was supplied");
+  }
+  const profileUrl = resourceUsageProfileUrl(taskId, retryId);
+  progress(context, `Reading the resource-usage profile of task ${taskId}.${retryId}\u2026`);
+  const profile = await fetchProfile(source, taskId, retryId, profileUrl);
+  progress(context, "Reading the task definition for the job name\u2026");
+  const identity = await fetchIdentity(context, source, taskId);
+  const dropped = [];
+  const timings = parseTestMarkers(
+    profile,
+    {
+      // `parseTestMarkers` stamps every row with these three. The job
+      // name is what a row would be grouped by in `try`; here it is the
+      // header, and a task whose definition would not load still gets
+      // rows.
+      jobName: identity.jobName ?? `${taskId}.${retryId}`,
+      taskId,
+      retryId
+    },
+    dropped
+  );
+  reportDropped(context, dropped);
+  const result = summarize3(taskId, retryId, identity, profileUrl, timings);
+  const asJson = context.globals.format === "json";
+  if (asJson || boolOption(args, "passed")) {
+    result.passed = nonFailures(timings, result.failures);
+  }
+  attachProvenance(result.failures, timings, taskId, retryId);
+  if (asJson) {
+    emit(context, toJson(result));
+    return;
+  }
+  const limit = context.globals.limit ?? DEFAULT_LIMIT7;
+  emit(
+    context,
+    context.globals.format === "markdown" ? renderMarkdown8(result, limit) : renderText8(
+      result,
+      limit,
+      boolOption(args, "profiles"),
+      boolOption(args, "messages"),
+      boolOption(args, "passed")
+    )
+  );
+}
+async function fetchIdentity(context, source, taskId) {
+  let definition;
+  try {
+    const bytes2 = await source.fetch(taskDefinitionName(taskId));
+    definition = JSON.parse(new TextDecoder().decode(bytes2));
+  } catch {
+    warn(
+      context,
+      `could not read the definition of task ${taskId}, so the job name, repository and revision are missing from the header; the results below are unaffected`
+    );
+    return { jobName: null, project: null, revision: null };
+  }
+  return {
+    // `metadata.name` and `tags.label` are the same string on every gecko
+    // test task measured; the tag is the fallback rather than the source
+    // because `metadata.name` is the field Taskcluster documents.
+    jobName: definition.metadata?.name ?? definition.tags?.label ?? null,
+    project: definition.tags?.project ?? null,
+    revision: revisionOf(definition.metadata?.source)
+  };
+}
+function reportDropped(context, dropped) {
+  if (dropped.length === 0) {
+    return;
+  }
+  const { count: count2, shown } = droppedMarkerSummary(dropped);
+  warn(
+    context,
+    `${count2} failing marker${count2 === 1 ? "" : "s"} in this job named no test path and ${count2 === 1 ? "is" : "are"} not in the table below (a crash recorded against a manifest has no test to attribute it to): ${shown}`
+  );
+}
+function revisionOf(source) {
+  const match = /\/file\/([0-9a-f]{12,40})\//.exec(source ?? "");
+  return match?.[1] ?? null;
+}
+async function fetchProfile(source, taskId, retryId, url) {
+  let bytes2;
+  try {
+    bytes2 = await source.fetch(
+      taskArtifactName(taskId, retryId, "public/test_info/profile_resource-usage.json")
+    );
+  } catch (error) {
+    if (error instanceof DataFileNotFoundError) {
+      throw goneError(
+        `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is not there.`,
+        "Taskcluster expires task artifacts after about a month, so this is permanent and retrying will not help. Check the retry number \u2014 `.0` is assumed \u2014 and get a current task ID from `fx-tests test <path> --task-ids`. A job that is not a test job never uploads one."
+      );
+    }
+    if (error instanceof DataFetchError && error.status === 400) {
+      throw usageError(
+        `"${taskId}" is not a task ID Taskcluster will accept (HTTP 400).`,
+        "A task ID is 22 URL-safe base64 characters. The `.<retryId>` suffix is optional and defaults to .0. Get one from `fx-tests test <path> --task-ids`, `fx-tests try <rev> --task-ids`, or the `selectedTaskRun` parameter of a Treeherder job URL."
+      );
+    }
+    if (error instanceof DataFetchError) {
+      throw upstreamError(
+        `could not fetch ${url}: ${error.message}`,
+        error.status === 403 ? "A 403 here is usually a malformed artifact path rather than an expired artifact, which answers 404. Retrying may work." : "This looks transient \u2014 retrying may work."
+      );
+    }
+    throw error;
+  }
+  if (isStreamedProfile(bytes2)) {
+    throw upstreamError(
+      `task ${taskId}.${retryId} was killed for exceeding its maximum duration, so its profile is a partial stream rather than a finished document and this tool does not read that format.`,
+      "The job never got to write a profile, so there are no per-test results to read. Its duration is the problem to look at; the log is on Treeherder."
+    );
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes2));
+  } catch (error) {
+    throw upstreamError(
+      `the profile of task ${taskId}.${retryId} is not valid JSON: ${error.message}`,
+      `Re-run with --no-cache in case a truncated copy was cached; the artifact is ${url}.`
+    );
+  }
+}
+function summarize3(taskId, retryId, identity, profileUrl, timings) {
+  const byTest = /* @__PURE__ */ new Map();
+  const entryFor = (path) => {
+    let entry = byTest.get(path);
+    if (entry === void 0) {
+      entry = {
+        path,
+        failureCount: 0,
+        executionCount: 0,
+        statuses: /* @__PURE__ */ new Set(),
+        allStatuses: /* @__PURE__ */ new Set(),
+        modes: /* @__PURE__ */ new Set(),
+        passedOnRerun: false,
+        messages: /* @__PURE__ */ new Map(),
+        otherMessages: /* @__PURE__ */ new Map(),
+        profileFilenames: []
+      };
+      byTest.set(path, entry);
+    }
+    return entry;
+  };
+  for (const timing of timings) {
+    const entry = entryFor(timing.path);
+    entry.executionCount++;
+    entry.allStatuses.add(baseStatus(timing.status));
+    if (isFailureStatus(timing.status)) {
+      entry.failureCount++;
+      entry.statuses.add(baseStatus(timing.status));
+      entry.modes.add(/-(PARALLEL|SEQUENTIAL)$/.exec(timing.status)?.[1] ?? "UNRECORDED");
+      if (timing.message !== null) {
+        entry.messages.set(
+          timing.message,
+          (entry.messages.get(timing.message) ?? 0) + 1
+        );
+      }
+      for (const message of timing.messages) {
+        entry.otherMessages.set(
+          message,
+          (entry.otherMessages.get(message) ?? 0) + 1
+        );
+      }
+      for (const filename of timing.profileFilenames) {
+        if (!entry.profileFilenames.includes(filename)) {
+          entry.profileFilenames.push(filename);
+        }
+      }
+    } else if (timing.isRerun && timing.status.startsWith("PASS")) {
+      entry.passedOnRerun = true;
+    }
+  }
+  const statusCounts = {};
+  for (const entry of byTest.values()) {
+    for (const status of entry.allStatuses) {
+      statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+    }
+  }
+  const failures = [];
+  for (const entry of byTest.values()) {
+    if (entry.failureCount === 0) {
+      continue;
+    }
+    const failure = {
+      path: entry.path,
+      failureCount: entry.failureCount,
+      executionCount: entry.executionCount,
+      statuses: [...entry.statuses].sort(),
+      passedOnRerun: entry.passedOnRerun,
+      parallelOnly: entry.modes.size === 1 && entry.modes.has("PARALLEL"),
+      messages: [...entry.messages].sort((a, b) => b[1] - a[1]).map(([message]) => message),
+      allMessages: [...entry.otherMessages].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([message, count2]) => ({ message, count: count2 }))
+    };
+    failures.push(failure);
+  }
+  return {
+    taskId,
+    retryId,
+    jobName: identity.jobName,
+    project: identity.project,
+    revision: identity.revision,
+    treeherderUrl: identity.project !== null && identity.revision !== null ? treeherderJobUrl(identity.project, identity.revision, taskId, retryId) : null,
+    profileUrl,
+    testCount: byTest.size,
+    executionCount: timings.length,
+    rerunCount: timings.filter((timing) => timing.isRerun).length,
+    statusCounts,
+    // `try`'s default sort, and its deterministic tie-break: failing
+    // executions descending, then the path, so two runs over one warm cache
+    // produce the same bytes.
+    failures: failures.sort(
+      (a, b) => b.failureCount - a.failureCount || a.path.localeCompare(b.path)
+    )
+  };
+}
+function nonFailures(timings, failures) {
+  const failing = new Set(failures.map((failure) => failure.path));
+  const byPath = /* @__PURE__ */ new Map();
+  for (const timing of timings) {
+    if (failing.has(timing.path)) {
+      continue;
+    }
+    let entry = byPath.get(timing.path);
+    if (entry === void 0) {
+      entry = { statuses: /* @__PURE__ */ new Set(), executionCount: 0 };
+      byPath.set(timing.path, entry);
+    }
+    entry.statuses.add(baseStatus(timing.status));
+    entry.executionCount++;
+  }
+  return [...byPath].map(([path, entry]) => ({
+    path,
+    statuses: [...entry.statuses].sort(),
+    executionCount: entry.executionCount
+  })).sort((a, b) => a.path.localeCompare(b.path));
+}
+function attachProvenance(failures, timings, taskId, retryId) {
+  const byPath = /* @__PURE__ */ new Map();
+  for (const timing of timings) {
+    if (!isFailureStatus(timing.status)) {
+      continue;
+    }
+    const list = byPath.get(timing.path) ?? [];
+    for (const filename of timing.profileFilenames) {
+      if (!list.includes(filename)) {
+        list.push(filename);
+      }
+    }
+    byPath.set(timing.path, list);
+  }
+  for (const failure of failures) {
+    failure.testProfiles = (byPath.get(failure.path) ?? []).map(
+      (filename) => testInfoArtifactUrl(taskId, retryId, filename)
+    );
+  }
+}
+function headerLines5(result) {
+  const lines = [];
+  lines.push(
+    `Task ${result.taskId}.${result.retryId}` + (result.jobName === null ? "" : ` \u2014 ${result.jobName}`)
+  );
+  if (result.project !== null || result.revision !== null) {
+    lines.push(
+      [result.project, result.revision?.slice(0, 12)].filter((part) => part !== null).join(" ")
+    );
+  }
+  lines.push(
+    `${result.testCount} tests, ${result.executionCount} executions` + (result.rerunCount > 0 ? ` (${result.rerunCount} of them harness reruns)` : "") + `, ${result.failures.length} failing`
+  );
+  lines.push(outcomeLine(result));
+  return lines.filter((line) => line !== "");
+}
+function outcomeLine(result) {
+  const entries = Object.entries(result.statusCounts).sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+  );
+  if (entries.length === 0) {
+    return "";
+  }
+  return `Outcomes, counted per test: ` + entries.map(([status, count2]) => `${count2} ${status}`).join(", ");
+}
+function renderText8(result, limit, withProfiles, allMessages, withPassed) {
+  const lines = [...headerLines5(result)];
+  if (result.treeherderUrl !== null) {
+    lines.push(result.treeherderUrl);
+  }
+  lines.push(`profile ${result.profileUrl}`);
+  lines.push("");
+  if (result.failures.length === 0) {
+    lines.push(
+      result.testCount === 0 ? "This profile records no tests at all. Either the job is not a test job, or the harness died before it ran one \u2014 the log on Treeherder is the next step." : "No test-level failure in this job. If Treeherder shows it red, the failure is not attributed to a test: a harness crash, a leak check, or a shutdown hang recorded against a manifest. Read the log."
+    );
+  } else {
+    lines.push(...failureSection(result, limit, withProfiles, allMessages));
+  }
+  if (withPassed && result.passed !== void 0 && result.passed.length > 0) {
+    lines.push("");
+    lines.push(`DID NOT FAIL (${result.passed.length})`);
+    const shown = applyLimit(result.passed, limit);
+    lines.push(
+      ...table(
+        [
+          { header: "test", path: true },
+          { header: "status" },
+          { header: "runs", align: "right" }
+        ],
+        shown.map((entry) => [
+          entry.path,
+          entry.statuses.join(", "),
+          String(entry.executionCount)
+        ])
+      )
+    );
+    lines.push(moreLine(result.passed.length, shown.length));
+  }
+  if (result.failures.length > 0) {
+    lines.push("");
+    lines.push(
+      "One job says what failed, not whether it usually does. For that, run `fx-tests test <path>` on a row above."
+    );
+  }
+  return joinLines(lines);
+}
+function sharedAnnotations(failures) {
+  if (failures.length < 2) {
+    return { passedOnRerun: false, parallelOnly: false };
+  }
+  return {
+    passedOnRerun: failures.every((failure) => failure.passedOnRerun),
+    parallelOnly: failures.every((failure) => failure.parallelOnly)
+  };
+}
+function sharedAnnotationLines(shared, count2) {
+  const lines = [];
+  if (shared.passedOnRerun) {
+    lines.push(`  All ${count2} passed when the harness reran them.`);
+  }
+  if (shared.parallelOnly) {
+    lines.push(`  All ${count2} failed only in the parallel phase.`);
+  }
+  return lines;
+}
+function profileLines(failure, withProfiles) {
+  const urls = failure.testProfiles ?? [];
+  if (urls.length === 0) {
+    return [];
+  }
+  const shown = urls.slice(0, PROVENANCE_ROWS);
+  const lines = withProfiles ? shown.map((url) => `    profile ${url}`) : [
+    `    ${shown.length === 1 ? "profile" : "profiles"} in ` + shown.map((url) => url.slice(url.lastIndexOf("/") + 1)).join(" ")
+  ];
+  const hidden = urls.length - shown.length;
+  if (hidden > 0) {
+    lines.push(`    \u2026 ${hidden} more profile${hidden === 1 ? "" : "s"}`);
+  }
+  return lines;
+}
+function failureSection(result, limit, withProfiles, allMessages) {
+  const shared = sharedAnnotations(result.failures);
+  const lines = [
+    `FAILED (${result.failures.length}) \u2014 every test this job recorded a failure for.`,
+    ...sharedAnnotationLines(shared, result.failures.length)
+  ];
+  if (withProfiles && result.failures.every((f) => (f.testProfiles ?? []).length === 0)) {
+    lines.push("  No failing test named a per-test profile in this job.");
+  }
+  const shown = applyLimit(result.failures, limit);
+  for (const failure of shown) {
+    lines.push("");
+    lines.push(`  ${failure.path}`);
+    lines.push(
+      `    ${failure.statuses.join(", ")} \u2014 ${failure.failureCount} failing ${failure.failureCount === 1 ? "execution" : "executions"} of ${failure.executionCount}`
+    );
+    if (failure.passedOnRerun && !shared.passedOnRerun) {
+      lines.push("    Passed when the harness reran it.");
+    }
+    if (failure.parallelOnly && !shared.parallelOnly) {
+      lines.push("    Failed only in the parallel phase.");
+    }
+    lines.push(...messageLines2(failure, allMessages));
+    lines.push(...profileLines(failure, withProfiles));
+  }
+  const more = moreLine(result.failures.length, shown.length);
+  if (more !== null) {
+    lines.push(more);
+  }
+  return lines;
+}
+function renderMarkdown8(result, limit) {
+  const lines = [];
+  lines.push(
+    heading(
+      `Task ${result.taskId}.${result.retryId}` + (result.jobName === null ? "" : ` \u2014 ${result.jobName}`),
+      1
+    )
+  );
+  lines.push("");
+  for (const line of headerLines5(result).slice(1)) {
+    lines.push(line);
+    lines.push("");
+  }
+  if (result.treeherderUrl !== null) {
+    lines.push(`[View on Treeherder](${result.treeherderUrl})`);
+    lines.push("");
+  }
+  lines.push(`[Resource-usage profile](${result.profileUrl})`);
+  lines.push("");
+  lines.push(heading(`Failed (${result.failures.length})`));
+  lines.push("");
+  if (result.failures.length === 0) {
+    lines.push("None attributed to a test.");
+    return joinLines(lines);
+  }
+  const shown = applyLimit(result.failures, limit);
+  lines.push(
+    ...table2(
+      [
+        // A true ordinal, unlike `try`'s `#`, which holds the failing
+        // execution count. That works there because `try` prints no
+        // adjacent execution column; here `Executions` is
+        // `failureCount/executionCount` in the very next cell, so a `#`
+        // holding the numerator again would be a duplicate reading `1`
+        // down every row of a five-row table — measured on
+        // `KDqOl_b-QeKPlA6J6BaM_A`. The rows are ranked, so the column
+        // says where in the ranking each one is.
+        { header: "#", align: "right" },
+        { header: "Test" },
+        { header: "Status" },
+        { header: "Executions", align: "right" },
+        // A single task cannot say a failure is intermittent tree-wide,
+        // but an in-job rerun that went green says it here, and that is
+        // the one column of triage this command earns.
+        { header: "Passed on rerun" },
+        { header: "Message" }
+      ],
+      shown.map((failure, index) => [
+        String(index + 1),
+        failure.path,
+        failure.statuses.join(", "),
+        `${failure.failureCount}/${failure.executionCount}`,
+        failure.passedOnRerun ? "yes" : "",
+        truncate(failure.messages[0] ?? "", 120)
+      ])
+    )
+  );
+  lines.push(moreLine2(result.failures.length, shown.length));
+  return joinLines(lines);
+}
+
+// lib/sources/lando.ts
+var LANDO_INSTANCES = {
+  "lando-dev": "api.dev.lando.nonprod.cloudops.mozgcp.net",
+  "lando-dev-2025": "lando-dev.allizom.org",
+  "lando-prod": "api.lando.services.mozilla.com",
+  "lando-prod-2025": "lando.moz.tools"
+};
+var DEFAULT_LANDO_INSTANCE = "lando-prod";
+var CURRENT_LANDO_INSTANCE = "lando-prod-2025";
+var LandoError = class extends Error {
+  url;
+  status;
+  constructor(message, url, status) {
+    super(message);
+    this.name = "LandoError";
+    this.url = url;
+    this.status = status;
+  }
+};
+var LandingJobNotFoundError = class extends Error {
+  commitId;
+  instance;
+  constructor(commitId, instance) {
+    super(`Lando has no landing job ${commitId} on ${instance}`);
+    this.name = "LandingJobNotFoundError";
+    this.commitId = commitId;
+    this.instance = instance;
+  }
+};
+var TREEHERDER_HOSTS = /* @__PURE__ */ new Set([
+  "treeherder.mozilla.org",
+  "treeherder.allizom.org"
+]);
+function parseTreeherderUrl(raw) {
+  const trimmed = raw.trim();
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return void 0;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return void 0;
+  }
+  if (!TREEHERDER_HOSTS.has(url.hostname)) {
+    return void 0;
+  }
+  const repository = emptyAsUndefined(url.searchParams.get("repo"));
+  const revision = emptyAsUndefined(url.searchParams.get("revision"));
+  if (revision !== void 0) {
+    return { kind: "revision", revision, repository };
+  }
+  const ids = url.searchParams.getAll("landoCommitID");
+  if (ids.length === 0) {
+    return void 0;
+  }
+  if (ids.length > 1) {
+    throw new LandoError(
+      `the URL carries ${ids.length} landoCommitID parameters (${ids.join(", ")}); it names more than one landing job`,
+      trimmed
+    );
+  }
+  const commitId = Number.parseInt(ids[0], 10);
+  if (!Number.isInteger(commitId) || commitId <= 0) {
+    return void 0;
+  }
+  const instance = emptyAsUndefined(url.searchParams.get("landoInstance")) ?? DEFAULT_LANDO_INSTANCE;
+  return { kind: "lando", commitId, instance, repository };
+}
+function emptyAsUndefined(value) {
+  return value === null || value === "" ? void 0 : value;
+}
+function looksLikeLandoCommitId(raw) {
+  const trimmed = raw.trim();
+  return /^[0-9]{1,7}$/.test(trimmed) && Number(trimmed) > 0;
+}
+function landingJobUrl(commitId, instance = DEFAULT_LANDO_INSTANCE) {
+  const host = LANDO_INSTANCES[instance] ?? LANDO_INSTANCES[DEFAULT_LANDO_INSTANCE];
+  return `https://${host}/landing_jobs/${commitId}/`;
+}
+function landoClient(options) {
+  return {
+    async landingJob(commitId, instance = DEFAULT_LANDO_INSTANCE) {
+      const url = landingJobUrl(commitId, instance);
+      let response;
+      try {
+        response = await options.fetch(url);
+      } catch (error) {
+        throw new LandoError(
+          `request to Lando failed: ${error.message}`,
+          url
+        );
+      }
+      if (response.status === 404) {
+        throw new LandingJobNotFoundError(commitId, instance);
+      }
+      if (!response.ok) {
+        throw new LandoError(`Lando returned HTTP ${response.status}`, url, response.status);
+      }
+      const text = new TextDecoder().decode(await response.arrayBuffer());
+      let body;
+      try {
+        body = JSON.parse(text);
+      } catch (error) {
+        throw new LandoError(
+          `Lando response is not valid JSON: ${error.message}`,
+          url
+        );
+      }
+      return readLandingJob(body, commitId, url);
+    }
+  };
+}
+function readLandingJob(body, commitId, url) {
+  if (typeof body.status !== "string") {
+    throw new LandoError(`Lando job ${commitId} has no status`, url);
+  }
+  const revision = body.commit_id;
+  return {
+    id: typeof body.id === "number" ? body.id : commitId,
+    status: body.status,
+    revision: revision === void 0 || revision === "" ? void 0 : revision,
+    repository: body.repository,
+    error: body.error ?? "",
+    url: body.url
+  };
+}
+
+// lib/query/flakiness-rate.ts
+var MIN_RECENT_RUNS = 100;
+var HISTORY_DAYS = 21;
+var MAX_TOOLTIP_CONFIGS = 4;
+function pickHeadlineRate(stats, configs) {
+  const overall = overallRate(stats);
+  const rateOf = (config) => config.recentSameMsgFailRate !== null ? {
+    rate: config.recentSameMsgFailRate,
+    runs: config.recentRunCount,
+    days: config.recentDays,
+    recent: true,
+    scope: "config"
+  } : {
+    rate: config.sameMsgFailRate,
+    runs: config.runCount,
+    recent: false,
+    scope: "config"
+  };
+  const score = (rate2) => rate2.runs > 0 ? rate2.rate - 100 / Math.sqrt(rate2.runs) : 0;
+  let best = null;
+  let bestScore = -Infinity;
+  for (const config of configs ?? []) {
+    const rate2 = rateOf(config);
+    const current = score(rate2);
+    if (best === null || current > bestScore) {
+      best = { ...rate2, jobName: config.jobName };
+      bestScore = current;
+    }
+  }
+  if (best === null || best.rate === 0) {
+    return { rate: overall, runs: stats.runCount, scope: "overall" };
+  }
+  return { ...best, scope: "config", lowConfidence: best.runs < MIN_RECENT_RUNS };
+}
+function overallRate(stats) {
+  return stats.runCount > 0 ? (stats.failCount + stats.crashCount + stats.timeoutCount) / stats.runCount * 100 : 0;
+}
+function formatFailRate(rate2) {
+  return `${rate2.toFixed(1)}%`;
+}
+function dayCount(days) {
+  return days === 1 ? "the last day" : `the last ${days} days`;
+}
+function flakinessTooltip(stats, configs, headline, hasMatchingMessage, totalDays) {
+  const overall = overallRate(stats);
+  const all = totalDays || HISTORY_DAYS;
+  const lines = [];
+  lines.push(
+    hasMatchingMessage ? "This failure already happens without your changes." : "This exact failure was never seen in history \u2014 it looks new.",
+    ""
+  );
+  if (headline.scope === "config") {
+    const span = headline.recent === true ? dayCount(headline.days) : `${all} days`;
+    lines.push(
+      `It fails this way ${formatFailRate(headline.rate)} of the time over ${span} on` + (headline.lowConfidence === true ? ` (only ${headline.runs} runs, so approximate)` : ""),
+      `${headline.jobName}`
+    );
+  }
+  const rateFor = (config) => config.recentSameMsgFailRate !== null ? { rate: config.recentSameMsgFailRate, runs: config.recentRunCount } : { rate: config.sameMsgFailRate, runs: config.runCount };
+  const shown = (configs ?? []).map((config) => ({
+    ...rateFor(config),
+    jobName: config.jobName,
+    recentDays: config.recentDays
+  })).filter((config) => config.rate > 0).sort((a, b) => b.rate - a.rate);
+  if (shown.length > 0) {
+    lines.push("", `Same failure over ${dayCount(shown[0].recentDays)}, by configuration:`);
+    for (const config of shown.slice(0, MAX_TOOLTIP_CONFIGS)) {
+      lines.push(`  ${formatFailRate(config.rate)} of ${config.runs} runs \u2014 ${config.jobName}`);
+    }
+    const hidden = shown.length - MAX_TOOLTIP_CONFIGS;
+    if (hidden > 0) {
+      lines.push(`  and ${hidden} more configuration${hidden === 1 ? "" : "s"}`);
+    }
+  }
+  lines.push(
+    "",
+    `Any failure, all platforms, ${all} days: ${formatFailRate(overall)} of ${stats.runCount} runs.`
+  );
+  return lines.filter((line, index) => line !== "" || lines[index - 1] !== "").join("\n");
+}
+
+// cli/commands/try.ts
+var TRY_OPTIONS = {
+  project: {
+    type: "string",
+    placeholder: "<try|autoland|\u2026>",
+    describe: "The Treeherder repository the push is on. Default try."
+  },
+  "perma-only": {
+    type: "boolean",
+    describe: "Only the perma-fail section \u2014 the highest-signal output."
+  },
+  "all-jobs": {
+    type: "boolean",
+    // Says what it fetches, what that buys, and what it costs. The page's
+    // tooltip is the model ("Also fetch profiles of test jobs that
+    // ultimately succeeded, so tests that failed initially but passed on
+    // retry surface too"); the cost clause is added because a terminal
+    // gives no other warning before a run that reads tens of times more
+    // artifacts. Kept to one line because the help printer does not wrap.
+    describe: "Also read profiles of test jobs that SUCCEEDED, so a test that failed then passed on retry surfaces. Reads every test job: much slower."
+  },
+  "other-jobs": {
+    type: "boolean",
+    describe: "List the non-test job failures (builds, lint) the header already counts."
+  },
+  test: {
+    type: "string",
+    placeholder: "<path>",
+    describe: "Report one test per configuration: ran/pass/fail/skip/timeout. Needs --all-jobs for the pass counts."
+  },
+  "task-ids": { type: "boolean", describe: "Print the task IDs behind each failure." },
+  profiles: { type: "boolean", describe: "Print raw profile artifact URLs." },
+  messages: {
+    type: "boolean",
+    describe: `Print every failure message per row, not just the first (cap ${MESSAGE_CAP}).`
+  },
+  concurrency: {
+    type: "number",
+    placeholder: "<n>",
+    describe: "How many job profiles to fetch at once. Default 8."
+  }
+};
+var TRY_NOTES = [
+  "The argument may be any of:",
+  "  a revision          4f2c1a9e8b3d",
+  "  a Treeherder URL    https://treeherder.mozilla.org/jobs?repo=try&revision=4f2c1a9e8b3d",
+  "  a Lando URL         https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=86670",
+  "  a landoCommitID     86670",
+  "Quote a URL: the shell would otherwise split it at the ampersands.",
+  "A URL carrying a revision is used directly. Lando's carries none \u2014 it names the",
+  "landing job \u2014 so the ID is resolved against Lando before anything else, and a job",
+  "that has not landed yet is reported with its Lando status instead.",
+  "An all-digit argument shorter than 8 characters is read as a landoCommitID: that",
+  "is too short to be a revision anyone would paste. 8 digits or more, or any hex",
+  "letter, is a revision."
+];
+var DEFAULT_LIMIT8 = 10;
+var PERMA_FAIL_DESCRIPTION = "failed in every run of at least one configuration here. Each row says what central shows on that same configuration.";
+var DEFAULT_CONCURRENCY = 8;
+async function resolveRevision(context, raw) {
+  let target;
+  try {
+    target = parseTreeherderUrl(raw);
+  } catch (error) {
+    throw usageError(
+      error instanceof LandoError ? error.message : String(error),
+      "Pass one landoCommitID, or the revision the push landed as."
+    );
+  }
+  if (target?.kind === "revision") {
+    return { revision: target.revision, project: target.repository };
+  }
+  const reference = target ?? (looksLikeLandoCommitId(raw) ? {
+    commitId: Number(raw.trim()),
+    instance: CURRENT_LANDO_INSTANCE,
+    repository: void 0
+  } : void 0);
+  if (reference === void 0) {
+    return { revision: raw, project: void 0 };
+  }
+  const lando = context.lando;
+  if (lando === void 0) {
+    throw new Error("try needs a Lando client but none was supplied");
+  }
+  progress(
+    context,
+    `Resolving Lando job ${reference.commitId} (${reference.instance}) to a revision\u2026`
+  );
+  const job = await lando.landingJob(reference.commitId, reference.instance);
+  if (job.revision === void 0) {
+    notice(
+      context,
+      `Lando job ${job.id} is ${job.status} and has no revision yet, so there is no push to triage.` + (job.error === "" ? "" : `
+Lando reports: ${job.error}`) + (job.url === void 0 ? "" : `
+${job.url}`)
+    );
+    return "not-landed";
+  }
+  progress(context, `Lando job ${job.id} landed ${job.revision}.`);
+  return { revision: job.revision, project: reference.repository };
+}
+async function runTry(context, args) {
+  const argument = args.positionals[0];
+  if (argument === void 0) {
+    throw usageError(
+      "try requires a revision, a Treeherder URL, or a landoCommitID",
+      'Usage: fx-tests try <revision>, e.g. fx-tests try 4f2c1a9e8b3d\nA pasted Treeherder URL works too, whether it carries a revision or the\nlandoCommitID Lando returns:\n  fx-tests try "https://treeherder.mozilla.org/jobs?repo=try&landoInstance=lando-prod-2025&landoCommitID=86670"'
+    );
+  }
+  if (args.positionals.length > 1) {
+    throw usageError(`try takes one revision, got ${args.positionals.length}`);
+  }
+  const treeherder = context.treeherder;
+  if (treeherder === void 0) {
+    throw new Error("try needs a Treeherder client but none was supplied");
+  }
+  const fetchUrl = context.fetchUrl;
+  if (fetchUrl === void 0) {
+    throw new Error("try needs a URL fetcher but none was supplied");
+  }
+  if (context.globals.config.length > 0 || context.globals.excludeConfig.length > 0) {
+    throw usageError(
+      "--config cannot be applied to try: this command classifies a test across the configurations a push ran, so filtering the job set would change what each section means rather than narrow it",
+      "The per-row config names and central comparison are already per configuration. For one test on one configuration over central, use `fx-tests test <path> --config <substring>`."
+    );
+  }
+  const resolved = await resolveRevision(context, argument);
+  if (resolved === "not-landed") {
+    return;
+  }
+  const { revision } = resolved;
+  const project = stringOption(args, "project") || resolved.project || "try";
+  progress(context, `Looking up ${revision} on ${project}\u2026`);
+  const push = await treeherder.findPush(project, revision);
+  progress(context, `Fetching jobs for push ${push.pushId}\u2026`);
+  const jobs = await treeherder.jobsOfPush(push.pushId);
+  const selection = selectTryJobs(jobs, {
+    readPassingJobs: boolOption(args, "all-jobs")
+  });
+  const { failedTestJobs, successfulTestJobs, otherFailedJobs, jobsToProcess } = selection;
+  const { readPassingJobs, runsPerJobName } = selection;
+  let timings = [];
+  if (jobsToProcess.length > 0) {
+    progress(
+      context,
+      `Reading ${jobsToProcess.length} job profiles (one per ${readPassingJobs ? "completed test job, passing ones included" : "failed test job"})\u2026`
+    );
+    timings = await collectTimings(
+      context,
+      jobsToProcess,
+      fetchUrl,
+      Number(args.options.get("concurrency") ?? DEFAULT_CONCURRENCY)
+    );
+  }
+  const testPath = stringOption(args, "test");
+  if (testPath !== void 0) {
+    emit(
+      context,
+      renderTestReport(
+        context,
+        push.revision,
+        project,
+        testPath,
+        timings,
+        runsPerJobName,
+        readPassingJobs
+      )
+    );
+    return;
+  }
+  const failures = aggregateFailures(timings, runsPerJobName);
+  if (failures.length > 0) {
+    progress(context, `Comparing ${failures.length} failing tests against central\u2026`);
+    await attachCentralHistory(context, failures);
+  }
+  const asJson = context.globals.format === "json";
+  const withTaskIds = asJson || boolOption(args, "task-ids");
+  const withProfiles = asJson || boolOption(args, "profiles");
+  attachProvenance2(failures, timings, withTaskIds, withProfiles);
+  const blamed = new Set(
+    timings.filter((timing) => isFailureStatus(timing.status)).map(runKeyOf)
+  );
+  const unblamedJobCount = failedTestJobs.filter((job) => !blamed.has(runKeyOf(job))).length;
+  const result = {
+    revision: push.revision,
+    pushId: push.pushId,
+    project,
+    treeherderUrl: treeherderPushUrl(project, push.revision),
+    jobCount: jobs.length,
+    failedJobCount: failedTestJobs.length + otherFailedJobs.length,
+    profilesRead: jobsToProcess.length,
+    readPassingJobs,
+    passingTestJobCount: successfulTestJobs.length,
+    unblamedJobCount,
+    otherFailedJobs: otherFailedJobs.map((job) => ({
+      jobName: job.jobName,
+      taskId: job.taskId,
+      result: job.result
+    })),
+    permaFails: failures.filter(isPermaFail),
+    knownIntermittents: failures.filter(
+      (failure) => !isPermaFail(failure) && isKnownOnCentral(failure)
+    ),
+    newIntermittents: failures.filter(
+      (failure) => !isPermaFail(failure) && !isKnownOnCentral(failure)
+    )
+  };
+  if (context.globals.format === "json") {
+    emit(context, toJson(result));
+    return;
+  }
+  const limit = context.globals.limit ?? DEFAULT_LIMIT8;
+  emit(
+    context,
+    context.globals.format === "markdown" ? renderMarkdown9(result, limit, boolOption(args, "perma-only"), boolOption(args, "other-jobs")) : renderText9(
+      result,
+      limit,
+      boolOption(args, "perma-only"),
+      boolOption(args, "other-jobs"),
+      boolOption(args, "messages")
+    )
+  );
+}
+function isPermaFail(failure) {
+  return failure.everyRunFailed;
+}
+function isKnownOnCentral(failure) {
+  return failure.central !== null && failure.central.failCount > 0;
+}
+async function collectTimings(context, jobs, fetchUrl, concurrency) {
+  const timings = [];
+  const dropped = [];
+  const queue = [...jobs];
+  let done = 0;
+  let missing = 0;
+  let streamed = 0;
+  const worker = async () => {
+    for (; ; ) {
+      const job = queue.shift();
+      if (job === void 0) {
+        return;
+      }
+      const url = resourceUsageProfileUrl(job.taskId, job.retryId);
+      let bytes2 = null;
+      try {
+        bytes2 = await fetchUrl(url);
+      } catch {
+        bytes2 = null;
+      }
+      done++;
+      if (bytes2 === null) {
+        missing++;
+      } else if (isStreamedProfile(bytes2)) {
+        streamed++;
+      } else {
+        try {
+          const profile = JSON.parse(new TextDecoder().decode(bytes2));
+          timings.push(...parseTestMarkers(profile, job, dropped));
+        } catch {
+          missing++;
+        }
+      }
+      if (done % 10 === 0) {
+        progress(context, `  \u2026${done}/${jobs.length} profiles`);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, jobs.length)) }, worker)
+  );
+  if (streamed > 0) {
+    warn(
+      context,
+      `${streamed} of ${jobs.length} jobs were killed for exceeding their maximum duration, so only a streamed profile exists for them and this tool does not read that format; failures in those jobs are not in this report`
+    );
+  }
+  if (missing > 0) {
+    warn(
+      context,
+      `${missing} of ${jobs.length} job profiles could not be read; failures in those jobs are not in this report`
+    );
+  }
+  if (dropped.length > 0) {
+    const shown = [...new Set(dropped.map((entry) => `${entry.status} ${entry.id}`))];
+    warn(
+      context,
+      `${dropped.length} failing marker${dropped.length === 1 ? "" : "s"} named no test path and are not in this report (a crash recorded against a manifest has no path to compare against central): ${shown.slice(0, 5).join(", ")}` + (shown.length > 5 ? `, and ${shown.length - 5} more` : "")
+    );
   }
   return timings;
 }
@@ -10946,7 +12209,7 @@ async function attachCentralHistory(context, failures) {
     }
   }
 }
-function attachProvenance(failures, timings, withTaskIds, withProfiles) {
+function attachProvenance2(failures, timings, withTaskIds, withProfiles) {
   const byPath = /* @__PURE__ */ new Map();
   for (const timing of timings) {
     if (!isFailureStatus(timing.status)) {
@@ -11210,7 +12473,7 @@ function renderTestReport(context, revision, project, testPath, timings, runsPer
   );
   return joinLines(lines);
 }
-function renderText8(result, limit, permaOnly, otherJobs, allMessages) {
+function renderText9(result, limit, permaOnly, otherJobs, allMessages) {
   const lines = [];
   lines.push(
     `Try push ${result.revision.slice(0, 12)} (${result.project}) \u2014 ${result.jobCount} jobs, ${result.failedJobCount} failed`
@@ -11287,55 +12550,6 @@ function renderText8(result, limit, permaOnly, otherJobs, allMessages) {
   }
   return joinLines(lines);
 }
-function messageLines(failure, allMessages) {
-  const format = (message) => `    ${truncate(message.replace(/\s*\n\s*/g, " \u23CE "), 110)}`;
-  const all = failure.allMessages;
-  if (allMessages) {
-    const counted = new Map(all.map((entry) => [entry.message, entry.count]));
-    const ordered = [...all];
-    for (const message of failure.messages) {
-      if (!counted.has(message)) {
-        counted.set(message, 0);
-        ordered.push({ message, count: 0 });
-      }
-    }
-    if (ordered.length === 0) {
-      return [];
-    }
-    const shown2 = ordered.slice(0, MESSAGE_CAP);
-    const lines2 = shown2.map(
-      (entry) => (
-        // Blank rather than `0x` for a row with no per-execution count, since
-        // `0x` would read as "never seen".
-        `    ${(entry.count > 0 ? `${entry.count}x` : "").padStart(4)} ${truncate(
-          entry.message.replace(/\s*\n\s*/g, " \u23CE "),
-          106
-        )}`
-      )
-    );
-    if (ordered.length > shown2.length) {
-      lines2.push(
-        `    (${ordered.length - shown2.length} more messages, not shown: the cap is ${MESSAGE_CAP} per row)`
-      );
-    }
-    return lines2;
-  }
-  const shown = failure.messages.slice(0, 2);
-  const lines = shown.map(format);
-  const union = /* @__PURE__ */ new Set([
-    ...failure.messages,
-    ...all.map((entry) => entry.message)
-  ]);
-  for (const message of shown) {
-    union.delete(message);
-  }
-  if (union.size > 0) {
-    lines.push(
-      `    (+${union.size} more message${union.size === 1 ? "" : "s"} for this test; --messages to see them)`
-    );
-  }
-  return lines;
-}
 function section(title, failures, description, limit, allMessages) {
   const lines = [`${title} (${failures.length}) \u2014 ${description}`];
   if (failures.length === 0) {
@@ -11384,7 +12598,7 @@ function section(title, failures, description, limit, allMessages) {
         "    Only failed under parallel execution \u2014 likely racing with its neighbours."
       );
     }
-    lines.push(...messageLines(failure, allMessages));
+    lines.push(...messageLines2(failure, allMessages));
     lines.push(...provenanceLines(failure, "    "));
   }
   const more = moreLine(failures.length, shown.length);
@@ -11456,33 +12670,33 @@ function configsPhrase(failure) {
   }
   return `${names.length} configs: ${names.slice(0, 3).join(", ")}` + (names.length > 3 ? `, +${names.length - 3} more` : "");
 }
-var PROVENANCE_ROWS = 5;
+var PROVENANCE_ROWS2 = 5;
 function provenanceLines(failure, indent) {
   const lines = [];
   if (failure.taskIds !== void 0) {
-    for (const entry of failure.taskIds.slice(0, PROVENANCE_ROWS)) {
+    for (const entry of failure.taskIds.slice(0, PROVENANCE_ROWS2)) {
       lines.push(`${indent}task ${entry.taskId}.${entry.retryId}  ${entry.jobName}`);
     }
-    const hidden = failure.taskIds.length - PROVENANCE_ROWS;
+    const hidden = failure.taskIds.length - PROVENANCE_ROWS2;
     if (hidden > 0) {
       lines.push(`${indent}\u2026 ${hidden} more task${hidden === 1 ? "" : "s"}`);
     }
   }
   if (failure.profiles !== void 0) {
-    for (const entry of failure.profiles.slice(0, PROVENANCE_ROWS)) {
+    for (const entry of failure.profiles.slice(0, PROVENANCE_ROWS2)) {
       lines.push(`${indent}profile ${entry.resourceUsage}`);
       for (const url of entry.testProfiles ?? []) {
         lines.push(`${indent}test profile ${url}`);
       }
     }
-    const hidden = failure.profiles.length - PROVENANCE_ROWS;
+    const hidden = failure.profiles.length - PROVENANCE_ROWS2;
     if (hidden > 0) {
       lines.push(`${indent}\u2026 ${hidden} more profile${hidden === 1 ? "" : "s"}`);
     }
   }
   return lines;
 }
-function renderMarkdown8(result, limit, permaOnly, otherJobs) {
+function renderMarkdown9(result, limit, permaOnly, otherJobs) {
   const lines = [];
   lines.push(heading(`Try push ${result.revision.slice(0, 12)} (${result.project})`, 1));
   lines.push("");
@@ -11579,15 +12793,45 @@ var COMMANDS = [
   {
     name: "try",
     summary: "Triage a Try push: which failures are caused by the patch.",
-    usage: "fx-tests try <revision> [options]",
+    usage: "fx-tests try <revision|treeherder-url|landoCommitID> [options]",
     options: TRY_OPTIONS,
+    notes: TRY_NOTES,
     run: runTry
+  },
+  {
+    name: "task",
+    // "What happened", not "what failed": the command reports every
+    // outcome the profile recorded — the header counts PASS, SKIP and
+    // EXPECTED-FAIL alongside the failures, and `--passed` lists them —
+    // so a summary saying "failed" is narrower than the command.
+    summary: "What happened in one job, read from its resource-usage profile.",
+    usage: "fx-tests task <taskId>[.<retryId>] [options]",
+    options: TASK_OPTIONS,
+    rejectsGlobals: [
+      {
+        names: ["day", "since", "harness", "data-source"],
+        message: "these globals do not apply to task: the report is one job\u2019s profile, so there is no date window to choose, no harness to select and no aggregate to read it from",
+        hint: "The job\u2019s date, harness and repository are facts about the task ID you passed. For the aggregates, use `fx-tests test <path>`."
+      },
+      {
+        // Declared rather than thrown from the command body, which is
+        // what the other commands refusing `--config` do and what left
+        // both flags listed in `task --help` while the command exited 1
+        // on them. Declaring it is what makes `commandHelp()` filter
+        // them out, so the help stops promising flags that do not work.
+        names: ["config", "exclude-config"],
+        message: "--config cannot be applied to task: a task is one configuration, so there is nothing here to filter",
+        hint: "The configuration is named in the header. For one test across configurations, use `fx-tests test <path> --config <substring>`."
+      }
+    ],
+    run: runTask
   },
   {
     name: "issues",
     summary: "What is failing right now, across the tree.",
     usage: "fx-tests issues [options]",
     options: ISSUES_OPTIONS,
+    notes: ISSUES_NOTES,
     run: runIssues
   },
   {
@@ -11735,6 +12979,16 @@ async function run(options) {
 `);
       return ExitCode.Upstream;
     }
+    if (error instanceof LandingJobNotFoundError) {
+      streams.err(`fx-tests: ${error.message}
+`);
+      return ExitCode.NotFound;
+    }
+    if (error instanceof LandoError) {
+      streams.err(`fx-tests: ${error.message}
+`);
+      return ExitCode.Upstream;
+    }
     if (error instanceof PushNotFoundError) {
       streams.err(`fx-tests: ${error.message}
 `);
@@ -11817,6 +13071,7 @@ async function dispatch(options) {
     streams,
     source: options.source ?? buildSource(globals, cache, streams),
     ...options.treeherder === void 0 ? { treeherder: buildTreeherder(globals, cache, streams, options.httpFetch ?? nodeFetch2) } : { treeherder: options.treeherder },
+    ...options.lando === void 0 ? { lando: landoClient({ fetch: options.httpFetch ?? nodeFetch2 }) } : { lando: options.lando },
     ...options.intermittents === void 0 ? {
       intermittents: buildIntermittents(
         globals,

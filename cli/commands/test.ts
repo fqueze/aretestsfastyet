@@ -66,8 +66,14 @@ import {
     uploadedProfileUrl,
 } from '../../lib/links.ts';
 import { type OptionSpecs, type ParsedArgs, boolOption, numberOption } from '../args.ts';
-import { type CommandContext, emit, notice, progress } from '../context.ts';
-import { notFoundError, usageError } from '../errors.ts';
+import { type CommandContext, emit, notice, progress, warn } from '../context.ts';
+import { DEFAULT_DAYS as INTERMITTENT_DEFAULT_DAYS, resolveRange } from './intermittent.ts';
+import {
+    bugsNamingTest,
+    loadHarnessOfPath,
+    scanBugs,
+} from '../../lib/query/intermittents.ts';
+import { notFoundError, usageError, withUpstreamErrors } from '../errors.ts';
 import { toJson } from '../format/json.ts';
 import * as md from '../format/markdown.ts';
 import {
@@ -117,10 +123,35 @@ export const TEST_OPTIONS: OptionSpecs = {
         describe: 'Per-config run-time distribution from the pass durations.',
     },
     history: { type: 'boolean', describe: 'A per-day sparkline of pass/fail counts.' },
+    // Opt-in, unlike every other section on this command, and for a reason
+    // that is not about this process: it is the only flag here that reaches a
+    // live API rather than the published aggregate the rest of the command
+    // reads. `test` is run constantly, so resolving the annotations by default
+    // would put a per-user load on the machines serving Treeherder's
+    // `/api/failures/` that they did not previously carry — a cost a local
+    // cache TTL cannot give back, because it is upstream rather than local.
+    bugs: {
+        type: 'boolean',
+        describe:
+            'The sheriff-annotated bugs naming this test. Off by default because it queries ' +
+            'Treeherder and Bugzilla live, several requests, where the rest of this command ' +
+            'reads one published file.',
+    },
 };
 
 /** The default number of failing-config rows and messages shown. */
 const DEFAULT_LIMIT = 10;
+
+/**
+ * How wide a bug summary may get in the `Bugs naming this test` block.
+ *
+ * A `truncate()` budget, stated against the 90-column baseline and scaled to
+ * the real terminal rather than an absolute width. 78 is the p90 of the
+ * summaries in a live 731-bug ranking (median 19, max 182), so the common row
+ * prints whole and only the outliers are cut — which is the point of measuring
+ * rather than guessing. The line is indented 11 to sit under the bug number.
+ */
+const SUMMARY_WIDTH = 78;
 
 /** The `--json` shape `CLI.md` documents. */
 export interface TestJson {
@@ -173,6 +204,57 @@ export interface TestJson {
         /** Platforms in the file that this test never runs on. */
         absentPlatforms: string[];
     } | null;
+    /**
+     * The sheriff-annotated bugs whose summary names this test, under `--bugs`.
+     *
+     * The first question anyone asks about a failing test, and the command
+     * answered none of it: finding the bug number meant pulling the whole
+     * `intermittent` ranking as JSON and grepping it. Resolved through
+     * `bugsNamingTest`, the same lookup `intermittent --test` uses.
+     *
+     * Three states, kept apart because a consumer branches differently on each
+     * and collapsing any two of them would be a confidently wrong answer:
+     *
+     *  - **absent** — `--bugs` was not passed. Nothing was asked and no request
+     *    was made, which is why the default path is as network-quiet as it was
+     *    before the flag existed. Encoded as a missing key rather than `null`
+     *    on purpose: `null` and `[]` both read as "no bugs" at a glance, and
+     *    `null` is the *more* natural spelling of it, so it suggested the
+     *    opposite of what it meant. Absence cannot be misread — the test is
+     *    `'annotatedBugs' in result`.
+     *  - `{ error: … }` — asked, and the lookup failed. The intermittents API
+     *    is live where `test`'s own data is not, so a Treeherder outage must
+     *    not take the rest of the answer with it.
+     *  - an array — asked and answered. Empty means no annotated bug names the
+     *    test, which is a real result rather than a failure to get one.
+     */
+    annotatedBugs?:
+        | {
+              bugId: number;
+              count: number;
+              /**
+               * The bug's Bugzilla summary, with the triage prefix and the test
+               * path removed — the part naming the failure rather than
+               * repeating what the caller already typed.
+               */
+              bugSummary: string;
+              /** The window the count covers, in days. */
+              days: number;
+              tree: string;
+          }[]
+        | { error: string };
+    /**
+     * Whether the per-day failure counts sit within an order of magnitude of
+     * the window's median. `null` when the file carries no day axis, or the
+     * window is one day, or nothing failed — there is nothing to be flat.
+     *
+     * The default view has no time axis at all, so a failure that started on a
+     * Tuesday and one that has been there for three weeks read identically.
+     * `--history` is what separates them and nothing pointed at it; this is the
+     * one line that does, and only when the answer would change what the reader
+     * does next. The sparkline itself stays behind the flag.
+     */
+    dailyCountsAreFlat: boolean | null;
     /**
      * Every issue of this test, ordered by count — the list `test.html` shows.
      *
@@ -489,6 +571,12 @@ export async function runTest(context: CommandContext, args: ParsedArgs): Promis
         ...(hasConfigFilter ? { jobFilter } : {}),
     });
 
+    // The same rows `--history` prints, computed whether or not it was asked
+    // for: the default view's flatness hint is a reading of them, and a second
+    // per-day tally would be a second thing to keep in step. One pass over this
+    // test's own entries, so it costs what `--history` costs, which is nothing.
+    const history = buildHistory(decoded, filteredEntries, window);
+
     const result: TestJson = {
         test: identity.name,
         path: identity.fullPath,
@@ -518,6 +606,7 @@ export async function runTest(context: CommandContext, args: ParsedArgs): Promis
                 ? null
                 : { days: configs[0]!.recentDays, minRuns: 20 },
         reach: buildReach(decoded, coverage),
+        dailyCountsAreFlat: dailyCountsAreFlat(history),
         // `statsOptions` is the same day and config filter the header totals
         // used, so the list and the totals cover one population.
         issues: buildTestIssues(decoded, identity.testId, totals, statsOptions),
@@ -536,7 +625,10 @@ export async function runTest(context: CommandContext, args: ParsedArgs): Promis
         result.durations = buildDurations(decoded, filteredEntries);
     }
     if (boolOption(args, 'history')) {
-        result.history = buildHistory(decoded, filteredEntries, window);
+        result.history = history;
+    }
+    if (boolOption(args, 'bugs')) {
+        result.annotatedBugs = await fetchAnnotatedBugs(context, identity.fullPath);
     }
     if (boolOption(args, 'task-ids')) {
         result.taskIds = buildTaskIds(file, decoded, filteredEntries, window);
@@ -805,6 +897,138 @@ function buildReach(
     };
 }
 
+/** One printable row of the `Bugs naming this test` block. */
+type AnnotatedBugRow = {
+    bugId: number;
+    count: number;
+    bugSummary: string;
+    days: number;
+    tree: string;
+};
+
+/**
+ * The bug rows to print, or `[]` for each of the two states that have none.
+ *
+ * Both renderers ask the same question — "is there a block to draw" — so the
+ * narrowing lives here rather than twice. Neither the absent field nor the
+ * failed `{ error }` prints anything: the warning on stderr already said what
+ * happened, and a "could not look" line in the middle of the answer would read
+ * as a property of the test.
+ */
+function annotatedBugRows(annotatedBugs: TestJson['annotatedBugs']): AnnotatedBugRow[] {
+    return annotatedBugs === undefined || 'error' in annotatedBugs ? [] : annotatedBugs;
+}
+
+/** The tree the bug lookup asks about, matching `intermittent`'s own default. */
+const ANNOTATED_BUGS_TREE = 'trunk';
+
+/**
+ * The bugs naming this test, from `intermittent`'s ranking. `--bugs` only.
+ *
+ * ## Why this is the one part of `test` behind a flag
+ *
+ * Everything else this command prints comes from one published aggregate, and
+ * this does not: the sheriff annotations live behind Treeherder's
+ * `/api/failures/` and Bugzilla, which is why they were only ever reachable
+ * from `intermittent`.
+ *
+ * A first version resolved them on the default path, on the argument that a bug
+ * number behind a flag nobody passes is no answer at all. That was reversed in
+ * review, and the reason is not the latency — ~8.5s cold and ~0.3s warm against
+ * a 0.5s command, which a cache TTL mostly absorbs. It is the **load on the
+ * machines serving the API**: `test` is run constantly, and making every
+ * invocation of it fetch the tree-wide ranking is upstream traffic those
+ * machines did not previously carry. A local cache cannot give that back,
+ * because the cost is per user rather than per invocation.
+ *
+ * So the default path issues no intermittents request at all, and `--bugs` is
+ * the opt-in. `test/cli.test.ts` pins that with a client that throws on every
+ * method, which is the only way to assert an absence of requests rather than
+ * assume it.
+ *
+ * ## Why a failure is not this command's failure
+ *
+ * A live API is down in a way a published file is not, and a `test` invocation
+ * that exits 3 because Bugzilla is slow would have lost an answer it already
+ * had. So the lookup warns and yields `{ error }` — distinct from the *absent*
+ * field that means nobody asked, because "no bugs" and "could not look" are
+ * answers a consumer has to branch on differently.
+ *
+ * The return type is deliberately not `TestJson['annotatedBugs']`: that is
+ * optional, and this function is only ever called when `--bugs` was passed, so
+ * it always has something to say. Only the caller may leave the key off.
+ */
+async function fetchAnnotatedBugs(
+    context: CommandContext,
+    path: string
+): Promise<AnnotatedBugRow[] | { error: string }> {
+    const client = context.intermittents;
+    if (client === undefined) {
+        return { error: 'no intermittents client is configured' };
+    }
+    const range = resolveRange(undefined, undefined);
+    const tree = ANNOTATED_BUGS_TREE;
+    try {
+        // The fetching that `intermittent --test` also does. It stays here
+        // rather than in `lib/`, because progress reporting and exit-code
+        // mapping are CLI concerns: `lib/` holds the pure part, which is the
+        // ranking scan and the path filter below. Same three inputs, same
+        // order, so both commands resolve a path through one code path.
+        progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}…`);
+        const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
+        const candidates = ranking
+            .filter((row) => row.bugId !== null)
+            .map((row) => row.bugId as number);
+        if (candidates.length === 0) {
+            // No bug to read a summary from, so there is nothing to classify —
+            // and skipping here avoids the two issues files `loadHarnessOfPath`
+            // would otherwise fetch to classify an empty list.
+            return [];
+        }
+        progress(context, `Reading ${candidates.length} bug summaries…`);
+        const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
+        progress(context, 'Reading the mochitest and xpcshell test lists…');
+        const harnessOfPath = await loadHarnessOfPath(context.source);
+
+        const matches = bugsNamingTest(
+            scanBugs({ ranking, summaries, harnessOfPath }).rows,
+            path
+        );
+        return matches.map((row) => ({
+            bugId: row.bugId,
+            count: row.count,
+            // `failure`, not `bugSummary`, and deliberately — this is A's rule
+            // on the `RankedIntermittent` docstring applied to this block:
+            // `failure` where the surrounding output already names the test,
+            // `bugSummary` standalone. Here the path is established context
+            // three times over (the caller typed it, the header prints it, and
+            // the heading is "Bugs naming this test"), so the raw summary would
+            // spend its width re-printing it. Measured: truncated to the
+            // terminal, a raw summary is cut *inside* the path on both rows of
+            // a live two-bug test, losing the description entirely.
+            //
+            // The cost is the triage prefix — `Perma` on bug 2061951 is real
+            // information — and an empty `|  |` where the path was cut out, on
+            // 7 of 300 live classified rows. Composing prefix + `failure` would
+            // fix both but needs a second copy of `TRIAGE_PREFIX` here, and a
+            // fourth spelling of one summary is what that docstring exists to
+            // prevent. If a prefix-keeping, path-stripping variant is ever
+            // wanted, it belongs in `lib/` beside `summaryRemainder`.
+            bugSummary: row.failure,
+            days: INTERMITTENT_DEFAULT_DAYS,
+            tree,
+        }));
+    } catch (error) {
+        const message = (error as Error).message;
+        warn(
+            context,
+            `could not read the sheriff annotations naming this test ` +
+                `(${message}); the bug list is omitted`
+        );
+        return { error: message };
+    }
+}
+
 /**
  * `platformsInFile()` memoized per file.
  *
@@ -979,6 +1203,57 @@ function buildHistory(
 }
 
 /**
+ * Whether every day's failure count sits within an order of magnitude of the
+ * window's median.
+ *
+ * The question the default view cannot answer: `fx-tests test` shows one number
+ * per configuration over three weeks, so a failure that started last Tuesday
+ * and one that has been there since the window opened read identically. This is
+ * the cheapest signal that separates them, and its only job is to decide
+ * whether to point at `--history`.
+ *
+ * ## What the median is taken over
+ *
+ * **Every day in the window, zero-run days included.** The alternative —
+ * median over days the test ran — was rejected because the days it did not run
+ * are the interesting ones: a test disabled a week ago, or one that only landed
+ * on Friday, has a real discontinuity, and dropping those days from the median
+ * hides exactly the shape the line exists to advertise. It does mean a test
+ * that runs on weekdays only reads as not flat, which is correct: the weekend
+ * dip is a real feature of the counts and `--history` is where it is legible.
+ *
+ * ## Where the threshold sits
+ *
+ * "More than an order of magnitude from the median" is `count > median * 10` or
+ * `count * 10 < median`. A median of zero — a test that fails on a handful of
+ * days and not at all on the rest — makes the second test vacuous and the first
+ * true for any failure at all, so it is treated as not flat: a window that is
+ * mostly zeros with a spike in it *is* the non-flat case.
+ *
+ * `null` where the question does not arise: no day axis, one day, or no
+ * failures anywhere in the window.
+ */
+function dailyCountsAreFlat(history: readonly HistoryJson[]): boolean | null {
+    if (history.length < 2) {
+        return null;
+    }
+    const counts = history.map((row) => row.fail + row.timeout + row.crash);
+    if (counts.every((count) => count === 0)) {
+        return null;
+    }
+    const sorted = [...counts].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    const median =
+        sorted.length % 2 === 1
+            ? sorted[mid]!
+            : (sorted[mid - 1]! + sorted[mid]!) / 2;
+    if (median === 0) {
+        return false;
+    }
+    return counts.every((count) => count <= median * 10 && count * 10 >= median);
+}
+
+/**
  * The task IDs behind each failure, for `--task-ids`.
  *
  * Also the **minidump IDs**, which is what makes `fx-tests crash` reachable
@@ -1144,10 +1419,35 @@ function renderText(result: TestJson, limit: number): string {
         lines.push(`  ${note}`);
     }
 
+    if (result.dailyCountsAreFlat === false) {
+        lines.push('  Daily counts are not flat; --history shows the per-day breakdown.');
+    }
+
     const reachLine = describeReach(result.reach);
     if (reachLine !== null) {
         lines.push('');
         lines.push(reachLine);
+    }
+
+    const bugRows = annotatedBugRows(result.annotatedBugs);
+    if (bugRows.length > 0) {
+        lines.push('');
+        lines.push('Bugs naming this test');
+        for (const bug of bugRows) {
+            lines.push(
+                `  ${String(bug.bugId).padStart(7)}  ` +
+                    `${fmtCount(bug.count).padStart(4)} annotations, last ${bug.days} days   ` +
+                    `fx-tests intermittent --bug ${bug.bugId}`
+            );
+            // The summary gets its own line rather than a fourth column: the
+            // row above is already ~70 characters, and these run to 182 in a
+            // live ranking, so inline it would wrap into a mess whatever the
+            // budget. Truncated rather than wrapped, unlike `intermittent
+            // --bug`'s headline — there the summary *is* the content, here it
+            // is one row among several and a reader is scanning bug numbers.
+            // `truncate` scales the budget to the real terminal.
+            lines.push(`           ${truncate(bug.bugSummary, SUMMARY_WIDTH)}`);
+        }
     }
 
     if (result.configs.length > 0) {
@@ -1309,9 +1609,23 @@ function renderText(result: TestJson, limit: number): string {
         if (shown.every((row) => row.testProfile === undefined)) {
             // Only prints when nothing was extracted, so the tests that do
             // carry a name never show it; `test/cli.test.ts` pins that case.
-            // The `try` route needs a revision, which this command has not got.
+            //
+            // It used to name `fx-tests try <rev> --profiles`, which needs a
+            // try revision this command has not got and the reader usually has
+            // not either — every report of this was a trunk intermittent, and
+            // the advice sent people to the Taskcluster queue API by hand.
+            // `intermittent --test` needs nothing but the path, and it resolves
+            // the bug itself.
+            //
+            // The path is printed literally rather than reconstructed from the
+            // test name, so the line can be pasted. Note that this is a pointer
+            // and not a fallback: `test` still cannot serve these URLs itself,
+            // because the published aggregate keeps one message per failing run
+            // and the profile notice is never the one it keeps
+            // (`lib/model/marker-messages.ts`).
             lines.push(
-                '  (these are resource-usage profiles; per-test profiles: fx-tests try <rev> --profiles)'
+                '  (these are resource-usage profiles; per-test profiles: ' +
+                    `fx-tests intermittent --test ${result.path} --profiles)`
             );
         }
     }
@@ -1580,10 +1894,41 @@ function renderMarkdown(result: TestJson, limit: number): string {
         lines.push('');
         lines.push(note);
     }
+    if (result.dailyCountsAreFlat === false) {
+        lines.push('');
+        lines.push('Daily counts are not flat; `--history` shows the per-day breakdown.');
+    }
     const reachLine = describeReach(result.reach);
     if (reachLine !== null) {
         lines.push('');
         lines.push(reachLine);
+    }
+
+    const bugRows = annotatedBugRows(result.annotatedBugs);
+    if (bugRows.length > 0) {
+        lines.push('');
+        lines.push(md.heading('Bugs naming this test'));
+        lines.push('');
+        lines.push(
+            ...md.table(
+                [
+                    { header: 'bug' },
+                    { header: 'summary' },
+                    { header: 'annotations', align: 'right' },
+                    { header: 'window' },
+                    { header: 'drill down' },
+                ],
+                bugRows.map((bug) => [
+                    `[${bug.bugId}](https://bugzilla.mozilla.org/show_bug.cgi?id=${bug.bugId})`,
+                    // Untruncated, unlike the text renderer: `--markdown` never
+                    // cuts, because it is the format for pasting into a bug.
+                    bug.bugSummary,
+                    fmtCount(bug.count),
+                    `last ${bug.days} days`,
+                    `\`fx-tests intermittent --bug ${bug.bugId}\``,
+                ])
+            )
+        );
     }
 
     if (result.configs.length > 0) {

@@ -14,7 +14,7 @@
 import type { OptionSpecs, ParsedArgs } from '../args.ts';
 import { boolOption, numberOption, stringOption } from '../args.ts';
 import { type CommandContext, emit, progress, warn } from '../context.ts';
-import { notFoundError, upstreamError, usageError } from '../errors.ts';
+import { notFoundError, usageError, withUpstreamErrors } from '../errors.ts';
 import * as md from '../format/markdown.ts';
 import { toJson } from '../format/json.ts';
 import {
@@ -33,32 +33,26 @@ import {
 import {
     type BugOccurrence,
     type DayRange,
-    IntermittentsError,
     type IntermittentsClient,
-    TREE_GROUPS,
 } from '../../lib/sources/intermittents.ts';
 import {
     type BugDrilldown,
     type DrilldownFilter,
-    type HarnessOfPath,
     type HarnessSelector,
     type OccurrenceDay,
     type OccurrenceProfiles,
     type RankedIntermittent,
-    type ScanHarness,
     type ScanResult,
     type SuiteCount,
     bugsNamingTest,
     filterOccurrences,
+    loadHarnessOfPath,
     occurrenceHistory,
     occurrenceProfiles,
     scanBugs,
     selectHarness,
     summariseBug,
 } from '../../lib/query/intermittents.ts';
-import { type IssuesFile } from '../../lib/formats/issues.ts';
-import { collectTestPaths } from '../../lib/query/test-lookup.ts';
-import { fetchJson, timingsIndex } from '../../lib/sources/source.ts';
 
 /** The default number of ranked rows, matching the other tree-wide commands. */
 export const DEFAULT_LIMIT = 20;
@@ -354,7 +348,7 @@ async function runRanking(
     const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
 
     progress(context, 'Reading the mochitest and xpcshell test lists…');
-    const harnessOfPath = await loadHarnessOfPath(context);
+    const harnessOfPath = await loadHarnessOfPath(context.source);
 
     // Classify everything, then select: with no `--harness` the answer is the
     // whole ranking, classified and unknown interleaved by count.
@@ -411,35 +405,6 @@ function readHarnessSelector(args: ParsedArgs): HarnessSelector | undefined {
 }
 
 /**
- * Which harness a test path belongs to, from the published 21-day aggregates.
- *
- * Two files for the whole run, whatever `--scan` is — the same
- * `{harness}-issues.json` five other commands already read, so a warm cache
- * makes this free. Deliberately not the per-test bucket files: those are 3.5 MB
- * *each* and would make the cost scale with the number of bugs examined, when
- * the question here is only "is this path a test of this harness". Drilling into
- * one test is what `fx-tests test <path>` is for, and the path printed in each
- * row is what it takes.
- */
-async function loadHarnessOfPath(context: CommandContext): Promise<HarnessOfPath> {
-    const known = new Map<string, ScanHarness>();
-    for (const harness of ['mochitest', 'xpcshell'] as const) {
-        const file = await fetchJson<IssuesFile>(context.source, {
-            index: timingsIndex(harness),
-            filename: `${harness}-issues.json`,
-        });
-        for (const path of collectTestPaths([file])) {
-            // First wins, so a path in both files keeps the mochitest answer
-            // rather than depending on iteration order.
-            if (!known.has(path)) {
-                known.set(path, harness);
-            }
-        }
-    }
-    return (path: string) => known.get(path) ?? null;
-}
-
-/**
  * `--test <path>`: the same drill-down, reached by test path.
  *
  * Someone starting from a failing test has no bug number, and the mapping is
@@ -468,7 +433,7 @@ async function runTestDrilldown(
     progress(context, `Reading ${candidates.length} bug summaries…`);
     const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
     progress(context, 'Reading the mochitest and xpcshell test lists…');
-    const harnessOfPath = await loadHarnessOfPath(context);
+    const harnessOfPath = await loadHarnessOfPath(context.source);
 
     const matches = bugsNamingTest(scanBugs({ ranking, summaries, harnessOfPath }).rows, test);
     if (matches.length === 0) {
@@ -714,36 +679,6 @@ export function resolveRange(
 /** A `Date` as `YYYY-MM-DD` in UTC. */
 function isoDay(date: Date): string {
     return date.toISOString().slice(0, 10);
-}
-
-/**
- * Turns a transport or HTTP failure into the CLI's exit codes.
- *
- * A 400 from Treeherder is almost always a `tree` it does not know — that is the
- * one thing `validate_tree` rejects — so it becomes a usage error naming the
- * groups it does accept, rather than exit 3 telling the user to retry a request
- * that will fail identically forever.
- */
-async function withUpstreamErrors<T>(work: () => Promise<T>, tree: string): Promise<T> {
-    try {
-        return await work();
-    } catch (error) {
-        if (error instanceof IntermittentsError) {
-            if (error.status === 400) {
-                throw usageError(
-                    `Treeherder rejected the query, which for these endpoints means an unknown ` +
-                        `tree: "${tree}"`,
-                    `--tree takes a repository name (autoland, mozilla-central, …), a repo group ` +
-                        `(${TREE_GROUPS.join(', ')}), or all.`
-                );
-            }
-            throw upstreamError(
-                `${error.message} from ${error.url}`,
-                'Treeherder’s intermittents API and Bugzilla are both live services; retrying may work.'
-            );
-        }
-        throw error;
-    }
 }
 
 /**
