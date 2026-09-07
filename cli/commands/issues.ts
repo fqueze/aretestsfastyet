@@ -70,7 +70,12 @@ import {
     truncate,
 } from '../format/text.ts';
 import type { Harness } from '../options.ts';
-import { type DayWindow, loadIssues, resolveDayWindow } from '../data.ts';
+import {
+    type SearchedFile,
+    describeSearchedFiles,
+    harnessesForPathFilter,
+} from '../../lib/model/harness.ts';
+import { type DayWindow, ifPublished, loadIssues, resolveDayWindow } from '../data.ts';
 
 /** Options shared by the four tree-wide commands. */
 const SHARED_OPTIONS: OptionSpecs = {
@@ -147,6 +152,19 @@ export const ISSUES_OPTIONS: OptionSpecs = {
 /** `fx-tests failures` options. */
 export const FAILURES_OPTIONS: OptionSpecs = {
     ...SHARED_OPTIONS,
+    // The global's shared wording is wrong here, restated rather than left to
+    // mislead — the same mechanism `intermittent` uses, since a command's own
+    // spec wins the merge in `dispatch()`. This command reads no test path: it
+    // takes a directory prefix, which has no filename for `detectHarness` to
+    // classify, so it reads both aggregates instead of inferring. See
+    // `harnessesForPathFilter`.
+    harness: {
+        type: 'string',
+        placeholder: '<xpcshell|mochitest>',
+        describe:
+            'Which harness’s data to read. Omit it and a directory path reads both, printing ' +
+            'whichever has rows.',
+    },
     message: {
         type: 'string',
         placeholder: '<substring>',
@@ -243,9 +261,17 @@ interface TreeHeader {
 async function loadTreeQuery(
     context: CommandContext,
     args: ParsedArgs,
-    commandName: string
+    commandName: string,
+    /**
+     * Which harness's file to read, when the caller resolved that itself.
+     *
+     * `failures` does, because a directory path has no harness to infer and it
+     * queries both — see `harnessesForPathFilter`. Everything else keeps the
+     * xpcshell default.
+     */
+    harnessOverride?: Harness
 ): Promise<TreeQuery> {
-    const harness: Harness = context.globals.harness ?? 'xpcshell';
+    const harness: Harness = harnessOverride ?? context.globals.harness ?? 'xpcshell';
     progress(context, `Reading ${harness}-issues.json…`);
     const { file } = await loadIssues(context, harness);
 
@@ -664,9 +690,23 @@ function emptyMessage(
     header: TreeHeader,
     types?: readonly IssueType[],
     subject = 'test',
-    extraFilters = ''
+    extraFilters = '',
+    /**
+     * The other files this run read, when the command widened its own query.
+     *
+     * `failures` does, on a directory path (`harnessesForPathFilter`). Naming
+     * only `header.harness` after downloading two aggregates would be a false
+     * sentence, and the sentence is the whole point of this message: it exists so
+     * a reader can tell a clean tree from a mistyped `--path`, and it cannot do
+     * that if it misreports the population. The typo advice is unchanged —
+     * with both harnesses empty, a typo really is the likely cause.
+     */
+    alsoSearched: readonly SearchedFile[] = []
 ): string {
-    const searched = `${fmtCount(header.testCount)} tests in ${header.harness}-issues.json`;
+    const searched = describeSearchedFiles(
+        [{ harness: header.harness, testCount: header.testCount }, ...alsoSearched],
+        fmtCount
+    );
     const typeNote =
         types !== undefined && types.length < DEFAULT_TYPES.length
             ? ` Only ${types.join(', ')} counted as issues, so --type may be why.`
@@ -681,29 +721,97 @@ function emptyMessage(
 
 // --- fx-tests failures ---------------------------------------------------
 
-/** Runs `fx-tests failures`. */
+/** One harness's answer, before it is known whether the other has one too. */
+interface FailuresResult {
+    header: TreeHeader;
+    groupBy: string;
+    sort: string;
+    types: IssueType[];
+    rowCount: number;
+    rows: Record<string, unknown>[];
+}
+
+/**
+ * Runs `fx-tests failures`.
+ *
+ * `--path` may name a **directory**, which has no filename to infer a harness
+ * from, so with no `--harness` this runs the query against both and lets the
+ * data decide: whichever came back non-empty is printed, both are when both did,
+ * and the not-found message only appears when neither did. See
+ * `harnessesForPathFilter` for why nothing better than asking both is available.
+ */
 export async function runFailures(context: CommandContext, args: ParsedArgs): Promise<void> {
     rejectPositionals(args, 'failures');
-    const query = await loadTreeQuery(context, args, 'failures');
+    const { required, speculative } = harnessesForPathFilter(
+        stringOption(args, 'path'),
+        context.globals.harness
+    );
     const limit = context.globals.limit ?? DEFAULT_LIMIT;
 
-    const groups = groupFailuresByMessage(query.file, {
-        ...sharedOptions(query),
-        ...optional('message', stringOption(args, 'message')),
-        maxTestsPerGroup: maxTestsFor(context),
-    });
-    const shown = applyLimit(groups, limit);
-    const result = {
-        header: query.header,
-        groupBy: 'message',
-        sort: 'count',
-        types: ['fail'] as IssueType[],
-        rowCount: groups.length,
-        rows: shown.map(failureGroupJson),
+    const oneHarness = async (harness: Harness): Promise<FailuresResult> => {
+        const query = await loadTreeQuery(context, args, 'failures', harness);
+        const groups = groupFailuresByMessage(query.file, {
+            ...sharedOptions(query),
+            ...optional('message', stringOption(args, 'message')),
+            maxTestsPerGroup: maxTestsFor(context),
+        });
+        return {
+            header: query.header,
+            groupBy: 'message',
+            sort: 'count',
+            types: ['fail'] as IssueType[],
+            rowCount: groups.length,
+            rows: applyLimit(groups, limit).map(failureGroupJson),
+        };
     };
-    emitResult(context, result, () =>
-        renderFailures(result, 'failures by message', boolOption(args, 'tests'))
-    );
+
+    const results: FailuresResult[] = [await oneHarness(required)];
+    for (const harness of speculative) {
+        // A file this command went looking for on its own initiative. Nothing
+        // the reader typed asked for it, so its absence is "no data from that
+        // harness" — the same outcome as an empty table — and must not turn a
+        // working answer into an exit code. See `harnessesForPathFilter`.
+        const extra = await ifPublished(oneHarness(harness));
+        if (extra !== null) {
+            results.push(extra);
+        }
+    }
+
+    // Both were asked only because neither could be ruled out; the ones with no
+    // rows are dropped rather than printed as an empty table each, which would
+    // bury the answer under a second header saying nothing. When neither has
+    // rows the first is kept, so the not-found message still prints once — and
+    // it is the first because that is the harness the command would have
+    // searched before it learned to widen.
+    const withRows = results.filter((result) => result.rows.length > 0);
+    const shown = withRows.length > 0 ? withRows : results.slice(0, 1);
+    // The aggregates that were read and are not being printed. Only reaches the
+    // output through `emptyMessage`, and only in the both-empty case, where the
+    // message has to name every file it searched or it is a false sentence.
+    const alsoSearched = results
+        .filter((result) => !shown.includes(result))
+        .map((result) => ({
+            harness: result.header.harness,
+            testCount: result.header.testCount,
+        }));
+    const wantTests = boolOption(args, 'tests');
+    if (context.globals.format === 'json' && shown.length > 1) {
+        // Two documents on one stdout is not JSON, so the pair is wrapped. Only
+        // when there really are two: a single answer keeps the shape every
+        // existing consumer parses.
+        emit(context, toJson({ harnesses: shown }));
+        return;
+    }
+    for (const [index, result] of shown.entries()) {
+        if (index > 0) {
+            // The second header has to read as a second answer rather than as a
+            // continuation of the first table's rows.
+            emit(context, '\n');
+        }
+        emitResult(context, result, () =>
+            renderFailures(result, 'failures by message', wantTests, alsoSearched)
+        );
+    }
 }
 
 /**
@@ -741,7 +849,9 @@ function failureGroupJson(group: FailureGroup): Record<string, unknown> {
 function renderFailures(
     result: { header: TreeHeader; rowCount: number; rows: Record<string, unknown>[] },
     subject: string,
-    wantTests = false
+    wantTests = false,
+    /** The other aggregates this run read. See `emptyMessage`. */
+    alsoSearched: readonly SearchedFile[] = []
 ): Rendered {
     return {
         preamble: headerLines(result.header, subject),
@@ -765,7 +875,13 @@ function renderFailures(
         total: result.rowCount,
         shown: result.rows.length,
         epilogue: testListLines(result.rows, wantTests),
-        empty: emptyMessage(result.header, undefined, 'failure', ', --message (a substring)'),
+        empty: emptyMessage(
+            result.header,
+            undefined,
+            'failure',
+            ', --message (a substring)',
+            alsoSearched
+        ),
     };
 }
 

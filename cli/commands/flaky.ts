@@ -145,7 +145,12 @@ import {
     tableSection,
 } from '../format/text.ts';
 import type { Harness } from '../options.ts';
-import { dayIndexOfDate, loadIssues, resolveDayKeyword } from '../data.ts';
+import {
+    type SearchedFile,
+    describeSearchedFiles,
+    harnessesForPathFilter,
+} from '../../lib/model/harness.ts';
+import { dayIndexOfDate, ifPublished, loadIssues, resolveDayKeyword } from '../data.ts';
 
 /**
  * The standing definitions, printed by `flaky --help` and nowhere else.
@@ -229,6 +234,19 @@ export const FLAKY_NOTES: string[] = [
 
 /** `fx-tests flaky` options. */
 export const FLAKY_OPTIONS: OptionSpecs = {
+    // The global's shared wording is wrong here, restated rather than left to
+    // mislead — the same mechanism `intermittent` uses, since a command's own
+    // spec wins the merge in `dispatch()`. This command reads no test path: it
+    // takes a directory prefix, which has no filename for `detectHarness` to
+    // classify, so it reads both aggregates instead of inferring. See
+    // `harnessesForPathFilter`.
+    harness: {
+        type: 'string',
+        placeholder: '<xpcshell|mochitest>',
+        describe:
+            'Which harness’s data to read. Omit it and a directory path reads both, printing ' +
+            'whichever has rows.',
+    },
     path: {
         type: 'string',
         placeholder: '<prefix>',
@@ -371,8 +389,19 @@ interface FlakyQuery {
  * `--average-days` sets the averaging width, `--since` narrows the trend series,
  * and none of the three is silently reinterpreted as another.
  */
-async function loadFlakyQuery(context: CommandContext, args: ParsedArgs): Promise<FlakyQuery> {
-    const harness: Harness = context.globals.harness ?? 'xpcshell';
+async function loadFlakyQuery(
+    context: CommandContext,
+    args: ParsedArgs,
+    /**
+     * Which harness's file to read, when `runFlaky` resolved that itself.
+     *
+     * It does whenever the path is a directory and no `--harness` was given, in
+     * which case there is nothing to infer from and both are read. See
+     * `harnessesForPathFilter`.
+     */
+    harnessOverride?: Harness
+): Promise<FlakyQuery> {
+    const harness: Harness = harnessOverride ?? context.globals.harness ?? 'xpcshell';
     progress(context, `Reading ${harness}-issues.json…`);
     const { file } = await loadIssues(context, harness);
 
@@ -561,29 +590,122 @@ export async function runFlaky(context: CommandContext, args: ParsedArgs): Promi
         );
     }
 
-    const query = await loadFlakyQuery(context, args);
+    // `flaky <path>` and `--path <prefix>` are the same selection, already
+    // refused together above. A **directory** has no filename to infer a harness
+    // from, so with no `--harness` both files are read and the data decides which
+    // one — or both — has an answer. See `harnessesForPathFilter`.
+    const pathPrefix = stringOption(args, 'path') ?? positional;
+    const { required, speculative } = harnessesForPathFilter(pathPrefix, context.globals.harness);
     const limit = context.globals.limit ?? DEFAULT_LIMIT;
 
-    if (groupBy === 'days') {
-        emitResult(context, trendResult(query, context, limit), (result) => renderTrend(result));
+    const oneHarness = async (harness: Harness): Promise<FlakyView> =>
+        oneView(context, args, await loadFlakyQuery(context, args, harness), groupBy, sort, limit);
+
+    const views: FlakyView[] = [await oneHarness(required)];
+    for (const harness of speculative) {
+        // A file this command went looking for on its own initiative, so its
+        // absence means "no data from that harness" rather than an error. See
+        // `ifPublished`.
+        const extra = await ifPublished(oneHarness(harness));
+        if (extra !== null) {
+            views.push(extra);
+        }
+    }
+
+    // Only the ones with rows, unless none has any — then the first, so the
+    // existing not-found message still prints exactly once. The first is the
+    // harness the command searched before it learned to widen.
+    const withRows = views.filter((view) => view.rowCount > 0);
+    const shown = withRows.length > 0 ? withRows : views.slice(0, 1);
+    // The aggregates that were read and are not being printed. Reaches the output
+    // only through the not-found messages, and only in the both-empty case, where
+    // naming one file after downloading two would be a false sentence.
+    const alsoSearched = views.filter((view) => !shown.includes(view)).map((view) => view.file);
+    if (context.globals.format === 'json' && shown.length > 1) {
+        // Two JSON documents on one stdout is not JSON. Wrapped only when there
+        // really are two, so a single answer keeps the shape it always had.
+        emit(context, toJson(roundForJson({ harnesses: shown.map((view) => view.result) })));
         return;
+    }
+    for (const [index, view] of shown.entries()) {
+        if (index > 0) {
+            // The second header has to read as a second answer, not as more rows
+            // under the first one.
+            emit(context, '\n');
+        }
+        emitResult(context, view.result, () => view.render(alsoSearched));
+    }
+}
+
+/** One harness's answer, before it is known whether the other has one too. */
+interface FlakyView {
+    result: unknown;
+    /** How many rows it found — the test for "this harness has data". */
+    rowCount: number;
+    /** The file this view read, for the messages that name what was searched. */
+    file: SearchedFile;
+    /**
+     * `alsoSearched` names the aggregates that were read and are not printed, so
+     * the not-found message can name the whole population. Empty unless this is
+     * the both-empty case. See `describeSearchedFiles`.
+     */
+    render(alsoSearched: readonly SearchedFile[]): Rendered;
+}
+
+/** The requested view over one harness's file. */
+function oneView(
+    context: CommandContext,
+    args: ParsedArgs,
+    query: FlakyQuery,
+    groupBy: FlakyGroupBy,
+    sort: FlakySort,
+    limit: number
+): FlakyView {
+    const file: SearchedFile = {
+        harness: query.header.harness,
+        testCount: query.header.testCount,
+    };
+    if (groupBy === 'days') {
+        const result = trendResult(query, context, limit);
+        // Not `rows.length`: this view has one row per **day**, so a harness that
+        // ran nothing under the path still returns a full calendar of zeroes.
+        // What makes it an answer is a day on which some test ran, which is the
+        // same emptiness `renderTrend`'s own message names. And not a sum over
+        // `result.rows` either — those are the `--limit` tail, so a folder that
+        // ran early in the window and stopped would read as "no data" at
+        // `--limit 3` and print at `--limit 0`. See `TrendResult.testDays`.
+        return {
+            result,
+            rowCount: result.testDays,
+            file,
+            render: (alsoSearched) => renderTrend(result, alsoSearched),
+        };
     }
 
     if (groupBy === 'tests') {
         // Its own tree: one verdict over the window, as the page's test rows are.
         // See `listingTree`.
-        emitResult(
-            context,
-            testResult(query, listingTree(query), boolOption(args, 'here-only'), sort, limit),
-            renderTests
+        const result = testResult(
+            query,
+            listingTree(query),
+            boolOption(args, 'here-only'),
+            sort,
+            limit
         );
-        return;
+        // `consideredTests`, not `rows.length`: a folder whose every test passed
+        // everywhere has no rows and is still an answer — "nothing is flaky here"
+        // — and dropping it would send the reader to the typo message instead.
+        return {
+            result,
+            rowCount: result.consideredTests,
+            file,
+            render: (alsoSearched) => renderTests(result, alsoSearched),
+        };
     }
 
     const root = classifiedTree(query);
     const rows = groupBy === 'list' ? listRows(root) : treeRows(root);
     const sorted = sortRows(rows, sort);
-    const shown = applyLimit(sorted, limit);
     const result: FolderResult = {
         header: query.header,
         groupBy,
@@ -599,9 +721,14 @@ export async function runFlaky(context: CommandContext, args: ParsedArgs): Promi
             testCount: root.testCount,
         },
         rowCount: sorted.length,
-        rows: shown,
+        rows: applyLimit(sorted, limit),
     };
-    emitResult(context, result, renderFolders);
+    return {
+        result,
+        rowCount: sorted.length,
+        file,
+        render: (alsoSearched) => renderFolders(result, alsoSearched),
+    };
 }
 
 /**
@@ -935,7 +1062,11 @@ function sortTestRows(rows: readonly TestRow[], sort: FlakySort): TestRow[] {
 }
 
 /** Renders the per-test listing. */
-function renderTests(result: TestResult): Rendered {
+function renderTests(
+    result: TestResult,
+    /** The other aggregates this run read. See `testEmptyMessage`. */
+    alsoSearched: readonly SearchedFile[] = []
+): Rendered {
     // Six columns cut to three. What the old six actually contained, measured over
     // every listed row on the pinned window (2,582 rows):
     //
@@ -1020,7 +1151,7 @@ function renderTests(result: TestResult): Rendered {
         total: result.rowCount,
         shown: result.rows.length,
         epilogue: testEpilogue(result),
-        empty: testEmptyMessage(result),
+        empty: testEmptyMessage(result, alsoSearched),
     };
 }
 
@@ -1120,8 +1251,21 @@ function testEpilogue(result: TestResult): string[] {
     return lines;
 }
 
+/**
+ * "4,911 tests in xpcshell-issues.json", naming every file this run read.
+ *
+ * Wraps `describeSearchedFiles` with this command's header and its count
+ * formatter, so the three views cannot describe the same search differently.
+ */
+function searchedFiles(header: FlakyHeader, alsoSearched: readonly SearchedFile[]): string {
+    return describeSearchedFiles(
+        [{ harness: header.harness, testCount: header.testCount }, ...alsoSearched],
+        fmtCount
+    );
+}
+
 /** What to say when nothing under the path is worth listing. */
-function testEmptyMessage(result: TestResult): string {
+function testEmptyMessage(result: TestResult, alsoSearched: readonly SearchedFile[] = []): string {
     const { header } = result;
     const where = result.pathPrefix === null ? 'the tree' : result.pathPrefix;
     const over =
@@ -1133,7 +1277,7 @@ function testEmptyMessage(result: TestResult): string {
     if (result.consideredTests === 0) {
         return (
             `No test ran under ${where} ${over}. Searched ` +
-            `${fmtCount(header.testCount)} tests in ${header.harness}-issues.json. Check the ` +
+            `${searchedFiles(header, alsoSearched)}. Check the ` +
             'path (a directory prefix) for typos' +
             (result.hereOnly
                 ? ', and note that --here-only needs the path to name a directory exactly — drop ' +
@@ -1318,7 +1462,11 @@ interface FolderResult {
 }
 
 /** Renders a folder view. */
-function renderFolders(result: FolderResult): Rendered {
+function renderFolders(
+    result: FolderResult,
+    /** The other aggregates this run read. See `emptyMessage`. */
+    alsoSearched: readonly SearchedFile[] = []
+): Rendered {
     // `--sort share` still selects the `flaky%` column: the flag is an input a
     // script may have written down, the header is prose for a reader, and only
     // the header was unclear. Renaming both would have broken the first to fix
@@ -1378,7 +1526,7 @@ function renderFolders(result: FolderResult): Rendered {
         total: result.rowCount,
         shown: result.rows.length,
         epilogue: epilogueFor(result),
-        empty: emptyMessage(result),
+        empty: emptyMessage(result, alsoSearched),
     };
 }
 
@@ -1445,6 +1593,15 @@ interface TrendResult {
     averageWindow: number;
     rowCount: number;
     rows: TrendRow[];
+    /**
+     * Test-days over the **whole** window, before `--since` and `--limit`.
+     *
+     * `rows` is the printed tail; this is the population behind it, which is what
+     * "did this harness run anything under the path" has to be asked of. The two
+     * differ whenever the tail is shorter than the window, and a folder that ran
+     * early and stopped is exactly the case where they disagree.
+     */
+    testDays: number;
 }
 
 /**
@@ -1492,11 +1649,17 @@ function trendResult(query: FlakyQuery, context: CommandContext, limit: number):
         averageWindow: TREND_WINDOW,
         rowCount: rows.length,
         rows: shown,
+        // Summed over `rows`, never `shown`: see `TrendResult.testDays`.
+        testDays: rows.reduce((sum, row) => sum + row.total, 0),
     };
 }
 
 /** Renders the trend table. */
-function renderTrend(result: TrendResult): Rendered {
+function renderTrend(
+    result: TrendResult,
+    /** The other aggregates this run read. See `describeSearchedFiles`. */
+    alsoSearched: readonly SearchedFile[] = []
+): Rendered {
     const lines = headerLines(result);
     return {
         preamble: lines,
@@ -1526,9 +1689,10 @@ function renderTrend(result: TrendResult): Rendered {
             '  --group-by list ranks the folders behind these numbers.',
         ],
         empty:
-            `No day had any test run. Searched ${fmtCount(result.header.testCount)} tests in ` +
-            `${result.header.harness}-issues.json over ${result.header.startDate} … ` +
-            `${result.header.endDate}. Check --path (a directory prefix) for typos.`,
+            'No day had any test run. Searched ' +
+            searchedFiles(result.header, alsoSearched) +
+            ` over ${result.header.startDate} … ${result.header.endDate}. ` +
+            'Check --path (a directory prefix) for typos.',
     };
 }
 
@@ -1702,7 +1866,7 @@ function wrapCaveat(text: string, indent = '  '): string[] {
 }
 
 /** What to say when the selection is empty. */
-function emptyMessage(result: FolderResult): string {
+function emptyMessage(result: FolderResult, alsoSearched: readonly SearchedFile[] = []): string {
     const { header } = result;
     const over =
         header.scope === 'day'
@@ -1711,8 +1875,8 @@ function emptyMessage(result: FolderResult): string {
               ? `over all ${header.dayCount} days`
               : `over the last ${header.averageDays ?? 0} days`;
     return (
-        `No folder matched. Searched ${fmtCount(header.testCount)} tests in ` +
-        `${header.harness}-issues.json, classified ${over}. ` +
+        `No folder matched. Searched ${searchedFiles(header, alsoSearched)}, ` +
+        `classified ${over}. ` +
         'Check --path (a directory prefix) for typos — and note that a folder whose tests did ' +
         'not run at all in that window has no row, since it has no rate.'
     );

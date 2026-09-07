@@ -139,6 +139,29 @@ export async function loadIssues(
     return { file: decodeIssues(raw), raw, name };
 }
 
+/**
+ * The result of a load a command made on its own initiative, or `null` when
+ * the file it wanted is not published.
+ *
+ * The one caller shape is a command that widened its own query — `failures` and
+ * `flaky` read the mochitest aggregate as well as the xpcshell one when the path
+ * is a directory (`harnessesForPathFilter`). Nothing the reader typed named that
+ * file, so a 404 on it is not their mistake: it is the same answer as an empty
+ * table, and the command already knows how to print that. Only
+ * `DataFileNotFoundError` is swallowed — a network failure or a corrupt file is
+ * still an error, because those say nothing about whether the harness has data.
+ */
+export async function ifPublished<T>(loading: Promise<T>): Promise<T | null> {
+    try {
+        return await loading;
+    } catch (error) {
+        if (error instanceof DataFileNotFoundError) {
+            return null;
+        }
+        throw error;
+    }
+}
+
 /** Reads a harness's `index.json`. */
 export async function loadIndex(
     context: CommandContext,

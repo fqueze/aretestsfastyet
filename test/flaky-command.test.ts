@@ -659,10 +659,16 @@ test('the trend limit keeps the newest days, not the oldest', async () => {
 });
 
 test('--path narrows the population, and a miss says so', async () => {
+    // `--harness xpcshell` is explicit because the fixture serves the *same
+    // bytes* under both harnesses, so a directory path matches in both and
+    // `flaky` answers for both (`harnessesForPathFilter`). That widening has its
+    // own tests below; this one is about the path filter.
     const { stdout } = await invoke([
         'flaky',
         '--json',
         '--quiet',
+        '--harness',
+        'xpcshell',
         '--limit',
         '0',
         '--path',
@@ -675,6 +681,8 @@ test('--path narrows the population, and a miss says so', async () => {
         assert.ok(row.path.startsWith('netwerk'), `${row.path} is outside --path netwerk/`);
     }
 
+    // A miss under *both* harnesses, which is the only case that still reports a
+    // possible typo now that a directory queries both.
     const miss = await invoke(['flaky', '--quiet', '--path', 'no/such/directory']);
     assert.equal(miss.code, ExitCode.Success, 'an empty result is an answer, not an error');
     assert.match(miss.stdout, /No folder matched/);
@@ -685,11 +693,15 @@ test('a positional path selects the per-test listing, not a usage error', async 
     // This used to be rejected with "did you mean --path?". It is now the
     // shorthand for the drill-down, which is how `fx-tests test <path>` and
     // `fx-tests manifests [name]` already read a path.
+    // Pinned to one harness for the reason `--path narrows the population` gives:
+    // the fixture is the same bytes under both, so a directory would answer twice.
     const { code, stdout } = await invoke([
         'flaky',
         'toolkit/components/extensions/test/xpcshell',
         '--json',
         '--quiet',
+        '--harness',
+        'xpcshell',
         '--limit',
         '0',
     ]);
@@ -706,6 +718,8 @@ test('a positional path selects the per-test listing, not a usage error', async 
         'tests',
         '--json',
         '--quiet',
+        '--harness',
+        'xpcshell',
         '--limit',
         '0',
     ]);
@@ -786,4 +800,402 @@ test('--noise 0 disables the filter, and the header reports what was applied', a
     // can see when they differ — which is what a single-day file causes.
     assert.equal(onHeader['requestedMinWindowFailures'], 1);
     assert.equal(onHeader['noiseFilterSkipped'], false);
+});
+
+// --- a directory path queries both harnesses -----------------------------
+
+/**
+ * `fx-tests flaky <directory>` with no `--harness`.
+ *
+ * The defect: `--harness` is documented as "Inferred from the test path by
+ * default", `detectHarness` infers from the **filename**, and a directory has
+ * none — so it fell through to xpcshell. On a mochitest-only directory the
+ * command searched the wrong file, found nothing, and told the reader to check
+ * their path for a typo that was not there. Measured on the published data,
+ * `toolkit/components/passwordmgr/test/browser` has 1,760 failures on its top
+ * mochitest message and no xpcshell rows at all.
+ *
+ * There is nothing in the aggregates to infer a folder's harness from — that is
+ * in its manifests, and the CLI has no checkout — so the resolution is to ask
+ * both and let the data answer.
+ */
+
+/**
+ * The directory each harness's copy of the fixture puts its tests under.
+ *
+ * `netwerk/test/unit` is xpcshell's, from the fixture; the mochitest copy is
+ * relocated to `netwerk/test/browser`. So `netwerk/test` is a directory **both**
+ * harnesses run under and neither owns — which is the real tree's shape (and the
+ * shape of item 17's own `netwerk/test` example), and the case a both-have-data
+ * test has to be built from.
+ */
+const XPCSHELL_DIR = 'netwerk/test/unit';
+const MOCHITEST_DIR = 'netwerk/test/browser';
+/** The directory above both, matched by each harness for different rows. */
+const SHARED_DIR = 'netwerk/test';
+
+/**
+ * A source serving both aggregates, with the mochitest one **relocated**.
+ *
+ * There is one issues fixture and it is xpcshell's. Serving those same bytes
+ * under both names — which is what `FILES` does for the `--harness` tests — makes
+ * every path match under both harnesses, and then no test can tell "printed the
+ * harness that has data" apart from "printed both". So the mochitest copy's
+ * folder table has each path's leaf renamed to `browser`, putting its rows beside
+ * the xpcshell ones rather than on top of them: `netwerk/test/unit` stays
+ * xpcshell-only, `netwerk/test/browser` becomes mochitest-only, and
+ * `netwerk/test` has both. That is the disjointness the real tree has and the
+ * fixture lacks, and it is what lets the three cases item 17 names be told apart.
+ *
+ * `available` drops a harness's file entirely, for the 404 case.
+ */
+function harnessSource(available: readonly string[] = ['xpcshell', 'mochitest']): DataSource {
+    return {
+        name: 'fixtures',
+        async fetch(fileName: DataFileName): Promise<Uint8Array> {
+            const harness = fileName.index.replace(/-timings$/, '');
+            const key = `${fileName.index}/${fileName.filename}`;
+            const local = FILES[key];
+            if (local === undefined || !available.includes(harness)) {
+                throw new DataFileNotFoundError(fileName);
+            }
+            const bytes = new Uint8Array(await readFile(new URL(local, FIXTURES)));
+            if (harness !== 'mochitest' || fileName.filename === 'index.json') {
+                return bytes;
+            }
+            const file = JSON.parse(new TextDecoder().decode(bytes)) as {
+                tables: { testPaths: string[] };
+            };
+            file.tables.testPaths = file.tables.testPaths.map((path) =>
+                path.replace(/[^/]+$/, 'browser')
+            );
+            return new TextEncoder().encode(JSON.stringify(file));
+        },
+    };
+}
+
+/** `harnessSource`, recording every file name it was asked for. */
+function fetchCounting(): { source: DataSource; requested: string[] } {
+    const inner = harnessSource();
+    const requested: string[] = [];
+    return {
+        requested,
+        source: {
+            name: inner.name,
+            async fetch(fileName: DataFileName): Promise<Uint8Array> {
+                requested.push(`${fileName.index}/${fileName.filename}`);
+                return inner.fetch(fileName);
+            },
+        },
+    };
+}
+
+async function invokeWith(
+    source: DataSource,
+    argv: string[]
+): Promise<{ code: number; stdout: string; stderr: string }> {
+    const streams = captureStreams();
+    const code = await run({
+        argv,
+        streams,
+        source,
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+    });
+    return { code, stdout: streams.stdout, stderr: streams.stderr };
+}
+
+test('a directory prints the harness that has data, not the one it guessed', async () => {
+    // The bug's shape exactly: a directory only mochitest runs. The old code read
+    // xpcshell, found nothing, and blamed a typo. Both aggregates are published
+    // here — the xpcshell one simply has no row under this path.
+    const mochitestOnly = await invokeWith(harnessSource(), [
+        'flaky',
+        MOCHITEST_DIR,
+        '--quiet',
+        '--limit',
+        '3',
+    ]);
+    assert.equal(mochitestOnly.code, ExitCode.Success);
+    assert.match(
+        mochitestOnly.stdout,
+        /^mochitest flaky tests/,
+        'the harness with rows leads, rather than the xpcshell default with none'
+    );
+    assert.doesNotMatch(
+        mochitestOnly.stdout,
+        /for typos/,
+        'there is no typo to hunt: the directory has data, under the other harness'
+    );
+    assert.doesNotMatch(
+        mochitestOnly.stdout,
+        /^xpcshell flaky tests/m,
+        'the empty harness must not print a header of its own'
+    );
+
+    // And the mirror, so the rule is "whichever has rows" rather than
+    // "mochitest wins".
+    const xpcshellOnly = await invokeWith(harnessSource(), [
+        'flaky',
+        XPCSHELL_DIR,
+        '--quiet',
+        '--limit',
+        '3',
+    ]);
+    assert.equal(xpcshellOnly.code, ExitCode.Success);
+    assert.match(xpcshellOnly.stdout, /^xpcshell flaky tests/);
+    assert.doesNotMatch(xpcshellOnly.stdout, /^mochitest flaky tests/m);
+});
+
+test('a directory with data under both harnesses prints both, each with its header', async () => {
+    // A real directory a user would type: `netwerk/test` holds the xpcshell tests
+    // in `unit/` and the mochitest ones in `browser/`, which is item 17's own
+    // example and the shape of the tree. Not `--path ''` — that means the same
+    // thing as omitting `--path`, and pinning this requirement to a path form
+    // nobody types would leave the requirement effectively untested.
+    const { code, stdout } = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--path',
+        SHARED_DIR,
+        '--group-by',
+        'list',
+        '--limit',
+        '3',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^xpcshell flaky/m);
+    assert.match(stdout, /^mochitest flaky/m);
+    // Each section really is that harness's own rows, not the same table twice.
+    assert.match(stdout, new RegExp(`^\\s+${XPCSHELL_DIR}\\s`, 'm'));
+    assert.match(stdout, new RegExp(`^\\s+${MOCHITEST_DIR}\\s`, 'm'));
+
+    // `--json` cannot emit two documents on one stdout, so the pair is wrapped —
+    // and only then, so a single answer keeps the shape existing callers parse.
+    const wrapped = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--path',
+        SHARED_DIR,
+        '--group-by',
+        'list',
+        '--json',
+        '--limit',
+        '0',
+    ]);
+    const both = (json(wrapped.stdout)['harnesses'] as Record<string, unknown>[] | undefined) ?? [];
+    assert.equal(both.length, 2, 'both harnesses answered, so both are in the JSON');
+    assert.deepEqual(
+        both.map((one) => (one['header'] as Record<string, unknown>)['harness']),
+        ['xpcshell', 'mochitest']
+    );
+
+    const single = await invokeWith(harnessSource(), [
+        'flaky',
+        XPCSHELL_DIR,
+        '--json',
+        '--quiet',
+        '--limit',
+        '0',
+    ]);
+    assert.equal(
+        json(single.stdout)['harnesses'],
+        undefined,
+        'one answer must not be wrapped: that would break every existing --json caller'
+    );
+});
+
+test('the typo message survives, for the one case where it is the right answer', async () => {
+    // Both empty is the only remaining case where "check the path" is advice
+    // rather than a misdirection — and it must be said once, not once per harness.
+    const { code, stdout } = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--path',
+        'no/such/directory',
+    ]);
+    assert.equal(code, ExitCode.Success, 'an empty result is an answer, not an error');
+    assert.equal(
+        stdout.match(/No folder matched/g)?.length,
+        1,
+        'the not-found message must print once, not once per harness searched'
+    );
+    // Once, but naming **both** files. The message exists so a reader can tell a
+    // clean tree from a mistyped path, which it cannot do if it reports one
+    // aggregate after downloading two.
+    assert.match(stdout, /tests in xpcshell-issues\.json and [\d,]+ tests in mochitest-issues\.json/);
+
+    // The per-test listing's own message carries it too — three views, one phrase.
+    const listing = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        'no/such/directory',
+    ]);
+    assert.match(
+        listing.stdout,
+        /tests in xpcshell-issues\.json and [\d,]+ tests in mochitest-issues\.json/
+    );
+
+    // And the single-harness wording is untouched: one file searched, one named.
+    const pinned = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--harness',
+        'xpcshell',
+        '--path',
+        'no/such/directory',
+    ]);
+    assert.match(pinned.stdout, /Searched [\d,]+ tests in xpcshell-issues\.json,/);
+    assert.doesNotMatch(pinned.stdout, /mochitest-issues\.json/);
+});
+
+test('an explicit --harness is never widened, and neither is the tree-wide ranking', async () => {
+    // The reader named the file; answering about the other one too would be
+    // ignoring the flag. Asserted where mochitest *does* have rows under the
+    // path, so the second section exists and is deliberately not taken.
+    const pinned = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--harness',
+        'xpcshell',
+        '--path',
+        SHARED_DIR,
+        '--group-by',
+        'list',
+        '--limit',
+        '3',
+    ]);
+    assert.doesNotMatch(pinned.stdout, /^mochitest flaky/m);
+
+    // And with no path there is no directory to be wrong about: the default
+    // ranking stays the one file it always read.
+    const treeWide = await invokeWith(harnessSource(), ['flaky', '--quiet', '--limit', '3']);
+    assert.doesNotMatch(treeWide.stdout, /^mochitest flaky/m);
+});
+
+test('--path \'\' is the same query as no --path, and fetches the same files', async () => {
+    // An empty prefix selects every test, which is what omitting the flag means.
+    // Left to fall through to `isDirectoryPath('')` it read as a directory and
+    // doubled the download for an identical question. Asserted on the fetches
+    // rather than the output, because the output would have looked fine.
+    const withEmpty = fetchCounting();
+    const withNone = fetchCounting();
+    const a = await invokeWith(withEmpty.source, ['flaky', '--quiet', '--path', '', '--limit', '3']);
+    const b = await invokeWith(withNone.source, ['flaky', '--quiet', '--limit', '3']);
+    assert.deepEqual(
+        withEmpty.requested,
+        withNone.requested,
+        'an empty prefix must not read a second aggregate that no --path does not'
+    );
+    assert.equal(withEmpty.requested.filter((key) => key.includes('issues')).length, 1);
+    // The rows are the same selection. Not asserted on the whole of stdout: the
+    // header prints "Under  only." for an empty prefix, a cosmetic defect that
+    // predates this change and is out of item 17's scope.
+    const rows = (text: string): string[] =>
+        text.split('\n').filter((line) => line.includes('flaky') || line.startsWith('  toolkit'));
+    assert.deepEqual(rows(a.stdout), rows(b.stdout), 'the same selection must rank the same');
+});
+
+test('--group-by days counts test-days, not calendar rows, when it decides who has data', async () => {
+    // This view has one row per **day**, so a harness that ran nothing under the
+    // path still returns a full 21-row calendar of zeroes. Testing `rows.length`
+    // would call that "has data" and print an all-zero table above the real one.
+    const { code, stdout } = await invokeWith(harnessSource(), [
+        'flaky',
+        '--quiet',
+        '--path',
+        MOCHITEST_DIR,
+        '--group-by',
+        'days',
+        '--limit',
+        '3',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^mochitest flakiness by day/);
+    assert.doesNotMatch(
+        stdout,
+        /^xpcshell flakiness by day/m,
+        'a calendar of zeroes is not an answer, and must not be printed as one'
+    );
+});
+
+test('the trend view counts test-days over the window, not over the --limit tail', async () => {
+    // `rows` is the printed tail — `--since` and `--limit` both slice it — so
+    // summing it to decide "did this harness run anything here" asks the question
+    // of the last few days instead of the window. A folder that ran early and
+    // stopped then reads as no data at `--limit 3` and prints at `--limit 0`,
+    // which is the same answer changing with a display flag.
+    const windowDays = 21;
+    const full = json(
+        (
+            await invokeWith(harnessSource(), [
+                'flaky',
+                '--quiet',
+                '--json',
+                '--harness',
+                'xpcshell',
+                '--path',
+                'netwerk/test/unit',
+                '--group-by',
+                'days',
+                '--limit',
+                '0',
+            ])
+        ).stdout
+    );
+    const tail = json(
+        (
+            await invokeWith(harnessSource(), [
+                'flaky',
+                '--quiet',
+                '--json',
+                '--harness',
+                'xpcshell',
+                '--path',
+                'netwerk/test/unit',
+                '--group-by',
+                'days',
+                '--limit',
+                '3',
+            ])
+        ).stdout
+    );
+
+    // The tail really is shorter, so the two would differ if `testDays` were
+    // summed over what is printed.
+    assert.equal((full['rows'] as unknown[]).length, windowDays);
+    assert.equal((tail['rows'] as unknown[]).length, 3);
+    assert.ok((full['testDays'] as number) > 0, 'the fixture folder ran on every day');
+    assert.equal(
+        tail['testDays'],
+        full['testDays'],
+        '--limit is a display flag and must not change what the window contains'
+    );
+
+    // And it is the *whole* window, not merely limit-invariant: an independent
+    // sum over the unsliced rows.
+    const summed = (full['rows'] as { total: number }[]).reduce((sum, row) => sum + row.total, 0);
+    assert.equal(full['testDays'], summed);
+    assert.ok(
+        summed > ((tail['rows'] as { total: number }[]).reduce((sum, r) => sum + r.total, 0)),
+        'the fixture must have more test-days in the window than in its last three days, ' +
+            'or this test cannot tell the two sums apart'
+    );
+});
+
+test('a harness that publishes nothing is no data, not an error', async () => {
+    // The mochitest read is this command's own initiative. A 404 on it says the
+    // aggregate is not published, which is the same answer as an empty table, and
+    // it must not take the xpcshell answer down with it. See `ifPublished`.
+    const { code, stdout } = await invokeWith(harnessSource(['xpcshell']), [
+        'flaky',
+        '--quiet',
+        '--path',
+        'netwerk/',
+        '--group-by',
+        'list',
+        '--limit',
+        '3',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^xpcshell flaky/);
 });

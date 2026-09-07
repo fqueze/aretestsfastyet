@@ -1514,6 +1514,207 @@ test('failures --message filters case-insensitively', async () => {
     );
 });
 
+
+/**
+ * `fx-tests failures --path <directory>` with no `--harness`.
+ *
+ * `--harness` is documented as "Inferred from the test path by default" and
+ * `detectHarness` infers from the **filename** — a directory has none, so it fell
+ * through to xpcshell. On a mochitest-only directory the command searched the
+ * wrong file, came back empty, and told the reader to check `--path`,
+ * `--message` and `--component` for a typo that was not there. Measured on the
+ * published data, `toolkit/components/passwordmgr/test/browser` has 1,760
+ * failures on its top mochitest message and no xpcshell rows at all.
+ *
+ * Nothing in the aggregates says which harness runs a folder — that is in its
+ * manifests, and the CLI has no checkout — so the resolution is to ask both and
+ * let the data answer. `harnessesForPathFilter` is the rule; `flaky` shares it.
+ */
+
+/**
+ * The directory each harness's copy of the issues fixture puts its tests under.
+ *
+ * `netwerk/test/unit` is xpcshell's, from the fixture; the mochitest copy is
+ * relocated to `netwerk/test/browser`. So `netwerk/test` is a directory **both**
+ * harnesses run under and neither owns — item 17's own example, and the shape of
+ * the real tree.
+ */
+const XPCSHELL_DIR = 'netwerk/test/unit';
+const MOCHITEST_DIR = 'netwerk/test/browser';
+/** The directory above both, matched by each harness for different rows. */
+const SHARED_DIR = 'netwerk/test';
+
+/**
+ * A source serving both issues aggregates, with the mochitest one relocated.
+ *
+ * There is one issues fixture and it is xpcshell's, so serving the same bytes
+ * under both names would make every path match under both harnesses and no test
+ * could tell "printed the harness with data" apart from "printed both". The
+ * mochitest copy's folder table has each path's leaf renamed to `browser`,
+ * putting its rows beside the xpcshell ones rather than on top of them:
+ * `netwerk/test/unit` stays xpcshell-only, `netwerk/test/browser` becomes
+ * mochitest-only, and `netwerk/test` has both.
+ */
+function twoHarnessSource(): DataSource & { requested: string[] } {
+    const inner = fixtureSource({
+        'mochitest-timings/mochitest-issues.json': 'xpcshell-issues.json',
+    });
+    return {
+        name: inner.name,
+        requested: inner.requested,
+        async fetch(fileName: DataFileName): Promise<Uint8Array> {
+            const bytes = await inner.fetch(fileName);
+            if (fileName.filename !== 'mochitest-issues.json') {
+                return bytes;
+            }
+            const file = JSON.parse(new TextDecoder().decode(bytes)) as {
+                tables: { testPaths: string[] };
+            };
+            file.tables.testPaths = file.tables.testPaths.map((path) =>
+                path.replace(/[^/]+$/, 'browser')
+            );
+            return new TextEncoder().encode(JSON.stringify(file));
+        },
+    };
+}
+
+test('failures --path <directory> answers from the harness that has data', async () => {
+    const source = twoHarnessSource();
+    const { code, stdout } = await invoke(
+        ['failures', '--path', MOCHITEST_DIR, '--limit', '3'],
+        { source }
+    );
+    assert.equal(code, ExitCode.Success);
+    assert.match(
+        stdout,
+        /^mochitest failures by message/,
+        'the harness with rows leads, rather than the xpcshell default with none'
+    );
+    assert.doesNotMatch(
+        stdout,
+        /for typos/,
+        'there is no typo to hunt: the directory has data, under the other harness'
+    );
+    assert.doesNotMatch(
+        stdout,
+        /^xpcshell failures by message/m,
+        'the empty harness must not print a header of its own'
+    );
+
+    // The mirror, so the rule is "whichever has rows" and not "mochitest wins".
+    const xpcshellOnly = await invoke(['failures', '--path', XPCSHELL_DIR, '--limit', '3'], {
+        source: twoHarnessSource(),
+    });
+    assert.match(xpcshellOnly.stdout, /^xpcshell failures by message/);
+    assert.doesNotMatch(xpcshellOnly.stdout, /^mochitest failures by message/m);
+});
+
+test('failures prints both harnesses when both have rows, and wraps only that JSON', async () => {
+    // A real directory a user would type: `netwerk/test` holds the xpcshell tests
+    // in `unit/` and the mochitest ones in `browser/`. Not `--path ''` — that is
+    // the same selection as omitting `--path`, so pinning this requirement to it
+    // would leave the requirement effectively untested.
+    const { code, stdout } = await invoke(['failures', '--path', SHARED_DIR, '--limit', '2'], {
+        source: twoHarnessSource(),
+    });
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^xpcshell failures by message/m);
+    assert.match(stdout, /^mochitest failures by message/m);
+
+    // Two JSON documents on one stdout is not JSON, so the pair is wrapped —
+    // and only then, so a single answer keeps the shape existing callers parse.
+    const wrapped = await invoke(['failures', '--path', SHARED_DIR, '--json', '--limit', '0'], {
+        source: twoHarnessSource(),
+    });
+    const both = json(wrapped.stdout)['harnesses'] as Record<string, unknown>[];
+    assert.equal(both.length, 2);
+    assert.deepEqual(
+        both.map((one) => (one['header'] as Record<string, unknown>)['harness']),
+        ['xpcshell', 'mochitest']
+    );
+
+    const single = await invoke(['failures', '--path', XPCSHELL_DIR, '--json', '--limit', '0'], {
+        source: twoHarnessSource(),
+    });
+    assert.equal(
+        json(single.stdout)['harnesses'],
+        undefined,
+        'one answer must not be wrapped: that would break every existing --json caller'
+    );
+});
+
+test('failures keeps the typo message for the one case where it is the right answer', async () => {
+    // Both empty is the only remaining case where "check --path" is advice rather
+    // than a misdirection — and it must be said once, not once per harness.
+    const { code, stdout } = await invoke(
+        ['failures', '--path', 'no/such/directory', '--limit', '3'],
+        { source: twoHarnessSource() }
+    );
+    assert.equal(code, ExitCode.Success, 'an empty result is an answer, not an error');
+    assert.equal(stdout.match(/No failure matched/g)?.length, 1);
+    assert.match(stdout, /Check --path \(a directory prefix\)/);
+
+    // And it names **both** files. The message exists so a reader can tell a
+    // clean tree from a mistyped --path, which it cannot do if it reports one
+    // aggregate after downloading two.
+    assert.match(stdout, /tests in xpcshell-issues\.json and [\d,]+ tests in mochitest-issues\.json/);
+
+    // The single-harness wording is untouched: one file searched, one file named.
+    const pinned = await invoke(
+        ['failures', '--harness', 'xpcshell', '--path', 'no/such/directory', '--limit', '3'],
+        { source: twoHarnessSource() }
+    );
+    assert.match(pinned.stdout, /Searched [\d,]+ tests in xpcshell-issues\.json over /);
+    assert.doesNotMatch(pinned.stdout, /mochitest-issues\.json/);
+});
+
+test("failures --path '' is the same query as no --path, and fetches the same files", async () => {
+    // An empty prefix selects every test, which is what omitting the flag means.
+    // Left to fall through to `isDirectoryPath('')` it read as a directory and
+    // doubled the download for an identical question.
+    const withEmpty = twoHarnessSource();
+    const withNone = twoHarnessSource();
+    await invoke(['failures', '--path', '', '--limit', '2'], { source: withEmpty });
+    await invoke(['failures', '--limit', '2'], { source: withNone });
+    assert.deepEqual(
+        withEmpty.requested,
+        withNone.requested,
+        'an empty prefix must not read a second aggregate that no --path does not'
+    );
+    assert.ok(
+        !withEmpty.requested.includes('mochitest-timings/mochitest-issues.json'),
+        `fetched ${withEmpty.requested.join(', ')}`
+    );
+});
+
+test('failures never widens an explicit --harness, nor a query with no path', async () => {
+    const pinned = await invoke(
+        ['failures', '--harness', 'xpcshell', '--path', SHARED_DIR, '--limit', '2'],
+        { source: twoHarnessSource() }
+    );
+    assert.doesNotMatch(pinned.stdout, /^mochitest failures by message/m);
+
+    // With no path there is no directory to be wrong about, and the mochitest
+    // file must not even be fetched: this is the tree-wide default and doubling
+    // its downloads would be a real cost for no question asked.
+    const source = twoHarnessSource();
+    await invoke(['failures', '--limit', '2'], { source });
+    assert.ok(
+        !source.requested.includes('mochitest-timings/mochitest-issues.json'),
+        `fetched ${source.requested.join(', ')}`
+    );
+});
+
+test('a harness that publishes no aggregate is no data, not an error', async () => {
+    // The mochitest read is the command's own initiative — nothing the reader
+    // typed named that file — so a 404 on it means "no data from that harness"
+    // and must not take the xpcshell answer down with it. `FILES` has no
+    // mochitest issues aggregate, which is exactly that case.
+    const { code, stdout } = await invoke(['failures', '--path', XPCSHELL_DIR, '--limit', '3']);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^xpcshell failures by message/);
+});
+
 test('the tree-wide commands reject a stray positional with a useful hint', async () => {
     const { code, stderr } = await invoke(['issues', 'netwerk/test/unit']);
     assert.equal(code, ExitCode.Usage);
