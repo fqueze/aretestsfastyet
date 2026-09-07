@@ -54,6 +54,7 @@ import {
     type ScanHarness,
     bugsNamingTest,
     failureLineDetail,
+    occurrenceHistory,
     occurrenceProfiles,
     scanBugs,
     selectHarness,
@@ -470,12 +471,13 @@ test('the unfiltered list interleaves unknown bugs with classified ones by count
     const counts = rows.map((line) => Number(/^\s+([\d,]+)/.exec(line)![1]!.replace(/,/g, '')));
     assert.deepEqual(counts, [...counts].sort((a, b) => b - a), 'one ranking, not two lists');
     // Interleaved, not classified-then-unknown: an unknown row outranks a
-    // classified one somewhere in the list.
-    const firstUnknown = rows.findIndex((line) => line.includes('(no test named)'));
-    const lastClassified = rows.map((line) => !line.includes('(no test named)')).lastIndexOf(true);
+    // classified one somewhere in the list. An unknown row is the one whose
+    // `test` cell is blank, which is the shape the marker used to occupy.
+    const named = rows.map((line) => /^\s+[\d,]+\s+\d{6,}\s{2}\S/.test(line));
+    const firstUnknown = named.indexOf(false);
+    const lastClassified = named.lastIndexOf(true);
+    assert.ok(firstUnknown !== -1, 'the fixture must hold an unknown row');
     assert.ok(firstUnknown < lastClassified, 'the two kinds must interleave');
-    // An unknown row is marked rather than showing a blank cell.
-    assert.match(stdout, /\(no test named\)/);
 });
 
 test('--harness unknown ranks only the bugs naming no known test', async () => {
@@ -488,11 +490,11 @@ test('--harness unknown ranks only the bugs naming no known test', async () => {
     // No classified bug, and no path anywhere in the table.
     assert.doesNotMatch(stdout, /browser_tab_preview\.js/);
     assert.doesNotMatch(stdout, /test_findbar\.xhtml/);
-    // Every row is unknown, so the marker is dropped and there is no empty
-    // `failure` column to head.
+    // Every row is unknown, so the marker is dropped and the two text columns
+    // collapse into one: there is no empty `test` column to head, and the one
+    // that remains is named after the field it holds.
     assert.doesNotMatch(stdout, /\(no test named\)/);
-    assert.doesNotMatch(stdout, /^\s+count.*failure/m);
-    assert.match(stdout, /^\s+count ▼\s+bug\s+summary$/m);
+    assert.match(stdout, /^\s+count ▼\s+bug\s+failure$/m);
 });
 
 test('--harness takes exactly three values, and says so when it does not', async () => {
@@ -834,7 +836,7 @@ test('--bug groups one bug’s occurrences and prints its task ids', async () =>
     ]);
     assert.equal(code, ExitCode.Success);
     const recorded = fixture.failuresbybug['1980036']!;
-    assert.match(stdout, /^Bug 1980036 — /m);
+    assert.match(stdout, /^Bug #: 1980036$/m);
     assert.match(stdout, new RegExp(`${recorded.length} sheriff annotations on trunk`));
     assert.match(stdout, /^Job names, chunk numbers merged$/m);
     assert.match(stdout, /^Platforms$/m);
@@ -863,6 +865,270 @@ test('--bug --json carries every occurrence, not a grouped summary only', async 
     // Unfiltered, so the two counts agree — which is what makes a filtered run
     // legible when they do not.
     assert.equal(parsed.totalOccurrences, recorded.length);
+});
+
+test('the headline names the Bugzilla summary rather than the observed failure', async () => {
+    // Bug 2036743's summary quoted two service CIDs from a different
+    // repository, and the jobs annotated with it carried a third. Unlabelled,
+    // the headline was read as the observed failure twice in one session.
+    const { code, stdout } = await invoke(['intermittent', '--bug', '1980036', ...WINDOW]);
+    assert.equal(code, ExitCode.Success);
+    const expected = fixture.summaries['1980036']!;
+    // Two keyed lines, not a label inside the value. `Bug N — summary: <text>`
+    // and `Bug N, filed as: <text>` were both rejected for the same reason: on
+    // one line the label reads as the first words of the summary. The structure
+    // is what carries the distinction, so the structure is what is asserted.
+    const lines = stdout.split('\n');
+    assert.match(lines[0]!, /^Bug #: 1980036$/);
+    assert.match(lines[1]!, /^Summary: /);
+    assert.doesNotMatch(stdout, /— summary:/);
+    assert.doesNotMatch(stdout, /filed as:/);
+    assert.ok(stdout.includes(expected.slice(0, 30)), stdout.slice(0, 200));
+    // The count line still follows, and is not swallowed by the summary's wrap.
+    assert.match(stdout, /^\d[\d,]* sheriff annotations on trunk, /m);
+});
+
+test('the headline fits the render width, or overflows only by one long token', async () => {
+    // The property that matters is that lines *fit* — not that the wrap floor
+    // held, which is what an earlier version of this suite checked and is a
+    // different claim. `wrapText` breaks on spaces, so a space-free token wider
+    // than the terminal is a floor no wrapper can beat; anything beyond that is
+    // a defect. Bug 2060921's summary carries a 98-character token.
+    for (const columns of ['200', '120', '90', '60', '40', '25']) {
+        for (const bug of ['2060921', '1980036', '2055846']) {
+            const { stdout } = await invoke(
+                ['intermittent', '--bug', bug, ...WINDOW],
+                undefined,
+                undefined,
+                columns
+            );
+            const headline: string[] = [];
+            for (const line of stdout.split('\n')) {
+                if (/sheriff annotations on trunk/.test(line)) {
+                    break;
+                }
+                if (headline.length > 0 || line.startsWith('Bug #:')) {
+                    headline.push(line);
+                }
+            }
+            assert.ok(headline.length >= 2, `bug ${bug} at ${columns}: no headline`);
+            // `renderWidth()` floors at 60, so a narrower terminal still
+            // targets 60 and the whole CLI renders to that.
+            const target = Math.max(60, Number(columns));
+            const longest = Math.max(...headline.map((line) => line.length));
+            const widestToken = Math.max(
+                ...headline.flatMap((line) => line.split(' ').map((word) => word.length))
+            );
+            const context = `bug ${bug} at ${columns} (target ${target}):\n${headline.join('\n')}`;
+            if (longest > target) {
+                assert.ok(widestToken >= target, `${context}\noverflow with no long token`);
+                assert.equal(longest, widestToken, `${context}\noverflow exceeds its own token`);
+            }
+        }
+    }
+});
+
+test('a continuation too wide to fit is not indented as well', async () => {
+    // The hanging indent adds 9 columns. On a line that already cannot fit —
+    // an 83-character CID array on bug 2036743 — that made the overflow 9
+    // worse than it is without the two-line headline, so the indent is skipped
+    // there and applied everywhere it helps.
+    const { stdout } = await invoke(
+        ['intermittent', '--bug', '2060921', ...WINDOW],
+        undefined,
+        undefined,
+        '60'
+    );
+    const lines = stdout.split('\n');
+    const over = lines.filter((line) => line.length > 60 && / {9}\S/.test(line.slice(0, 10)));
+    assert.deepEqual(
+        over,
+        [],
+        `an unfittable line must not carry the indent:\n${stdout.slice(0, 400)}`
+    );
+});
+
+test('a long Bugzilla summary wraps under its own label, not at column 0', async () => {
+    // They reach 255 characters, which overflows any terminal on one line. The
+    // continuations hang under the value so the key column stays legible.
+    const summary = fixture.summaries['1980036']!;
+    assert.ok(summary.length > 40, 'the fixture summary must be long enough to wrap');
+    const { stdout } = await invoke(
+        ['intermittent', '--bug', '1980036', ...WINDOW],
+        undefined,
+        undefined,
+        '48'
+    );
+    const lines = stdout.split('\n');
+    assert.match(lines[1]!, /^Summary: /);
+    // At least one continuation, indented to the label's width rather than
+    // starting at the margin. A continuation that could not fit anyway is
+    // exempt — see the test above — so this asserts that the indent happens,
+    // not that it happens unconditionally.
+    // Scanned to the end of the block rather than stopping at the first
+    // unindented line: an over-wide continuation is deliberately left at the
+    // margin, and one of those sits between two indented lines here.
+    const block = [];
+    for (const line of lines.slice(2)) {
+        if (/sheriff annotations on trunk/.test(line)) {
+            break;
+        }
+        block.push(line);
+    }
+    assert.ok(
+        block.some((line) => /^ {9}\S/.test(line)),
+        stdout.slice(0, 300)
+    );
+});
+
+test('the observed failure is the first section, ahead of the grouping tallies', async () => {
+    const { code, stdout } = await invoke(['intermittent', '--bug', '1980036', ...WINDOW]);
+    assert.equal(code, ExitCode.Success);
+    const at = (heading: string): number => {
+        const index = stdout.indexOf(`\n${heading}\n`);
+        assert.notEqual(index, -1, `${heading} should be printed`);
+        return index;
+    };
+    // The highest-value block, and it used to sit fifth behind four axes a
+    // reader of a bug drill-down can already guess.
+    const failures = at('Failure messages, per annotated job');
+    for (const later of ['Job names, chunk numbers merged', 'Platforms', 'Build types', 'Trees']) {
+        assert.ok(failures < at(later), `Failure messages should come before ${later}`);
+    }
+});
+
+test('--history buckets the window by day, keeping the days with none', () => {
+    // Bug 2036743's 239 annotations were all in its last two days, which the
+    // header's fourteen-day range said the opposite of. The zero rows are what
+    // makes that visible, so they are asserted rather than the non-zero ones.
+    const occurrences = fixture.failuresbybug['2063359']!.map(
+        (row) => ({ pushTime: row.push_time }) as BugOccurrence
+    );
+    const history = occurrenceHistory(occurrences, { start: '2026-08-12', end: '2026-08-16' });
+    assert.deepEqual(
+        history.map((row) => row.date),
+        ['2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15', '2026-08-16']
+    );
+    assert.equal(
+        history.reduce((sum, row) => sum + row.count, 0),
+        occurrences.length
+    );
+    // 08-12 and 08-15 carry nothing, and say so rather than being absent.
+    assert.equal(history.find((row) => row.date === '2026-08-12')!.count, 0);
+    assert.equal(history.find((row) => row.date === '2026-08-15')!.count, 0);
+});
+
+test('--history is off by default and prints one row per day when asked', async () => {
+    const plain = await invoke(['intermittent', '--bug', '1980036', ...WINDOW]);
+    assert.doesNotMatch(plain.stdout, /^History /m);
+
+    const { code, stdout } = await invoke([
+        'intermittent', '--bug', '1980036', ...WINDOW, '--history',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^History \(annotations per day\)$/m);
+    // The shape `test --history` prints: the date with its weekday, because a
+    // low Saturday is not a quiet day.
+    assert.match(stdout, /^ {2}2026-08-10 \(Mon\)\s+\d/m);
+});
+
+test('--history in --json is unconditional and sums to the occurrence count', async () => {
+    const { stdout } = await invoke([
+        'intermittent', '--bug', '2063359', '--day', '2026-08-13', '--json',
+    ]);
+    const parsed = JSON.parse(stdout) as {
+        occurrences: number;
+        history: { date: string; count: number }[];
+    };
+    // No `--history` on the command line: a machine-readable shape whose fields
+    // depend on a flag is what `--json` exists to avoid.
+    assert.ok(parsed.history.length > 0);
+    assert.deepEqual(
+        [...parsed.history].sort((a, b) => a.date.localeCompare(b.date)),
+        parsed.history,
+        'the rows are chronological'
+    );
+    // No row is dropped, whatever the window says: a table summing to less than
+    // the header's total is the disagreement this drill-down exists to avoid.
+    assert.equal(
+        parsed.history.reduce((sum, row) => sum + row.count, 0),
+        parsed.occurrences
+    );
+    assert.equal(parsed.history.find((row) => row.date === '2026-08-13')!.count, 2);
+});
+
+test('each text column is named after the one field that feeds it', async () => {
+    const { code, stdout } = await invoke(['intermittent', ...WINDOW, '--limit', '0']);
+    assert.equal(code, ExitCode.Success);
+    // `test / summary` sent a reader looking for a `summary` key in `--json`,
+    // where the field is `failure`. Renaming it `test / failure` then left two
+    // columns headed `failure`, which is not an improvement — so the mixed cell
+    // is gone and each column names exactly one field.
+    assert.doesNotMatch(stdout, /test \/ summary/);
+    assert.doesNotMatch(stdout, /test \/ failure/);
+    assert.match(stdout, /^\s+count ▼\s+bug\s+test\s+failure$/m);
+});
+
+test('a bug naming no test leaves `test` empty and puts its text under `failure`', async () => {
+    // The defect: `(no test named) <failure>` went into the *test* column while
+    // the column headed `failure` sat empty — on 59% of a live window's rows.
+    const { code, stdout } = await invoke(['intermittent', ...WINDOW, '--limit', '0']);
+    assert.equal(code, ExitCode.Success);
+    assert.doesNotMatch(stdout, /\(no test named\)/);
+
+    // Bug 1913777's summary names no test this tool holds, so its `test` cell
+    // is blank and its failure text sits in the `failure` column. Measured off
+    // the header, so this asserts the column and not just the order of words.
+    const header = stdout.split('\n').find((line) => /^\s+count ▼/.test(line))!;
+    const failureAt = header.indexOf('failure');
+    const testAt = header.indexOf('test');
+    const row = stdout.split('\n').find((line) => line.includes('1913777'))!;
+    assert.equal(row.slice(testAt, failureAt).trim(), '', 'the test cell must be empty');
+    assert.ok(row.slice(failureAt).trim().length > 0, 'the failure cell must hold the text');
+    assert.ok(row.slice(failureAt).startsWith('webgpu'), row);
+});
+
+test('a ranking row carries the whole Bugzilla summary as well as the failure', async () => {
+    const { stdout } = await invoke(['intermittent', ...WINDOW, '--json', '--limit', '0']);
+    const parsed = JSON.parse(stdout) as {
+        rows: { bugId: number; failure: string; bugSummary: string | null }[];
+    };
+    for (const row of parsed.rows) {
+        assert.equal(row.bugSummary, fixture.summaries[String(row.bugId)] ?? null);
+    }
+    // The point of carrying both: `failure` has the triage prefix and the path
+    // cut out of it, and reconstructing a bug reference needs them back.
+    const classified = parsed.rows.find((row) => row.bugId === 1980036)!;
+    assert.ok(classified.bugSummary!.length > classified.failure.length);
+    assert.ok(classified.bugSummary!.includes(classified.failure));
+});
+
+test('the --bug response names its Bugzilla summary bugSummary, not summary', async () => {
+    const { stdout } = await invoke(['intermittent', '--bug', '1980036', ...WINDOW, '--json']);
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    assert.equal(parsed['bugSummary'], fixture.summaries['1980036']);
+    // The old name collided with the ranking rows' `failure`, which is parsed
+    // out of this same string.
+    assert.ok(!('summary' in parsed), 'the top-level `summary` key should be gone');
+});
+
+test('an occurrence row carries the machine that ran it', async () => {
+    // Worker identity was the decisive variable in three bugs in one session,
+    // and each recovery cost a Taskcluster request per task.
+    const { stdout } = await invoke(['intermittent', '--bug', '1980036', ...WINDOW, '--json']);
+    const parsed = JSON.parse(stdout) as { occurrenceRows: { machineName: string }[] };
+    const recorded = fixture.failuresbybug['1980036']!;
+    assert.deepEqual(
+        parsed.occurrenceRows.map((row) => row.machineName),
+        recorded.map((row) => row.machine_name)
+    );
+});
+
+test('--history is refused on the ranked list, where a row is a bug', async () => {
+    const { code, stderr } = await invoke(['intermittent', ...WINDOW, '--history']);
+    assert.equal(code, ExitCode.Usage);
+    assert.match(stderr, /--history needs one bug/);
+    assert.match(stderr, /--bug <id> --history/);
 });
 
 test('every mode fits the terminal width', async () => {
@@ -1444,7 +1710,7 @@ test('--test selects the bug by test path, without a bug number', async () => {
         ...WINDOW,
     ]);
     assert.equal(code, ExitCode.Success);
-    assert.match(stdout, /^Bug 2063359 — /m);
+    assert.match(stdout, /^Bug #: 2063359$/m);
 });
 
 test('--test takes an exact path, not a directory prefix', async () => {

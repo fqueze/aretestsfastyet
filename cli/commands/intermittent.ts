@@ -21,7 +21,9 @@ import {
     type Column,
     applyLimit,
     count as fmtCount,
+    dateWithWeekday,
     joinLines,
+    renderWidth,
     table,
     fitLine,
     tableSection,
@@ -40,6 +42,7 @@ import {
     type DrilldownFilter,
     type HarnessOfPath,
     type HarnessSelector,
+    type OccurrenceDay,
     type OccurrenceProfiles,
     type RankedIntermittent,
     type ScanHarness,
@@ -47,6 +50,7 @@ import {
     type SuiteCount,
     bugsNamingTest,
     filterOccurrences,
+    occurrenceHistory,
     occurrenceProfiles,
     scanBugs,
     selectHarness,
@@ -69,25 +73,32 @@ export const DEFAULT_LIMIT = 20;
 export const DEFAULT_DAYS = 7;
 
 /**
- * How wide the `test` column may get when the list can hold unknown rows.
+ * How wide the `test` column may get.
  *
  * A `truncate()` budget, so it is stated against the 90-column baseline and
  * scaled to the real terminal — not an absolute width. Together with
  * `FAILURE_WIDTH` and the two numeric columns it has to *add up* to that
  * baseline: budgets that each nearly fill the width produce a line twice the
  * width, which is what put this table at 162 characters on an 80-column
- * terminal.
+ * terminal. The two numeric columns and the gaps take 22 of the 90, leaving 68
+ * for these two.
  *
- * A verified test path has a p90 of 86 characters over a live window and an
- * unknown row's summary a p90 of 191, so neither fits whatever is chosen here;
- * `fitToWidth` shaves the rest. This splits the text budget in the path's
- * favour, because it is the copyable identifier and the summary is prose that
- * survives being cut.
+ * Measured over a live 731-row window: a test path has a p90 of 86 characters
+ * and a failure message a p90 of 158, so neither column fits its content at any
+ * split and `fitToWidth` shaves the rest. What the split decides is which one
+ * degrades first.
+ *
+ * 36/32 rather than the p90-proportional 24/44, because the two columns fail
+ * differently. The path is front-truncated (`path: true`) to save the basename,
+ * which is the copyable part: at 36 a basename survives whole on 62% of path
+ * rows, against 19% at 24. The failure message is prose read left to right, so
+ * a cut tail costs the least-important words. Hence the path gets more than its
+ * p90 share and the message a little less.
  */
-export const MIXED_CELL_WIDTH = 44;
+export const MIXED_CELL_WIDTH = 36;
 
 /** The `failure` column's budget. See `MIXED_CELL_WIDTH`. */
-export const FAILURE_WIDTH = 26;
+export const FAILURE_WIDTH = 32;
 
 /**
  * How many rows each of `--bug`'s sections shows by default.
@@ -147,6 +158,15 @@ export const INTERMITTENT_OPTIONS: OptionSpecs = {
             'With --bug or --test, print the raw per-test profile artifact URL of every ' +
             'occurrence whose log named one.',
     },
+    // Named after `test --history`, which prints the same shape from the
+    // nightly aggregates: one flag name for "break the window down by day",
+    // whichever command the caller reached it from.
+    history: {
+        type: 'boolean',
+        describe:
+            'With --bug or --test, print annotations per day over the window, zero days ' +
+            'included.',
+    },
 };
 
 /**
@@ -204,9 +224,25 @@ export interface IntermittentBugJson extends BugDrilldown {
     tree: string;
     startday: string;
     endday: string;
-    summary: string | null;
+    /**
+     * The Bugzilla summary, which is not the observed failure.
+     *
+     * `bugSummary` and not `summary`, because the ranking rows carry a
+     * `failure` parsed out of this same string and a reader who found one under
+     * the other name read the two as the same field. It describes the failure
+     * the day the bug was filed; what the annotated jobs printed is in `lines`.
+     */
+    bugSummary: string | null;
     /** Every occurrence, always in full. */
     occurrenceRows: BugOccurrence[];
+    /**
+     * Annotations per day over the window, zero days included.
+     *
+     * Unconditional, like `profiles` and for the same reason: it is computed
+     * from `occurrenceRows`, costs no request, and a machine-readable shape
+     * whose fields depend on a flag is what `--json` exists to avoid.
+     */
+    history: OccurrenceDay[];
     /**
      * The per-test profile URLs, unconditionally.
      *
@@ -257,6 +293,17 @@ export async function runIntermittent(context: CommandContext, args: ParsedArgs)
             '--profiles needs one bug: the ranked list’s rows are bugs, and a profile is an ' +
                 'artifact of a single job',
             'Use --bug <id> --profiles, or --test <path> --profiles.'
+        );
+    }
+    if (boolOption(args, 'history')) {
+        // Same reason `--profiles` is refused here: the ranked list's rows are
+        // bugs, and "annotations per day" is a property of one bug's
+        // occurrences. Ignoring the flag would print a table that answers a
+        // question nobody asked.
+        throw usageError(
+            '--history needs one bug: the ranked list’s rows are bugs, and a per-day breakdown ' +
+                'is a property of one bug’s occurrences',
+            'Use --bug <id> --history, or --test <path> --history.'
         );
     }
     if (globals.config.length > 0 || globals.excludeConfig.length > 0) {
@@ -543,6 +590,10 @@ async function runDrilldown(
         globals.format === 'json' || boolOption(args, 'profiles')
             ? occurrenceProfiles(shownOccurrences)
             : null;
+    // Over the filtered population, like every other section: a per-day table
+    // that counted annotations the header says were excluded would not sum to
+    // the total above it.
+    const history = occurrenceHistory(shownOccurrences, range);
 
     if (globals.format === 'json') {
         emit(
@@ -552,17 +603,27 @@ async function runDrilldown(
                 tree,
                 startday: range.start,
                 endday: range.end,
-                summary: bugSummary,
+                bugSummary,
                 occurrenceRows: shownOccurrences,
                 profiles: profiles ?? [],
+                history,
             } satisfies IntermittentBugJson)
         );
         return;
     }
+    const shownHistory = boolOption(args, 'history') ? history : null;
     emit(
         context,
         globals.format === 'markdown'
-            ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences, profiles)
+            ? renderBugMarkdown(
+                  summary,
+                  bugSummary,
+                  tree,
+                  range,
+                  shownOccurrences,
+                  profiles,
+                  shownHistory
+              )
             : renderBugText(
                   summary,
                   bugSummary,
@@ -570,7 +631,8 @@ async function runDrilldown(
                   range,
                   shownOccurrences,
                   globals.limit,
-                  profiles
+                  profiles,
+                  shownHistory
               )
     );
 }
@@ -745,27 +807,18 @@ function coverageLines(
 }
 
 /**
- * A row's `test` cell.
+ * A row's `test` cell — the verified path, or empty when the bug names none.
  *
- * An `unknown` row has no path, and its summary is the only thing it carries —
- * measured over a live window, those summaries have a median of 96 characters
- * against 69 for a test path, so splitting them across two columns would waste
- * width in both. The summary therefore fills this cell, marked so it cannot be
- * mistaken for a path, and the `failure` cell is left to the rows that have one.
+ * **Empty, not `(no test named) <failure>`.** That marker used to prefix the
+ * failure text and put the whole thing in this column, which meant the column
+ * headed `failure` sat empty on exactly the rows whose text *is* a failure
+ * message — 59% of a live 731-row window. Two columns then carried one field
+ * between them depending on the row, and naming both after that field is what
+ * left the table with a duplicate header. An absent path is now an absent cell,
+ * and the message is in the column that names it.
  */
-function testCell(row: RankedIntermittent, marked: boolean): string {
-    if (row.test !== null) {
-        return row.test;
-    }
-    // The marker earns its width only in a list that also holds paths. Under
-    // `--harness unknown` every row is one, the column says `summary`, and
-    // repeating it on all 408 rows is noise.
-    return marked ? `(no test named) ${row.failure}` : row.failure;
-}
-
-/** A row's `failure` cell — empty on an `unknown` row, whose text is in `test`. */
-function failureCell(row: RankedIntermittent): string {
-    return row.test === null ? '' : row.failure;
+function testCell(row: RankedIntermittent): string {
+    return row.test ?? '';
 }
 
 /** The title line, which says what the list is. */
@@ -798,9 +851,9 @@ function renderRankingText(
         lines.push(emptySelectionLine(harness, scan));
         return joinLines(lines);
     }
-    // Under `--harness unknown` no row has a path, so the two text columns
-    // collapse into one: a `failure` column that is empty on every row is a
-    // header with nothing under it.
+    // Under `--harness unknown` no row has a path, so the `test` column would be
+    // empty on every row: a header with nothing under it. That mode alone drops
+    // it and gives the whole text budget to `failure`.
     const columns: Column[] =
         harness === 'unknown'
             ? [
@@ -809,19 +862,17 @@ function renderRankingText(
                   // The only text column in this mode, so it gets the whole
                   // remaining width: a budget would just be a second cap under
                   // the one `fit` already applies.
-                  { header: 'summary', maxWidth: MIXED_CELL_WIDTH + FAILURE_WIDTH },
+                  { header: 'failure', maxWidth: MIXED_CELL_WIDTH + FAILURE_WIDTH },
               ]
             : [
                   { header: 'count', align: 'right', sort: 'desc' },
                   { header: 'bug', align: 'right' },
-                  // A `path` column only when every row is one. Path truncation
-                  // cuts from the front to save a basename, which mangles a
-                  // sentence — and an unknown row's cell is a sentence. A mixed
-                  // list therefore gets a plain width-capped column, so one
-                  // 240-character summary cannot push `failure` off screen.
-                  harness === undefined
-                      ? { header: 'test / summary', maxWidth: MIXED_CELL_WIDTH }
-                      : { header: 'test', path: true },
+                  // `path: true` in every mode that shows this column, because
+                  // it now holds only paths. Path truncation cuts from the
+                  // front to save the basename, which is the copyable part; it
+                  // used to be withheld here because the same cell also carried
+                  // prose, and front-truncating a sentence mangles it.
+                  { header: 'test', path: true },
                   { header: 'failure', maxWidth: FAILURE_WIDTH },
               ];
     lines.push(
@@ -829,16 +880,11 @@ function renderRankingText(
             columns,
             shown.map((row) =>
                 harness === 'unknown'
-                    ? [fmtCount(row.count), String(row.bugId), testCell(row, false)]
-                    : [
-                          fmtCount(row.count),
-                          String(row.bugId),
-                          testCell(row, harness === undefined),
-                          failureCell(row),
-                      ]
+                    ? [fmtCount(row.count), String(row.bugId), row.failure]
+                    : [fmtCount(row.count), String(row.bugId), testCell(row), row.failure]
             ),
-            // Fitted: the test/summary and failure columns are both prose, so
-            // their budgets have to be reconciled against the real width.
+            // Fitted: `test` and `failure` both hold content wider than any
+            // budget, so the two have to be reconciled against the real width.
             { total: selected.length, shown: shown.length, fit: true }
         )
     );
@@ -880,23 +926,18 @@ function renderRankingMarkdown(
     lines.push(
         ...md.table(
             harness === 'unknown'
-                ? [{ header: 'count', align: 'right' }, { header: 'bug' }, { header: 'summary' }]
+                ? [{ header: 'count', align: 'right' }, { header: 'bug' }, { header: 'failure' }]
                 : [
                       { header: 'count', align: 'right' },
                       { header: 'bug' },
-                      { header: harness === undefined ? 'test / summary' : 'test' },
+                      { header: 'test' },
                       { header: 'failure' },
                   ],
             // Untruncated: `--markdown` is for pasting into a bug.
             shown.map((row) =>
                 harness === 'unknown'
-                    ? [fmtCount(row.count), link(row), testCell(row, false)]
-                    : [
-                          fmtCount(row.count),
-                          link(row),
-                          testCell(row, harness === undefined),
-                          failureCell(row),
-                      ]
+                    ? [fmtCount(row.count), link(row), row.failure]
+                    : [fmtCount(row.count), link(row), testCell(row), row.failure]
             )
         )
     );
@@ -928,6 +969,65 @@ function drilldownCountLine(
     return `${scope} on ${tree}, ${range.start} to ${range.end}`;
 }
 
+/**
+ * The bug's identity and its Bugzilla summary, as two keyed lines.
+ *
+ * **Two lines, not one.** Item 5's goal was that this text not be read as the
+ * observed failure, and two attempts at saying so with a word both failed for
+ * the same reason: a label inside the value reads as part of it.
+ * `Bug 2036743 — summary: Permanent toolkit/…` makes `summary:` look like the
+ * summary's first word, and `Bug 2036743, filed as: …` still runs the two
+ * together on one line. Keyed on separate lines, a reader sees a key and a
+ * value and cannot mistake one for the other — the distinction is structural
+ * rather than a matter of phrasing.
+ *
+ * It matters because the two are different failures often enough to mislead: a
+ * Bugzilla summary describes the failure the day the bug was filed, and the
+ * jobs annotated with it today regularly carry a different message — on bug
+ * 2036743 a different service CID, from a different repository. What is failing
+ * now is `Failure messages, per annotated job`, the first block below.
+ *
+ * The summary wraps to the terminal (they reach 255 characters), with
+ * continuations hanging under the value rather than at column 0 so the key
+ * column stays legible.
+ */
+function headlineLines(bugId: number, bugSummary: string | null): string[] {
+    const label = 'Summary: ';
+    const width = renderWidth();
+    const wrapWidth =
+        width === null ? null : Math.max(MIN_SUMMARY_WIDTH, width - label.length);
+    const wrapped = wrapText(bugSummary ?? '(no summary from Bugzilla)', wrapWidth);
+    const hang = ' '.repeat(label.length);
+    return [
+        `Bug #: ${bugId}`,
+        ...wrapped.map((line, i) => {
+            if (i === 0) {
+                return `${label}${line}`;
+            }
+            // A line already too wide to fit is not indented. `wrapText` breaks
+            // on spaces, so a space-free token wider than the terminal cannot
+            // be split — bug 2036743's summary ends in an 83-character CID
+            // array — and indenting it adds the label's 9 columns to a line
+            // that was overflowing anyway. Starting it at the margin keeps the
+            // overflow no worse than it is without the two-line format, while
+            // the hanging indent still applies to every line it can help.
+            //
+            // The alternative, hard-breaking the token at the boundary, is
+            // rejected: it uses the terminal better but makes that CID array
+            // unselectable as one string, and copying it is a real use.
+            return wrapWidth !== null && line.length > wrapWidth ? line : `${hang}${line}`;
+        }),
+    ];
+}
+
+/**
+ * The narrowest the summary is wrapped to, however narrow the terminal.
+ *
+ * Mirrors `MIN_CELL_WIDTH` in `format/text.ts`: below this a hanging indent
+ * costs more than it buys, and one word per line is worse than overflowing.
+ */
+const MIN_SUMMARY_WIDTH = 20;
+
 /** The drill-down, as text. */
 function renderBugText(
     drilldown: BugDrilldown,
@@ -936,15 +1036,23 @@ function renderBugText(
     range: DayRange,
     occurrences: readonly BugOccurrence[],
     limit: number | undefined,
-    profiles: readonly OccurrenceProfiles[] | null
+    profiles: readonly OccurrenceProfiles[] | null,
+    history: readonly OccurrenceDay[] | null
 ): string {
     const lines: (string | null)[] = [
-        // Both are prose — a Bugzilla summary runs to 200 characters — so they
-        // wrap rather than setting the width of the whole report.
-        ...wrapText(`Bug ${drilldown.bugId} — ${bugSummary ?? '(no summary from Bugzilla)'}`),
+        ...headlineLines(drilldown.bugId, bugSummary),
         ...wrapText(drilldownCountLine(drilldown, tree, range)),
         '',
     ];
+    // First, ahead of the four grouping tallies: it is what the annotated jobs
+    // actually printed, which is the question a drill-down is opened to answer,
+    // and it used to sit fifth behind the axes a reader can already guess.
+    //
+    // 140 rather than 100: the number that made this useful was measured, not
+    // chosen. With the marker and the path stripped (`failureLineDetail`) the
+    // messages on live bug 2019094 diverge between characters 30 and 120, so a
+    // 100-character cut still lost the discriminator on some rows.
+    lines.push(...tallySection('Failure messages, per annotated job', drilldown.lines, limit, 140));
     lines.push(...tallySection('Job names, chunk numbers merged', drilldown.jobNames, limit));
     lines.push(...tallySection('Platforms', drilldown.platforms, limit));
     lines.push(...tallySection('Build types', drilldown.buildTypes, limit));
@@ -962,11 +1070,9 @@ function renderBugText(
         );
         lines.push('');
     }
-    // 140 rather than 100: the number that made this useful was measured, not
-    // chosen. With the marker and the path stripped (`failureLineDetail`) the
-    // messages on live bug 2019094 diverge between characters 30 and 120, so a
-    // 100-character cut still lost the discriminator on some rows.
-    lines.push(...tallySection('Failure messages, per annotated job', drilldown.lines, limit, 140));
+    if (history !== null) {
+        lines.push(...historySection(history));
+    }
 
     const rows = applyLimit(occurrences, limit ?? DRILLDOWN_ROWS);
     lines.push(`Occurrences (${fmtCount(occurrences.length)})`);
@@ -1089,6 +1195,38 @@ function profileSection(
     return lines;
 }
 
+/**
+ * The `History` section, in the shape `fx-tests test --history` prints.
+ *
+ * `<date> (<weekday>)  <count>`, right-aligned, one row per day of the window
+ * with the empty days kept — see `occurrenceHistory` for why they are the
+ * point. The weekday is there for the reason `dateWithWeekday` exists: push
+ * volume drops several-fold at weekends, so a low Saturday is not a quiet day.
+ *
+ * Never wider than the widest count, so the numbers line up under each other
+ * and a spike is visible as a step in the column rather than read digit by
+ * digit.
+ *
+ * **`--limit` does not apply**, matching `test --history`, which ignores it too.
+ * Every other section here is a ranking, where the top N is a smaller answer to
+ * the same question; this is an axis, where the zero rows carry the finding —
+ * the four empty days before bug 2036743's spike are what say "regression", not
+ * "two weeks of flakiness" — so a capped one would cut the signal rather than
+ * shorten it. The cost of that is real but bounded by the window: `--since
+ * 99999` prints 100,001 rows, of which 114 are non-zero.
+ */
+function historySection(history: readonly OccurrenceDay[]): string[] {
+    const width = Math.max(3, ...history.map((row) => fmtCount(row.count).length));
+    return [
+        'History (annotations per day)',
+        ...history.map(
+            (row) =>
+                `  ${dateWithWeekday(row.date).padEnd(16)}  ${fmtCount(row.count).padStart(width)}`
+        ),
+        '',
+    ];
+}
+
 /** One counted group of the drill-down, or nothing when it is empty. */
 function tallySection(
     title: string,
@@ -1131,10 +1269,18 @@ function renderBugMarkdown(
     tree: string,
     range: DayRange,
     occurrences: readonly BugOccurrence[],
-    profiles: readonly OccurrenceProfiles[] | null
+    profiles: readonly OccurrenceProfiles[] | null,
+    history: readonly OccurrenceDay[] | null
 ): string {
     const lines: (string | null)[] = [
-        md.heading(`Bug ${drilldown.bugId} — ${bugSummary ?? '(no summary from Bugzilla)'}`),
+        // The heading is the bug alone and the summary a keyed line under it,
+        // matching the text renderer's two lines. A 255-character Bugzilla
+        // summary inside an `#` heading is unreadable pasted into a bug, and
+        // running the label into the value is the thing `headlineLines`
+        // exists to avoid.
+        md.heading(`Bug #: ${drilldown.bugId}`),
+        '',
+        `Summary: ${bugSummary ?? '(no summary from Bugzilla)'}`,
         '',
         `${drilldownCountLine(drilldown, tree, range)}.`,
         '',
@@ -1159,6 +1305,17 @@ function renderBugMarkdown(
             // part of a failure message is regularly the discriminator.
             lines.push(`- ${entry.count}x ${md.code(entry.name)}`);
         }
+        lines.push('');
+    }
+    if (history !== null) {
+        lines.push(md.heading('History (annotations per day)', 2));
+        lines.push('');
+        lines.push(
+            ...md.table(
+                [{ header: 'day' }, { header: 'annotations', align: 'right' }],
+                history.map((row) => [dateWithWeekday(row.date), fmtCount(row.count)])
+            )
+        );
         lines.push('');
     }
     lines.push(md.heading('Task IDs', 2));

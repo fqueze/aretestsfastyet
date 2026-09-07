@@ -31,6 +31,7 @@ import {
 } from '../sources/intermittents.ts';
 import { testInfoArtifactUrl } from '../links.ts';
 import { type PartitionedMessages, partitionMarkerMessages } from '../model/marker-messages.ts';
+import { dateOfDay } from './flakiness.ts';
 import { configFilter } from './test-stats.ts';
 
 /** Which harness a scan is looking for. */
@@ -77,6 +78,16 @@ export interface RankedIntermittent {
      * prefix, and it is everything the row has.
      */
     failure: string;
+    /**
+     * The whole Bugzilla summary, as `failure` was cut out of it.
+     *
+     * Carried as well as `failure` because the two things `failure` strips —
+     * the triage prefix (`Intermittent`, `Permanent`) and the test path — are
+     * exactly what a caller reconstructing a bug reference needs, and the only
+     * other way to get them is a Bugzilla request per bug. `null` when Bugzilla
+     * returned no summary for the bug, which is distinct from an empty one.
+     */
+    bugSummary: string | null;
 }
 
 /** A name and how many occurrences carried it. */
@@ -148,7 +159,8 @@ export function scanBugs(options: ScanOptions): ScanResult {
     );
 
     const rows: RankedIntermittent[] = candidates.map((candidate) => {
-        const summary = summaries.get(candidate.bugId) ?? '';
+        const bugSummary = summaries.get(candidate.bugId) ?? null;
+        const summary = bugSummary ?? '';
         // Only the first verified path is used. A summary naming two is rare —
         // one in a live top-80, a reftest comparing a file against its
         // reference — and neither of that pair is a test this tool holds, so
@@ -163,6 +175,7 @@ export function scanBugs(options: ScanOptions): ScanResult {
                   harness: 'unknown' as const,
                   test: null,
                   failure: summaryRemainder(summary, null),
+                  bugSummary,
               }
             : {
                   bugId: candidate.bugId,
@@ -170,6 +183,7 @@ export function scanBugs(options: ScanOptions): ScanResult {
                   harness: verified.harness as ScanHarness,
                   test: verified.path,
                   failure: summaryRemainder(summary, verified.path),
+                  bugSummary,
               };
     });
 
@@ -525,6 +539,57 @@ export interface DrilldownFilter {
  */
 export function occurrenceConfig(row: BugOccurrence): string {
     return `${row.platform}/${row.buildType}`;
+}
+
+/** One day of the window, and how many annotations landed on it. */
+export interface OccurrenceDay {
+    /** `YYYY-MM-DD`. */
+    date: string;
+    count: number;
+}
+
+/**
+ * Annotations per day over the whole window, zero days included.
+ *
+ * **Zero days are the point.** `1,116 sheriff annotations, 2026-08-21 to
+ * 2026-09-03` reads as two weeks of steady flakiness whether the annotations
+ * are spread evenly or landed in one afternoon, and the two are opposite
+ * answers: the first is an intermittent to rank, the second a regression to
+ * back out. Dropping the empty days would leave the same ambiguity, so the
+ * range is enumerated rather than derived from the rows.
+ *
+ * The dates come from each occurrence's `pushTime`, which the API formats as
+ * `YYYY-MM-DD HH:MM:SS` — the day is its first ten characters, no parsing and
+ * no timezone conversion, because the window this is bucketed into is stated in
+ * the same calendar days the API filtered on.
+ */
+export function occurrenceHistory(
+    occurrences: readonly BugOccurrence[],
+    range: { start: string; end: string }
+): OccurrenceDay[] {
+    const counts = new Map<string, number>();
+    // `dateOfDay` rather than local date arithmetic: it is the same
+    // `startDate + n days`, UTC, sliced to ten characters that `flakiness.ts`
+    // enumerates its own date axis with, and two implementations of that would
+    // be two places for a timezone to creep in.
+    for (let day = 0; ; day++) {
+        const date = dateOfDay(range.start, day);
+        if (date > range.end) {
+            break;
+        }
+        counts.set(date, 0);
+    }
+    // A day outside the window gets a row of its own rather than being dropped.
+    // The API filters on push time, so it should never happen — and if it does,
+    // a table that quietly sums to less than the header's total is the
+    // disagreement this whole drill-down is built to avoid.
+    for (const row of occurrences) {
+        const date = row.pushTime.slice(0, 10);
+        counts.set(date, (counts.get(date) ?? 0) + 1);
+    }
+    return [...counts]
+        .map(([date, count]) => ({ date, count }))
+        .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /**

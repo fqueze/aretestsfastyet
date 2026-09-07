@@ -7073,20 +7073,23 @@ function scanBugs(options) {
     (row) => row.bugId !== null
   );
   const rows2 = candidates.map((candidate) => {
-    const summary = summaries.get(candidate.bugId) ?? "";
+    const bugSummary = summaries.get(candidate.bugId) ?? null;
+    const summary = bugSummary ?? "";
     const verified = testPathCandidates(summary).map((path) => ({ path, harness: harnessOfPath(path) })).find((entry) => entry.harness !== null);
     return verified === void 0 ? {
       bugId: candidate.bugId,
       count: candidate.count,
       harness: "unknown",
       test: null,
-      failure: summaryRemainder(summary, null)
+      failure: summaryRemainder(summary, null),
+      bugSummary
     } : {
       bugId: candidate.bugId,
       count: candidate.count,
       harness: verified.harness,
       test: verified.path,
-      failure: summaryRemainder(summary, verified.path)
+      failure: summaryRemainder(summary, verified.path),
+      bugSummary
     };
   });
   const ordered = [...rows2].sort((a, b) => b.count - a.count);
@@ -7164,6 +7167,21 @@ function occurrenceProfiles(occurrences) {
 function occurrenceConfig(row) {
   return `${row.platform}/${row.buildType}`;
 }
+function occurrenceHistory(occurrences, range) {
+  const counts = /* @__PURE__ */ new Map();
+  for (let day = 0; ; day++) {
+    const date = dateOfDay(range.start, day);
+    if (date > range.end) {
+      break;
+    }
+    counts.set(date, 0);
+  }
+  for (const row of occurrences) {
+    const date = row.pushTime.slice(0, 10);
+    counts.set(date, (counts.get(date) ?? 0) + 1);
+  }
+  return [...counts].map(([date, count2]) => ({ date, count: count2 })).sort((a, b) => a.date.localeCompare(b.date));
+}
 function summariseBug(bugId, occurrences, filter = {}) {
   const rows2 = filterOccurrences(occurrences, filter);
   return {
@@ -7217,8 +7235,8 @@ function normaliseDuration(message) {
 // cli/commands/intermittent.ts
 var DEFAULT_LIMIT4 = 20;
 var DEFAULT_DAYS = 7;
-var MIXED_CELL_WIDTH = 44;
-var FAILURE_WIDTH = 26;
+var MIXED_CELL_WIDTH = 36;
+var FAILURE_WIDTH = 32;
 var DRILLDOWN_ROWS = 10;
 var INTERMITTENT_OPTIONS = {
   // Two globals whose shared wording is wrong here, restated rather than left
@@ -7262,6 +7280,13 @@ var INTERMITTENT_OPTIONS = {
   profiles: {
     type: "boolean",
     describe: "With --bug or --test, print the raw per-test profile artifact URL of every occurrence whose log named one."
+  },
+  // Named after `test --history`, which prints the same shape from the
+  // nightly aggregates: one flag name for "break the window down by day",
+  // whichever command the caller reached it from.
+  history: {
+    type: "boolean",
+    describe: "With --bug or --test, print annotations per day over the window, zero days included."
   }
 };
 var INTERMITTENT_NOTES = [
@@ -7324,6 +7349,12 @@ async function runIntermittent(context, args) {
     throw usageError(
       "--profiles needs one bug: the ranked list\u2019s rows are bugs, and a profile is an artifact of a single job",
       "Use --bug <id> --profiles, or --test <path> --profiles."
+    );
+  }
+  if (boolOption(args, "history")) {
+    throw usageError(
+      "--history needs one bug: the ranked list\u2019s rows are bugs, and a per-day breakdown is a property of one bug\u2019s occurrences",
+      "Use --bug <id> --history, or --test <path> --history."
     );
   }
   if (globals.config.length > 0 || globals.excludeConfig.length > 0) {
@@ -7485,6 +7516,7 @@ async function runDrilldown(context, client, tree, range, bug, args) {
   const summaries = await withUpstreamErrors(() => client.bugSummaries([bug]), tree);
   const bugSummary = summaries.get(bug) ?? null;
   const profiles = globals.format === "json" || boolOption(args, "profiles") ? occurrenceProfiles(shownOccurrences) : null;
+  const history = occurrenceHistory(shownOccurrences, range);
   if (globals.format === "json") {
     emit(
       context,
@@ -7493,23 +7525,34 @@ async function runDrilldown(context, client, tree, range, bug, args) {
         tree,
         startday: range.start,
         endday: range.end,
-        summary: bugSummary,
+        bugSummary,
         occurrenceRows: shownOccurrences,
-        profiles: profiles ?? []
+        profiles: profiles ?? [],
+        history
       })
     );
     return;
   }
+  const shownHistory = boolOption(args, "history") ? history : null;
   emit(
     context,
-    globals.format === "markdown" ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences, profiles) : renderBugText(
+    globals.format === "markdown" ? renderBugMarkdown(
+      summary,
+      bugSummary,
+      tree,
+      range,
+      shownOccurrences,
+      profiles,
+      shownHistory
+    ) : renderBugText(
       summary,
       bugSummary,
       tree,
       range,
       shownOccurrences,
       globals.limit,
-      profiles
+      profiles,
+      shownHistory
     )
   );
 }
@@ -7599,14 +7642,8 @@ function coverageLines(coverage, harness, selected) {
   lines.push("count = jobs sheriffs annotated with this bug.");
   return lines;
 }
-function testCell(row, marked) {
-  if (row.test !== null) {
-    return row.test;
-  }
-  return marked ? `(no test named) ${row.failure}` : row.failure;
-}
-function failureCell(row) {
-  return row.test === null ? "" : row.failure;
+function testCell(row) {
+  return row.test ?? "";
 }
 function rankingTitle(harness, tree, range) {
   const what = harness === void 0 ? "Sheriff-annotated intermittents" : harness === "unknown" ? "Sheriff-annotated bugs naming no known test" : `Sheriff-annotated ${harness} intermittents`;
@@ -7629,31 +7666,26 @@ function renderRankingText(harness, tree, range, shown, selected, scan) {
     // The only text column in this mode, so it gets the whole
     // remaining width: a budget would just be a second cap under
     // the one `fit` already applies.
-    { header: "summary", maxWidth: MIXED_CELL_WIDTH + FAILURE_WIDTH }
+    { header: "failure", maxWidth: MIXED_CELL_WIDTH + FAILURE_WIDTH }
   ] : [
     { header: "count", align: "right", sort: "desc" },
     { header: "bug", align: "right" },
-    // A `path` column only when every row is one. Path truncation
-    // cuts from the front to save a basename, which mangles a
-    // sentence — and an unknown row's cell is a sentence. A mixed
-    // list therefore gets a plain width-capped column, so one
-    // 240-character summary cannot push `failure` off screen.
-    harness === void 0 ? { header: "test / summary", maxWidth: MIXED_CELL_WIDTH } : { header: "test", path: true },
+    // `path: true` in every mode that shows this column, because
+    // it now holds only paths. Path truncation cuts from the
+    // front to save the basename, which is the copyable part; it
+    // used to be withheld here because the same cell also carried
+    // prose, and front-truncating a sentence mangles it.
+    { header: "test", path: true },
     { header: "failure", maxWidth: FAILURE_WIDTH }
   ];
   lines.push(
     ...tableSection(
       columns,
       shown.map(
-        (row) => harness === "unknown" ? [count(row.count), String(row.bugId), testCell(row, false)] : [
-          count(row.count),
-          String(row.bugId),
-          testCell(row, harness === void 0),
-          failureCell(row)
-        ]
+        (row) => harness === "unknown" ? [count(row.count), String(row.bugId), row.failure] : [count(row.count), String(row.bugId), testCell(row), row.failure]
       ),
-      // Fitted: the test/summary and failure columns are both prose, so
-      // their budgets have to be reconciled against the real width.
+      // Fitted: `test` and `failure` both hold content wider than any
+      // budget, so the two have to be reconciled against the real width.
       { total: selected.length, shown: shown.length, fit: true }
     )
   );
@@ -7682,20 +7714,15 @@ function renderRankingMarkdown(harness, tree, range, shown, selected, scan) {
   const link = (row) => `[${row.bugId}](https://bugzilla.mozilla.org/show_bug.cgi?id=${row.bugId})`;
   lines.push(
     ...table2(
-      harness === "unknown" ? [{ header: "count", align: "right" }, { header: "bug" }, { header: "summary" }] : [
+      harness === "unknown" ? [{ header: "count", align: "right" }, { header: "bug" }, { header: "failure" }] : [
         { header: "count", align: "right" },
         { header: "bug" },
-        { header: harness === void 0 ? "test / summary" : "test" },
+        { header: "test" },
         { header: "failure" }
       ],
       // Untruncated: `--markdown` is for pasting into a bug.
       shown.map(
-        (row) => harness === "unknown" ? [count(row.count), link(row), testCell(row, false)] : [
-          count(row.count),
-          link(row),
-          testCell(row, harness === void 0),
-          failureCell(row)
-        ]
+        (row) => harness === "unknown" ? [count(row.count), link(row), row.failure] : [count(row.count), link(row), testCell(row), row.failure]
       )
     )
   );
@@ -7710,14 +7737,30 @@ function drilldownCountLine(drilldown, tree, range) {
   const scope = drilldown.occurrences === drilldown.totalOccurrences ? `${count(drilldown.occurrences)} sheriff annotations` : `${count(drilldown.occurrences)} of ${count(drilldown.totalOccurrences)} sheriff annotations match the filter`;
   return `${scope} on ${tree}, ${range.start} to ${range.end}`;
 }
-function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit, profiles) {
+function headlineLines(bugId, bugSummary) {
+  const label = "Summary: ";
+  const width = renderWidth();
+  const wrapWidth = width === null ? null : Math.max(MIN_SUMMARY_WIDTH, width - label.length);
+  const wrapped = wrapText(bugSummary ?? "(no summary from Bugzilla)", wrapWidth);
+  const hang = " ".repeat(label.length);
+  return [
+    `Bug #: ${bugId}`,
+    ...wrapped.map((line, i) => {
+      if (i === 0) {
+        return `${label}${line}`;
+      }
+      return wrapWidth !== null && line.length > wrapWidth ? line : `${hang}${line}`;
+    })
+  ];
+}
+var MIN_SUMMARY_WIDTH = 20;
+function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit, profiles, history) {
   const lines = [
-    // Both are prose — a Bugzilla summary runs to 200 characters — so they
-    // wrap rather than setting the width of the whole report.
-    ...wrapText(`Bug ${drilldown.bugId} \u2014 ${bugSummary ?? "(no summary from Bugzilla)"}`),
+    ...headlineLines(drilldown.bugId, bugSummary),
     ...wrapText(drilldownCountLine(drilldown, tree, range)),
     ""
   ];
+  lines.push(...tallySection("Failure messages, per annotated job", drilldown.lines, limit, 140));
   lines.push(...tallySection("Job names, chunk numbers merged", drilldown.jobNames, limit));
   lines.push(...tallySection("Platforms", drilldown.platforms, limit));
   lines.push(...tallySection("Build types", drilldown.buildTypes, limit));
@@ -7730,7 +7773,9 @@ function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit, p
     );
     lines.push("");
   }
-  lines.push(...tallySection("Failure messages, per annotated job", drilldown.lines, limit, 140));
+  if (history !== null) {
+    lines.push(...historySection(history));
+  }
   const rows2 = applyLimit(occurrences, limit ?? DRILLDOWN_ROWS);
   lines.push(`Occurrences (${count(occurrences.length)})`);
   lines.push(
@@ -7805,6 +7850,16 @@ function profileSection(profiles, limit) {
   }
   return lines;
 }
+function historySection(history) {
+  const width = Math.max(3, ...history.map((row) => count(row.count).length));
+  return [
+    "History (annotations per day)",
+    ...history.map(
+      (row) => `  ${dateWithWeekday(row.date).padEnd(16)}  ${count(row.count).padStart(width)}`
+    ),
+    ""
+  ];
+}
 function tallySection(title, counts, limit, maxWidth) {
   if (counts.length === 0) {
     return [];
@@ -7824,9 +7879,16 @@ function tallySection(title, counts, limit, maxWidth) {
   lines.push("");
   return lines;
 }
-function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences, profiles) {
+function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences, profiles, history) {
   const lines = [
-    heading(`Bug ${drilldown.bugId} \u2014 ${bugSummary ?? "(no summary from Bugzilla)"}`),
+    // The heading is the bug alone and the summary a keyed line under it,
+    // matching the text renderer's two lines. A 255-character Bugzilla
+    // summary inside an `#` heading is unreadable pasted into a bug, and
+    // running the label into the value is the thing `headlineLines`
+    // exists to avoid.
+    heading(`Bug #: ${drilldown.bugId}`),
+    "",
+    `Summary: ${bugSummary ?? "(no summary from Bugzilla)"}`,
     "",
     `${drilldownCountLine(drilldown, tree, range)}.`,
     "",
@@ -7849,6 +7911,17 @@ function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences, prof
     for (const entry of drilldown.lines) {
       lines.push(`- ${entry.count}x ${code(entry.name)}`);
     }
+    lines.push("");
+  }
+  if (history !== null) {
+    lines.push(heading("History (annotations per day)", 2));
+    lines.push("");
+    lines.push(
+      ...table2(
+        [{ header: "day" }, { header: "annotations", align: "right" }],
+        history.map((row) => [dateWithWeekday(row.date), count(row.count)])
+      )
+    );
     lines.push("");
   }
   lines.push(heading("Task IDs", 2));
