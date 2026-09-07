@@ -435,9 +435,21 @@ export function summaryRemainder(summary: string, path: string | null): string {
  * Repeated rather than alternated once: `Perma [tier 2] ` and
  * `High frequency intermittent ` both occur, so one pass over a single
  * alternation would leave the second word behind.
+ *
+ * Each word alternative ends at a word boundary, so a longer word is never
+ * partly consumed: without it `perma` ate the front of `Permanent` and left
+ * `nent` as the whole failure column of bug 2036743.
+ *
+ * The `[a-z]*` before each boundary carries the inflections rather than a list
+ * of spellings, so `Permafailing` (bug 1844248) and `Intermittents` need no
+ * entry of their own. It deliberately stops at the stems above: `Permaorange`
+ * is a different word, not an inflection, and stripping it would need the
+ * spelling list this avoids — so it is left whole, which costs width but never
+ * corrupts the message. `high frequ[en]*cy` gets the boundary on the same rule,
+ * though no summary yet distinguishes it.
  */
 const TRIAGE_PREFIX =
-    /^(?:(?:perma|frequent|intermittent|high frequ[en]*cy|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
+    /^(?:(?:perma(?:nent|fail)[a-z]*\b|perma\b|frequent[a-z]*\b|intermittent[a-z]*\b|high frequ[en]*cy\b|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
 
 /**
  * The test path a `TEST-UNEXPECTED-FAIL` line names, or `null`.

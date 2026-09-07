@@ -7024,7 +7024,7 @@ function summaryRemainder(summary, path) {
   }
   return rest.replace(/^[\s|:-]+/, "").replace(/[\s|]+$/, "").trim();
 }
-var TRIAGE_PREFIX = /^(?:(?:perma|frequent|intermittent|high frequ[en]*cy|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
+var TRIAGE_PREFIX = /^(?:(?:perma(?:nent|fail)[a-z]*\b|perma\b|frequent[a-z]*\b|intermittent[a-z]*\b|high frequ[en]*cy\b|\[meta\]|\[tier \d\]|\[?not ?a ?leak\]?)[\s|:-]*)+/i;
 function testPathOfLine(line) {
   const marker = line.indexOf("TEST-UNEXPECTED-FAIL");
   if (marker === -1) {

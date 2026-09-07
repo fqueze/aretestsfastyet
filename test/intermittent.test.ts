@@ -552,6 +552,42 @@ test('the summary remainder drops the triage prefix and the path', () => {
     );
 });
 
+test('a triage word is never eaten out of the middle of a longer word', () => {
+    // `perma` matching the first five letters of `Permanent` left `nent` as the
+    // whole failure column of bug 2036743, the #2 bug tree-wide. Each
+    // alternative has to end at a word boundary.
+    // The inflections come from `[a-z]*` before the boundary, not from a list
+    // of spellings: `Permafailing` is bug 1844248.
+    for (const prefix of [
+        'Permanent',
+        'Permafail',
+        'Frequently',
+        'Intermittently',
+        'Permafailing',
+        'Permanently',
+        'permafailing',
+        'Intermittents',
+        'Perma',
+        'Frequent',
+        'Intermittent',
+        'High frequency intermittent',
+    ]) {
+        assert.equal(
+            summaryRemainder(`${prefix} browser/a/test_b.js | the real message`, 'browser/a/test_b.js'),
+            'the real message',
+            `${prefix} must be consumed whole`
+        );
+    }
+
+    // Deliberately not stripped: a different word sharing the `perma` stem is
+    // not an inflection, and reaching it would need the spelling list the
+    // boundary exists to avoid. Left whole costs width but never corrupts.
+    assert.equal(
+        summaryRemainder('Permaorange browser/a/test_b.js | the real message', 'browser/a/test_b.js'),
+        'Permaorange  | the real message'
+    );
+});
+
 test('classification reads exactly two published files', async () => {
     // The cost property the whole design rests on: classifying the entire
     // ranking reads the aggregates once rather than asking per bug, which is
