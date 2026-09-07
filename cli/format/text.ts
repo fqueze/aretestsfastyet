@@ -465,6 +465,174 @@ export function truncate(value: string, maxWidth: number): string {
 }
 
 /**
+ * How to render a list of messages so a reader learns **what failed** and
+ * **how the rows differ**, without a second command.
+ *
+ * ## Why one line per message cannot work
+ *
+ * `truncate()` per message produced the defect item 15 reported: 25 rows of
+ * `browser_switchTabPermissionPrompt.js`'s `Issues` block cut at the same
+ * column and reduced to 3 distinct lines on screen, reading as 25 failure
+ * modes. The first fix elided the shared head so the differing tail showed —
+ * and made it worse, because what survived was a stack location with no
+ * failure message at all. A reader learned neither what failed nor, usefully,
+ * how the rows differed.
+ *
+ * The constraint is arithmetic, measured on that test: the messages are **353
+ * characters**, the 19 rows of one group share a **238-character prefix**, and
+ * across all rows the common prefix is **0**. Against ~90 columns no
+ * single-line layout can carry both the message and the discriminator. So the
+ * message gets more than one line.
+ *
+ * ## The shape
+ *
+ * Rows that share a long prefix become a group. The group's first row prints
+ * its message **wrapped in full**, and the rest print only what distinguishes
+ * them:
+ *
+ * ```
+ *  1.  113x  FAIL  Uncaught exception in test - [Exception... "Component returned
+ *                  failure code: 0x80520015 (NS_ERROR_FILE_ACCESS_DENIED) …
+ *                  :: _internalMaybeFixupLoadURI :: line 10875"  data: no]
+ *  2.   66x  FAIL  ↑ same, but line 10651"  data: no]
+ *  3.   52x  FAIL  ↑ same, but line 10643"  data: no]
+ * ```
+ *
+ * The message is shown once, in full, and the near-identical rows collapse to
+ * one line each stating their difference. That is item 15's "keep the common
+ * prefix on the first row, elide it on the rest" — honoured better by a full
+ * first row than by 22 truncations of it.
+ *
+ * A row sharing no useful prefix with anything is its own group of one, so it
+ * prints its message wrapped in full too. Nothing is truncated, which is the
+ * point: `--json` and `--full-messages` are no longer needed to find out what
+ * failed.
+ */
+export interface MessageGroupLine {
+    /** The row this line belongs to, as an index into the input. */
+    index: number;
+    /** The text, already wrapped to fit. Blank for a continuation's indent. */
+    text: string;
+    /** Whether this is the row's first line — the one that carries the label. */
+    first: boolean;
+}
+
+/**
+ * The minimum shared prefix, in characters, before two rows are called a group.
+ *
+ * Below this the "same, but …" line would be longer than simply printing the
+ * message, and would also be lying about how alike the rows are. 60 characters
+ * is roughly two thirds of a default-width line: enough that the shared part
+ * genuinely dominates.
+ */
+const GROUP_PREFIX_MIN = 60;
+
+/**
+ * Groups messages by shared prefix and renders each group as described above.
+ *
+ * `width` is the room available for the message text — the caller's line width
+ * less its own label and indent. `null` means do not wrap, which is what
+ * `--markdown`, `--json` and `--full-messages` pass through `renderWidth()`.
+ */
+export function messageLines(
+    messages: readonly string[],
+    width: number | null
+): MessageGroupLine[] {
+    const out: MessageGroupLine[] = [];
+    // The row each row is "same, but" against: the nearest earlier row sharing
+    // at least GROUP_PREFIX_MIN characters. Nearest rather than best, so the
+    // reference is always a line the reader has just read.
+    const leaderOf = new Map<number, number>();
+    for (let i = 0; i < messages.length; i++) {
+        for (let j = i - 1; j >= 0; j--) {
+            // Chain to the group's own leader, never to a follower, so a
+            // follower's one-line form is never the reference for another row.
+            if (leaderOf.has(j)) {
+                continue;
+            }
+            if (commonPrefixLength([messages[i]!, messages[j]!]) >= GROUP_PREFIX_MIN) {
+                leaderOf.set(i, j);
+                break;
+            }
+        }
+    }
+
+    for (let i = 0; i < messages.length; i++) {
+        const leader = leaderOf.get(i);
+        if (leader === undefined) {
+            // A group leader, or a row with no relatives: the whole message,
+            // wrapped, never cut.
+            for (const [n, text] of wrapText(messages[i]!, width).entries()) {
+                out.push({ index: i, text, first: n === 0 });
+            }
+            continue;
+        }
+        // A follower: only the part that differs from its leader. The cut goes
+        // back far enough to keep the differing *phrase*, not just the token:
+        // the shared prefix of `line 10875` and `line 10651` ends inside the
+        // number, and backing up one word gives `10651"` — a bare number with
+        // nothing saying it is a line number. Two words back keeps `line
+        // 10651"`, which reads.
+        const shared = commonPrefixLength([messages[i]!, messages[leader]!]);
+        const cut = wordsBefore(messages[i]!, shared, 2);
+        const difference = messages[i]!.slice(cut).trimStart();
+        const label = `↑ same as ${leader + 1}, but `;
+        const lines = wrapText(
+            difference,
+            width === null ? null : Math.max(MIN_DIFFERENCE_WIDTH, width - label.length)
+        );
+        out.push({ index: i, text: label + (lines[0] ?? ''), first: true });
+        for (const text of lines.slice(1)) {
+            out.push({ index: i, text, first: false });
+        }
+    }
+    return out;
+}
+
+/**
+ * The narrowest a difference may be wrapped to before it is left to overflow.
+ *
+ * A difference squeezed below this is the discriminator itself being broken up,
+ * which is the failure this whole function exists to prevent.
+ */
+const MIN_DIFFERENCE_WIDTH = 24;
+/** The length of the prefix every one of `values` shares. */
+function commonPrefixLength(values: readonly string[]): number {
+    const first = values[0] ?? '';
+    let length = first.length;
+    for (const value of values.slice(1)) {
+        let i = 0;
+        while (i < length && i < value.length && value[i] === first[i]) {
+            i++;
+        }
+        length = i;
+    }
+    return length;
+}
+
+/** `at`, backed up to just after the last space before it. `0` when there is none. */
+function wordBoundaryBefore(value: string, at: number): number {
+    const space = value.lastIndexOf(' ', Math.max(0, at - 1));
+    return space < 0 ? 0 : space + 1;
+}
+
+/**
+ * `at`, backed up past `count` word boundaries.
+ *
+ * Not `wordBoundaryBefore` applied twice: that has a fixed point, because the
+ * second call searches from `at - 1`, lands on the very space the first call
+ * stepped over, and returns the same offset. Stepping one further left each
+ * time is what makes the second word actually come along.
+ */
+function wordsBefore(value: string, at: number, count: number): number {
+    let cut = at;
+    for (let n = 0; n < count && cut > 0; n++) {
+        cut = wordBoundaryBefore(value, cut - 1);
+    }
+    return cut;
+}
+
+/**
  * Truncates a slash-separated path by dropping **leading directories**.
  *
  * `truncate()` cuts the tail, which for a path removes the only part that

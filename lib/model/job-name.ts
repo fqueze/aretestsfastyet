@@ -61,6 +61,30 @@ export function stripChunkSuffix(jobName: string): string {
     return head + tail.replace(/-\d+$/, '');
 }
 
+/**
+ * Re-attaches a chunk number to a stripped job name, giving the **real**
+ * Taskcluster name.
+ *
+ * `test-linux2404-64/opt-mochitest-browser-chrome` + `8` →
+ * `test-linux2404-64/opt-mochitest-browser-chrome-8`.
+ *
+ * The inverse of `stripChunkSuffix`, and it lives here for the reason the
+ * module header gives: "identifying an individual job wants the chunked one".
+ * The aggregates store names stripped, so any command naming a single job has
+ * to put the chunk back — and the only correct way to write it is the way
+ * Taskcluster, Treeherder and the CI logs write it, which is a `-<n>` suffix.
+ * `--task-ids` used to print `<name> chunk 8` as prose, a format that appears
+ * in none of those places: it cannot be pasted into a Treeherder search and
+ * cannot be matched against a job name from any other source.
+ *
+ * A `null` chunk returns the name unchanged rather than inventing a suffix —
+ * `taskInfo.chunks` genuinely has no entry for some tasks, and a made-up `-0`
+ * would name a different job.
+ */
+export function withChunkSuffix(jobName: string, chunk: number | null): string {
+    return chunk === null ? jobName : `${jobName}-${chunk}`;
+}
+
 /** The chunk number in a job name, or `null` when it carries none. */
 export function chunkNumber(jobName: string): number | null {
     const slash = jobName.indexOf('/');

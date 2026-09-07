@@ -46,6 +46,12 @@
  * stopped running a week ago a full "recent" window taken from its own last
  * active days, which is not recent at all.
  *
+ * A config that has stopped running gets **no** recent rate, for the same
+ * reason. It cannot be excluded by the anchor alone: it stretches the shared
+ * window wide enough to reach back into the period it was alive, and then its
+ * runs are inside that window by construction. `summarize` measures staleness
+ * against the window the still-running configs need instead.
+ *
  * `CLI.md`'s "recent (7d)" column is this window, and its width is an output
  * rather than a setting: the command prints the window it used.
  *
@@ -87,8 +93,14 @@ export interface ConfigStats {
     /** Runs inside the recent window. */
     recentRunCount: number;
     /**
-     * Failure rate inside the window, or `null` when this config did not reach
-     * `minRecentRuns` there. Not 0: there is no percentage to state.
+     * Failure rate inside the window, or `null` when there is no percentage to
+     * state. Not 0 — "too little data to say" and "no failures" are different
+     * claims.
+     *
+     * Two ways to get `null`: the config did not reach `minRecentRuns` inside
+     * the window, or it has **stopped running**. The second matters because a
+     * retired config stretches the window itself (see `summarize`), so without
+     * it the column would report a month-old rate as this week's.
      */
     recentFailRate: number | null;
     /** Same-message failure rate inside the window, or `null`. */
@@ -322,28 +334,46 @@ function summarize(
         windowDays = Math.max(1, forcedRecentDays);
     } else {
         for (const entry of byJob.values()) {
-            let runs = 0;
-            let needed = 0;
-            for (const day of [...entry.byDay.keys()].sort((a, b) => b - a)) {
-                const bucket = entry.byDay.get(day)!;
-                runs += bucket[0] + bucket[1];
-                needed = newestDay - day + 1;
-                if (runs >= minRecentRuns) {
-                    break;
-                }
-            }
+            const needed = daysToReach(entry, minRecentRuns, newestDay);
             // A config too sparse to ever reach the minimum must not stretch
             // the window for everyone else; it simply gets no recent rate.
-            if (runs >= minRecentRuns) {
+            if (needed !== null) {
                 windowDays = Math.max(windowDays, needed);
             }
         }
     }
 
+    // How stale a config may be before its "recent" rate stops being recent.
+    //
+    // `windowDays` cannot answer that, because a *retired* config stretches it.
+    // The sizing loop above walks a config's days newest-first until it has
+    // `minRecentRuns`, and a config that stopped two weeks ago still gets there
+    // by reaching back into the fortnight it was alive — so it sets a window
+    // wide enough to contain its own death, for every config. Measured on
+    // `browser_aboutdebugging_connect_toggle_usb_devices.js`: three mac configs
+    // skipped out on day 6 of 20, one of them needs 15 days to find 20 runs, and
+    // the resulting 15-day "recent" rate is computed entirely from runs that
+    // stopped a fortnight earlier. It reads as a live failure rate for a
+    // configuration that no longer exists, which is the confidently-wrong number
+    // this project keeps producing.
+    //
+    // So staleness is measured against the window the *live* configs need — the
+    // widest reach-back among configs that ran on the newest day — rather than
+    // against the stretched one. A config whose last run predates that has no
+    // recent rate, the same `null` a config with too few recent runs already
+    // gets. The window itself is untouched: this changes who gets a percentage,
+    // not what period the percentage covers.
+    const liveWindow = liveWindowDays(byJob, minRecentRuns, newestDay, windowDays);
+
     const configs: ConfigStats[] = [];
     for (const entry of byJob.values()) {
         const runCount = entry.passCount + entry.failCount;
         const from = newestDay - windowDays + 1;
+        let lastActiveDay = -Infinity;
+        for (const day of entry.byDay.keys()) {
+            lastActiveDay = Math.max(lastActiveDay, day);
+        }
+        const stillRunning = lastActiveDay > newestDay - liveWindow;
         let recentPass = 0;
         let recentFail = 0;
         let recentSameMsg = 0;
@@ -356,8 +386,10 @@ function summarize(
             recentSameMsg += sameMsg;
         }
         const recentRunCount = recentPass + recentFail;
-        // Below the minimum there is not enough data to build a percentage from.
-        const enough = recentRunCount >= minRecentRuns;
+        // Below the minimum there is not enough data to build a percentage from,
+        // and a config that has stopped running has no *recent* data at all —
+        // only old data that a stretched window happens to enclose.
+        const enough = recentRunCount >= minRecentRuns && stillRunning;
         configs.push({
             jobName: entry.jobName,
             runCount,
@@ -373,6 +405,59 @@ function summarize(
     }
     configs.sort((a, b) => b.failRate - a.failRate);
     return configs;
+}
+
+/**
+ * How many days back this config must reach to accumulate `minRecentRuns`, or
+ * `null` when it never gets there.
+ *
+ * Walks newest-first from the shared anchor, so the answer is in the same
+ * "days before `newestDay`" units the window is expressed in — which is what
+ * lets the sizing loop and the staleness test below share one definition
+ * instead of drifting into two.
+ */
+function daysToReach(
+    entry: ConfigAccumulator,
+    minRecentRuns: number,
+    newestDay: number
+): number | null {
+    let runs = 0;
+    let needed = 0;
+    for (const day of [...entry.byDay.keys()].sort((a, b) => b - a)) {
+        const bucket = entry.byDay.get(day)!;
+        runs += bucket[0] + bucket[1];
+        needed = newestDay - day + 1;
+        if (runs >= minRecentRuns) {
+            return needed;
+        }
+    }
+    return null;
+}
+
+/**
+ * The window the configurations that are **still running** need, in days.
+ *
+ * The reference `summarize` measures staleness against. `windowDays` is the
+ * widest reach-back over *every* config, which a retired one inflates; this is
+ * the widest over those that ran on the newest day, and a config cannot inflate
+ * it by having stopped. Falls back to `windowDays` when nothing ran on the
+ * newest day at all — a tree-wide quiet spell, where no config is stale
+ * relative to its neighbours and the old behaviour is the right one.
+ */
+function liveWindowDays(
+    byJob: ReadonlyMap<string, ConfigAccumulator>,
+    minRecentRuns: number,
+    newestDay: number,
+    windowDays: number
+): number {
+    let live = 0;
+    for (const entry of byJob.values()) {
+        if (!entry.byDay.has(newestDay)) {
+            continue;
+        }
+        live = Math.max(live, daysToReach(entry, minRecentRuns, newestDay) ?? 1);
+    }
+    return live === 0 ? windowDays : live;
 }
 
 /**

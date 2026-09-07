@@ -737,6 +737,96 @@ test('crashes match a try push on their signature, not on a message', () => {
     );
 });
 
+test('a configuration that has stopped running gets no recent rate', () => {
+    // The feedback loop this guards. A config that retires mid-window still
+    // reaches `minRecentRuns` by reaching back into the days it was alive, so
+    // it stretches the shared window wide enough to contain its own death — and
+    // then its old runs are "recent" by construction. Measured on
+    // browser_aboutdebugging_connect_toggle_usb_devices.js, where a skip-if
+    // landing on day 6 of 20 left three mac configs reporting a 15-day recent
+    // rate computed entirely from runs that stopped a fortnight earlier.
+    //
+    // Synthetic because the shape depends on *when* a config stops relative to
+    // the window, which no fixture pins down.
+    const days = 21;
+    const retiredDays: number[] = [];
+    const liveDays: number[] = [];
+    // The retired config runs 5x/day for the first six days, then never again:
+    // 30 runs, enough to reach the minimum only by going 15 days back.
+    for (let day = 0; day <= 5; day++) {
+        for (let n = 0; n < 5; n++) {
+            retiredDays.push(day);
+        }
+    }
+    // The live config runs 5x/day throughout, so on its own it needs 4 days.
+    for (let day = 0; day < days; day++) {
+        for (let n = 0; n < 5; n++) {
+            liveDays.push(day);
+        }
+    }
+
+    const synthetic = decodeBucket({
+        metadata: {
+            startDate: '2026-07-14',
+            endDate: '2026-08-03',
+            days,
+            startTime: 0,
+            generatedAt: '',
+            totalTestCount: 1,
+            testsWithFailures: 1,
+            aggregatedFrom: [],
+            totalBuckets: 64,
+            bucketIndex: 0,
+        },
+        tables: {
+            jobNames: ['test-mac/opt-retired', 'test-linux/opt-live'],
+            testPaths: ['a/b'],
+            testNames: ['test_x.js'],
+            repositories: ['mozilla-central'],
+            statuses: ['PASS'],
+            taskIds: [],
+            messages: [],
+            crashSignatures: [],
+            components: ['Core :: X'],
+            commitIds: ['abc'],
+        },
+        taskInfo: { repositoryIds: [], jobNameIds: [], commitIds: [], chunks: [] },
+        testInfo: { testPathIds: [0], testNameIds: [0], componentIds: [0] },
+        testRuns: [
+            [
+                {
+                    days: [...retiredDays, ...liveDays],
+                    durations: [...retiredDays, ...liveDays].map(() => [100, 100, 100]),
+                    jobNameIds: [
+                        ...retiredDays.map(() => 0),
+                        ...liveDays.map(() => 1),
+                    ],
+                },
+            ],
+        ],
+    } as unknown as BucketFile);
+
+    const configs = computeConfigStats(synthetic, 0);
+    const retired = configs.find((config) => config.jobName === 'test-mac/opt-retired')!;
+    const live = configs.find((config) => config.jobName === 'test-linux/opt-live')!;
+
+    // The retired config's runs *are* inside the stretched window — that is the
+    // trap — so this is not the pre-existing "too few runs" case.
+    assert.ok(
+        retired.recentRunCount >= 20,
+        `the window must enclose the retired config's runs: ${retired.recentRunCount}`
+    );
+    assert.equal(retired.recentFailRate, null, 'a retired config states no recent rate');
+    assert.equal(retired.recentSameMsgFailRate, null);
+
+    // And the config that is still running is unaffected: the fix must narrow
+    // who gets a percentage, not empty the column.
+    assert.notEqual(live.recentFailRate, null, 'a live config keeps its recent rate');
+
+    // The window itself is untouched — item 12 rules out changing the sizing.
+    assert.equal(retired.recentDays, live.recentDays, 'one shared window, as before');
+});
+
 test('an expected-fail is never counted as a matching failure', () => {
     // `EXPECTED-FAIL` groups in the published files carry no messages, so this
     // guard cannot be exercised from a fixture. A test annotated `fail-if`

@@ -1116,7 +1116,7 @@ test('--config keeps the Issues section in text AND in markdown', async () => {
     // vanished in the one format `CLI.md` documents for pasting into a bug,
     // where a reader has nothing to cross-check it against.
     const text = await invoke(['test', MULTI_CONFIG_TEST, '--config', CLEAN_CONFIG]);
-    assert.match(text.stdout, /^Issues$/m);
+    assert.match(text.stdout, /^Issues \(first failure per run\)$/m);
     assert.match(text.stdout, /no issues on the configurations this filter matched/);
 
     const markdown = await invoke([
@@ -1126,7 +1126,11 @@ test('--config keeps the Issues section in text AND in markdown', async () => {
         CLEAN_CONFIG,
         '--markdown',
     ]);
-    assert.match(markdown.stdout, /^#+ Issues$/m, 'markdown dropped the section');
+    assert.match(
+        markdown.stdout,
+        /^#+ Issues \(first failure per run\)$/m,
+        'markdown dropped the section'
+    );
     assert.match(markdown.stdout, /no issues on the configurations this filter matched/);
 
     // Same wording in both, so the two renderers cannot drift into describing
@@ -1658,19 +1662,201 @@ test('--history counts sum to the totals', async () => {
     assert.equal(sum('skip'), totals['skipCount']);
 });
 
-test('--task-ids yields one row per failing run, with the retry split off', async () => {
+test('--task-ids folds only rows identical in every field', async () => {
     const { stdout } = await invoke(['test', TEST_PATH, '--task-ids', '--json']);
     const taskIds = json(stdout)['taskIds'] as {
         taskId: string;
         retryId: number;
         status: string;
+        day: string | null;
+        message: string | null;
+        occurrences: number;
     }[];
-    // 4 fails + 6 crashes, each carrying task IDs in a bucket file.
-    assert.equal(taskIds.length, 10);
+    // 4 fails + 6 crashes carry task IDs in the bucket file. Two of the ten
+    // repeat a row already emitted — same task, retry, status, day and message
+    // — and fold. The rest stay, including any that repeat the task pair under
+    // a *different* message: on real data 299 of 322 repeated pairs are that
+    // shape, and merging them loses a message the aggregate recorded.
+    assert.equal(taskIds.length, 8);
+    assert.equal(
+        taskIds.reduce((total, row) => total + row.occurrences, 0),
+        10,
+        'no entry may be dropped, only folded into a row identical to it'
+    );
+    // No two rows may be identical: that is exactly what folding removes.
+    const printed = taskIds.map((row) =>
+        JSON.stringify([row.taskId, row.retryId, row.status, row.day, row.message])
+    );
+    assert.equal(new Set(printed).size, printed.length, 'no two rows may print alike');
     for (const row of taskIds) {
         assert.ok(Number.isInteger(row.retryId), 'the retry is parsed off, not left in the ID');
         assert.doesNotMatch(row.taskId, /\.\d+$/, 'the task ID must not keep its retry suffix');
     }
+});
+
+test('--task-ids prints no per-row status column', async () => {
+    // Every row is a failure of some kind, and which kind is a property of the
+    // signature rather than of the task: the `Issues` block prints the type
+    // against each numbered signature, and `--issue <n>` returns just those
+    // tasks. A column would ask a reader to scan thousands of cells for the
+    // odd TIMEOUT — the `--limit 0 | grep` workflow item 11 exists to replace.
+    const { stdout } = await invoke(['test', TEST_PATH, '--task-ids', '--limit', '0']);
+    const section = stdout.slice(stdout.indexOf('Task IDs'));
+    const rows = section.split('\n').filter((line) => /^ {4}\S+\.\d+ {2}/.test(line));
+    assert.ok(rows.length > 0, 'the fixture must produce task rows');
+
+    // No row may carry a status, whatever the listing's statuses are — and this
+    // fixture is the mixed case (CRASH, FAIL-PARALLEL, FAIL-SEQUENTIAL), so the
+    // assertion is not vacuous.
+    const taskIds = json(
+        (await invoke(['test', TEST_PATH, '--task-ids', '--json'])).stdout
+    )['taskIds'] as { status: string }[];
+    const statuses = new Set(taskIds.map((row) => row.status));
+    assert.ok(statuses.size > 1, 'this fixture must be the mixed case');
+    for (const row of rows) {
+        for (const status of statuses) {
+            assert.ok(!row.includes(status), `no row may carry a status: ${row}`);
+        }
+    }
+
+    // A row is the task, the job name, and nothing else but an optional ×n.
+    assert.match(
+        rows[0]!,
+        /^ {4}\S+\.\d+ {2}\S+(?: {2}×\d+)?$/,
+        `unexpected row shape: ${rows[0]}`
+    );
+});
+
+test('--issue can select a non-FAIL row', async () => {
+    // The issue list is not failures-only — `IssueType` includes TIMEOUT, CRASH
+    // and SKIP — so the selector has to reach them. A TIMEOUT among the FAILs
+    // is exactly the row `--limit 0 | grep` was being used to find.
+    const { stdout } = await invoke(['test', MOCHITEST_PATH, '--task-ids', '--json']);
+    const issues = json(stdout)['issues'] as { count: number; type: string }[];
+    const position = issues.findIndex((issue) => issue.type !== 'FAIL' && issue.type !== 'SKIP');
+    if (position < 0) {
+        // Nothing to select today; the FAIL path is covered above and the SKIP
+        // rejection has its own test. Not an assertion failure — the fixture
+        // simply has no timeout or crash.
+        return;
+    }
+    const narrowed = await invoke([
+        'test',
+        MOCHITEST_PATH,
+        '--task-ids',
+        '--issue',
+        String(position + 1),
+        '--json',
+    ]);
+    const rows = json(narrowed.stdout)['taskIds'] as { status: string; occurrences: number }[];
+    assert.equal(
+        rows.reduce((total, row) => total + row.occurrences, 0),
+        issues[position]!.count,
+        'the selected non-FAIL issue must account for its own count'
+    );
+    for (const row of rows) {
+        assert.ok(
+            row.status.startsWith(issues[position]!.type),
+            `every row must be of the selected kind: ${row.status}`
+        );
+    }
+});
+
+test('a task failing under two messages keeps both rows and both issues', async () => {
+    // The regression this guards: keying the fold on `(taskId, retryId)` alone
+    // merged a job's two different failure messages into one row and dropped
+    // the second from --json entirely, while --issue still counted the task
+    // under both signatures. The two views have to agree.
+    const { stdout } = await invoke(['test', MOCHITEST_PATH, '--task-ids', '--json']);
+    const result = json(stdout);
+    const rows = result['taskIds'] as { taskId: string; retryId: number; occurrences: number }[];
+    const issues = result['issues'] as { count: number; type: string }[];
+    const totals = result['totals'] as Record<string, number>;
+
+    // Every failing entry is represented exactly once, across all rows.
+    assert.equal(
+        rows.reduce((total, row) => total + row.occurrences, 0),
+        totals['failCount']! + totals['timeoutCount']! + totals['crashCount']!,
+        'occurrences must account for every failing entry'
+    );
+
+    // And the per-issue lists partition the same population.
+    let perIssue = 0;
+    for (let n = 1; n <= issues.length; n++) {
+        if (issues[n - 1]!.type === 'SKIP') {
+            continue;
+        }
+        const narrowed = await invoke([
+            'test',
+            MOCHITEST_PATH,
+            '--task-ids',
+            '--issue',
+            String(n),
+            '--json',
+        ]);
+        const slice = json(narrowed.stdout)['taskIds'] as { occurrences: number }[];
+        const sum = slice.reduce((total, row) => total + row.occurrences, 0);
+        assert.equal(sum, issues[n - 1]!.count, `issue ${n} must cover its own count`);
+        perIssue += sum;
+    }
+    assert.equal(
+        perIssue,
+        totals['failCount']! + totals['timeoutCount']! + totals['crashCount']!,
+        'the issues must partition the failures, neither double-counting nor dropping'
+    );
+});
+
+test('--issue narrows --task-ids to the tasks behind one Issues row', async () => {
+    const full = await invoke(['test', MOCHITEST_PATH, '--task-ids', '--json']);
+    const issues = json(full.stdout)['issues'] as { count: number; type: string }[];
+    // The first FAIL row, since a SKIP has no task and the block is numbered
+    // over every kind.
+    const position = issues.findIndex((issue) => issue.type === 'FAIL') + 1;
+    assert.ok(position > 0, 'the fixture must have a FAIL row to select');
+
+    const narrowed = await invoke([
+        'test',
+        MOCHITEST_PATH,
+        '--task-ids',
+        '--issue',
+        String(position),
+        '--json',
+    ]);
+    const rows = json(narrowed.stdout)['taskIds'] as { occurrences: number }[];
+    const selected = json(narrowed.stdout)['taskIdsIssue'] as { position: number };
+    assert.equal(selected.position, position, 'the JSON names the row it narrowed to');
+    // Every run of that signature, so the occurrences add up to its count.
+    assert.equal(
+        rows.reduce((total, row) => total + row.occurrences, 0),
+        issues[position - 1]!.count
+    );
+    // And the narrowing is real: another kind's row selects a disjoint set.
+    const other = issues.findIndex((issue) => issue.type === 'TIMEOUT' || issue.type === 'CRASH');
+    if (other >= 0) {
+        const otherRun = await invoke([
+            'test',
+            MOCHITEST_PATH,
+            '--task-ids',
+            '--issue',
+            String(other + 1),
+            '--json',
+        ]);
+        const otherRows = json(otherRun.stdout)['taskIds'] as { occurrences: number }[];
+        assert.equal(
+            otherRows.reduce((total, row) => total + row.occurrences, 0),
+            issues[other]!.count
+        );
+    }
+});
+
+test('--issue rejects a row that is not there, and needs --task-ids', async () => {
+    const missing = await invoke(['test', TEST_PATH, '--task-ids', '--issue', '999']);
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.stderr, /--issue 999 is not a row of the Issues block/);
+
+    const alone = await invoke(['test', TEST_PATH, '--issue', '1']);
+    assert.notEqual(alone.code, 0);
+    assert.match(alone.stderr, /needs --task-ids/);
 });
 
 test('--durations reports a distribution ordered min <= median <= p95 <= max', async () => {

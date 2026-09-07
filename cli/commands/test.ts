@@ -28,8 +28,9 @@
 
 import { chunkOfTask } from '../../lib/formats/buckets.ts';
 import type { DecodedTimingFile, RunEntry } from '../../lib/formats/decode.ts';
-import { type TestIdentity, parseTaskId } from '../../lib/formats/tables.ts';
+import { type TestIdentity, normalizeTaskId, parseTaskId } from '../../lib/formats/tables.ts';
 import { otherHarness } from '../../lib/model/harness.ts';
+import { withChunkSuffix } from '../../lib/model/job-name.ts';
 import { CANDIDATE_LIMIT, resolveTest } from '../../lib/query/test-lookup.ts';
 import {
     type ModeBreakdown,
@@ -51,7 +52,12 @@ import {
     platformsCovered,
     platformsInFile,
 } from '../../lib/query/coverage.ts';
-import { buildTestIssues } from '../../lib/query/test-issues.ts';
+import {
+    CRASH_NO_SIGNATURE,
+    FAILURE_NO_MESSAGE,
+    type TestIssue,
+    buildTestIssues,
+} from '../../lib/query/test-issues.ts';
 import {
     type TestStats,
     computeTestStats,
@@ -84,6 +90,8 @@ import {
     moreLine,
     percent,
     table,
+    messageLines,
+    renderWidth,
     truncate,
 } from '../format/text.ts';
 import { resolveHarness } from '../options.ts';
@@ -113,6 +121,11 @@ export const TEST_OPTIONS: OptionSpecs = {
         type: 'boolean',
         describe:
             'Print the task IDs behind each failure, and the minidump IDs of any crashes.',
+    },
+    issue: {
+        type: 'number',
+        placeholder: '<n>',
+        describe: 'With --task-ids, only the tasks behind row <n> of the Issues block.',
     },
     profiles: {
         type: 'boolean',
@@ -152,6 +165,27 @@ const DEFAULT_LIMIT = 10;
  * rather than guessing. The line is indented 11 to sit under the bug number.
  */
 const SUMMARY_WIDTH = 78;
+
+/**
+ * The `Issues` section title, in both text and markdown.
+ *
+ * The parenthetical is the whole point of the constant. A browser-chrome run
+ * that fails logs every `TEST-UNEXPECTED` line, and the aggregate keeps the
+ * **first** of them — so these counts sum to the failure total and a row means
+ * "runs whose first failure was this", not "times this message appeared". That
+ * is the right choice and it was unstated, which left a reader unable to tell
+ * whether one message covering 90% of the failures is one defect or an artefact
+ * of the aggregation. `buildTestIssues` cannot lift the restriction: the
+ * aggregate does not retain the other messages, so there is no flag to add.
+ */
+const ISSUES_HEADER = 'Issues (first failure per run)';
+
+/**
+ * The width of an `Issues` row's label — `  NN. NNNNNx  TYPE    ` — which is
+ * both what the message wraps inside and what a continuation line is indented
+ * by, so the two cannot drift apart.
+ */
+const ISSUE_LABEL_WIDTH = 22;
 
 /** The `--json` shape `CLI.md` documents. */
 export interface TestJson {
@@ -262,7 +296,7 @@ export interface TestJson {
      * because `CLI.md` documents them; all three are keyed on message text, so
      * none of them can carry a timeout.
      */
-    issues: { count: number; type: string; message: string }[];
+    issues: TestIssue[];
     messages: { message: string; count: number }[];
     crashSignatures: { signature: string; count: number }[];
     skips: { message: string; count: number }[];
@@ -271,6 +305,14 @@ export interface TestJson {
     durations?: DurationsJson[];
     history?: HistoryJson[];
     taskIds?: TaskIdJson[];
+    /**
+     * The `Issues` row `--issue <n>` narrowed `taskIds` to.
+     *
+     * Present only under `--issue`, so a consumer can tell a task list covering
+     * every failure from one covering a single signature — the difference
+     * between "6,493 tasks failed" and "1,143 of them failed this way".
+     */
+    taskIdsIssue?: { position: number; type: string; message: string };
     profiles?: ProfileJson[];
 }
 
@@ -350,6 +392,16 @@ interface TaskIdJson {
     status: string;
     day: string | null;
     message: string | null;
+    /**
+     * How many aggregate entries this row stands for — entries identical in
+     * every field below, which is the only case they are folded together.
+     *
+     * `1` for all but a handful: on `browser_resize_sidebar.js` 322 tasks
+     * recur, but only 23 of those repeat every field. The other 299 carry a
+     * second, different message and stay two rows, because they are two
+     * different things to read.
+     */
+    occurrences: number;
     /**
      * The processed crash dump, on a `CRASH` row whose dump was uploaded.
      *
@@ -630,8 +682,19 @@ export async function runTest(context: CommandContext, args: ParsedArgs): Promis
     if (boolOption(args, 'bugs')) {
         result.annotatedBugs = await fetchAnnotatedBugs(context, identity.fullPath);
     }
+    const issueSelector = numberOption(args, 'issue');
     if (boolOption(args, 'task-ids')) {
-        result.taskIds = buildTaskIds(file, decoded, filteredEntries, window);
+        const issue = issueSelector === undefined ? null : selectIssue(result.issues, issueSelector);
+        result.taskIds = buildTaskIds(file, decoded, filteredEntries, window, issue);
+        if (issue !== null) {
+            result.taskIdsIssue = { position: issueSelector!, type: issue.type, message: issue.message };
+        }
+    } else if (issueSelector !== undefined) {
+        throw usageError(
+            '--issue selects which failure the printed task IDs belong to, so it needs --task-ids',
+            'Run the command without either flag first: --issue takes a row number from the ' +
+                'Issues block it prints.'
+        );
     }
     if (boolOption(args, 'profiles')) {
         result.profiles = buildProfiles(decoded, filteredEntries);
@@ -1254,6 +1317,37 @@ function dailyCountsAreFlat(history: readonly HistoryJson[]): boolean | null {
 }
 
 /**
+ * The `Issues` row `--issue <n>` names, by its printed position.
+ *
+ * Position rather than a message substring because the block is numbered on
+ * screen and the messages are the thing too long to retype — three subagents
+ * wanting the tasks behind one signature all fell back to `--limit 0 | grep`,
+ * one of them over 1,924 lines, because there was no way to say "that row".
+ *
+ * A `SKIP` row is rejected rather than returning nothing: a skip is not a run,
+ * so it has no task to list, and an empty list would read as "those tasks are
+ * gone" instead of "that question does not apply".
+ */
+function selectIssue(issues: readonly TestIssue[], position: number): TestIssue {
+    const issue = Number.isInteger(position) ? issues[position - 1] : undefined;
+    if (issue === undefined) {
+        throw usageError(
+            `--issue ${position} is not a row of the Issues block, which has ` +
+                `${issues.length} ${issues.length === 1 ? 'row' : 'rows'}`,
+            'Rows are numbered from 1 in the order they print. Note --limit only ' +
+                'hides rows, it does not renumber them.'
+        );
+    }
+    if (issue.type === 'SKIP') {
+        throw usageError(
+            `--issue ${position} is a SKIP row, and a skipped run has no task to list`,
+            'The task IDs come from the failures only. Pick a FAIL, TIMEOUT or CRASH row.'
+        );
+    }
+    return issue;
+}
+
+/**
  * The task IDs behind each failure, for `--task-ids`.
  *
  * Also the **minidump IDs**, which is what makes `fx-tests crash` reachable
@@ -1266,6 +1360,28 @@ function dailyCountsAreFlat(history: readonly HistoryJson[]): boolean | null {
  * A `null` entry is a crash whose dump was **never uploaded** — 58 of them in
  * the sweep, always the same entries whose signature is also null. Those get no
  * `minidumpId`, rather than a placeholder that would look fetchable.
+ *
+ * ## Why repeated rows collapse, and which ones do not
+ *
+ * The aggregate records a job's failure once per attempt, so the same
+ * `(taskId, retryId)` recurs — 322 of the 6,409 tasks on
+ * `browser_resize_sidebar.js`. But those recurrences are **not** copies of one
+ * another: 299 of the 322 carry two *different* messages and one spans two
+ * days. Only 23 repeat every field.
+ *
+ * So the key is the whole printed row, not the task pair. Two entries merge
+ * only when a reader could not have told them apart anyway, and a task that
+ * failed under two messages keeps both rows — which is the more informative
+ * answer and the only one `--issue` can be consistent with, since a task
+ * matching two signatures belongs in both lists.
+ *
+ * What this buys is item 11's reconciliation: the 23 true duplicates were pure
+ * noise, and dropping them makes the printed length agree with the distinct
+ * task count the verdict quotes two screens above.
+ *
+ * No claim is made here about *why* a job records two attempts. `--executions`
+ * is where reruns are the subject; the aggregate does not say whether a repeat
+ * is a harness rerun, and inventing that was the first version of this comment.
  */
 function buildTaskIds(
     // Optional, because only the bucket files carry `taskInfo.chunks` at all
@@ -1274,13 +1390,21 @@ function buildTaskIds(
     raw: { taskInfo?: { chunks?: (number | null)[] | undefined } | undefined },
     file: DecodedTimingFile,
     entries: readonly RunEntry[],
-    window: DayWindow
+    window: DayWindow,
+    // The `Issues` row `--issue <n>` picked, or `null` for every failure.
+    issue: TestIssue | null
 ): TaskIdJson[] {
     const rows: TaskIdJson[] = [];
+    // Keyed on every field the row shows, so an entry merges only into a row a
+    // reader could not have told it apart from.
+    const byRow = new Map<string, TaskIdJson>();
     const days = file.days;
     for (const entry of entries) {
         const { kind } = classifyStatus(entry.status);
         if (kind !== 'fail' && kind !== 'timeout' && kind !== 'crash') {
+            continue;
+        }
+        if (issue !== null && !entryMatchesIssue(entry, kind, issue)) {
             continue;
         }
         if (entry.taskIds === undefined) {
@@ -1304,6 +1428,7 @@ function buildTaskIds(
                         ? null
                         : dateOfDayIndex(file.endDate, days, entry.day),
                 message: entry.message ?? null,
+                occurrences: 1,
             };
             // `minidumps[i]` belongs to `taskIds[i]`: same bucket, same order,
             // which is the join `crashes.ts` relies on too. Falsy means the
@@ -1312,13 +1437,71 @@ function buildTaskIds(
             const minidumpId = entry.minidumps?.[i];
             if (minidumpId) {
                 row.minidumpId = minidumpId;
-                row.crashCommand = `fx-tests crash ${taskId}.${retryId} ${minidumpId}`;
+                row.crashCommand = `fx-tests crash ${normalizeTaskId(raw2)} ${minidumpId}`;
             }
+            // `normalizeTaskId` rather than a second `${taskId}.${retryId}`:
+            // it is the documented canonical form, and it is what
+            // `countRerunsByTask` keys the verdict's job count on. Two spellings
+            // of the same join drift the moment one of them is "simplified".
+            const key = JSON.stringify([
+                normalizeTaskId(raw2),
+                row.jobName,
+                row.chunk,
+                row.status,
+                row.day,
+                row.message,
+                row.minidumpId ?? null,
+            ]);
+            const seen = byRow.get(key);
+            if (seen !== undefined) {
+                seen.occurrences++;
+                return;
+            }
+            byRow.set(key, row);
             rows.push(row);
         });
     }
     void window;
     return rows;
+}
+
+/**
+ * Whether a failing entry is one of the runs an `Issues` row counted.
+ *
+ * The `Issues` rows are `buildTestIssues`'s, and each is keyed on the field its
+ * status actually carries: a failure's message, a crash's signature, and for a
+ * timeout nothing at all — `TIMEOUT_MESSAGE` is a label the list synthesises,
+ * so every timeout matches that row and none matches any other. The two
+ * "not recorded" placeholders are synthesised the same way and match the
+ * entries that carried no text.
+ */
+function entryMatchesIssue(
+    entry: RunEntry,
+    kind: 'fail' | 'timeout' | 'crash',
+    issue: TestIssue
+): boolean {
+    switch (issue.type) {
+        case 'TIMEOUT':
+            return kind === 'timeout';
+        case 'CRASH':
+            return (
+                kind === 'crash' &&
+                (issue.message === CRASH_NO_SIGNATURE
+                    ? entry.crashSignature === null || entry.crashSignature === undefined
+                    : entry.crashSignature === issue.message)
+            );
+        case 'FAIL':
+            return (
+                kind === 'fail' &&
+                (issue.message === FAILURE_NO_MESSAGE
+                    ? entry.message === null || entry.message === undefined
+                    : entry.message === issue.message)
+            );
+        // A skip is not a failing run, so no entry `buildTaskIds` looks at can
+        // belong to one. `--issue` on a SKIP row is rejected before this.
+        case 'SKIP':
+            return false;
+    }
 }
 
 /**
@@ -1503,18 +1686,48 @@ function renderText(result: TestJson, limit: number): string {
     // Replaces the `Failure messages`, `Crash signatures` and `Skips` sections.
     if (result.issues.length > 0) {
         lines.push('');
-        lines.push('Issues');
+        // "first failure per run", because that is what these counts are and
+        // nothing said so. One failing run of a browser-chrome test can log
+        // five distinct `TEST-UNEXPECTED` messages and the aggregate keeps only
+        // the first, so the counts sum to the failure total — which reads as
+        // "failures per message" unless the header says otherwise, and the
+        // difference decides whether `4248/4690 = 90.6% is one defect` is an
+        // inference or a guess.
+        lines.push(ISSUES_HEADER);
         const shown = applyLimit(result.issues, limit);
-        for (const entry of shown) {
+        // Grouped against the **whole** list and sliced afterwards, not the
+        // other way round. A row's text must not depend on how many rows are
+        // shown: `--limit` is documented to hide rows, and the same invariant
+        // that keeps `--issue` numbering stable has to hold for what a row says.
+        //
+        // `ISSUE_LABEL_WIDTH` is the room the label below takes, so the message
+        // wraps into what is left rather than overflowing the terminal.
+        const grouped = messageLines(
+            result.issues.map((entry) => oneLine(entry.message)),
+            renderWidth() === null ? null : renderWidth()! - ISSUE_LABEL_WIDTH
+        );
+        // Numbered, so `--task-ids --issue <n>` has something to name. The
+        // number is the row's position in the whole list, not in the shown
+        // slice, so `--limit` hides rows without renumbering them.
+        for (const line of grouped) {
+            if (line.index >= shown.length) {
+                continue;
+            }
+            const entry = shown[line.index]!;
             lines.push(
-                `  ${String(entry.count).padStart(5)}x  ${entry.type.padEnd(7)} ` +
-                    `${truncate(oneLine(entry.message), 92)}`
+                line.first
+                    ? `  ${String(line.index + 1).padStart(2)}. ` +
+                          `${String(entry.count).padStart(5)}x  ${entry.type.padEnd(7)} ` +
+                          line.text
+                    : // A continuation, indented to sit under the message it
+                      // belongs to rather than under the count.
+                      `${' '.repeat(ISSUE_LABEL_WIDTH)}${line.text}`
             );
         }
         lines.push(moreLine(result.issues.length, shown.length));
     } else if (result.configFilter !== null) {
         lines.push('');
-        lines.push('Issues');
+        lines.push(ISSUES_HEADER);
         lines.push(`  ${emptyIssuesUnderFilter()}`);
     }
 
@@ -1569,18 +1782,53 @@ function renderText(result: TestJson, limit: number): string {
     }
     if (result.taskIds !== undefined) {
         lines.push('');
-        lines.push('Task IDs');
         const shown = applyLimit(result.taskIds, limit);
+        // No per-row status column. Every row here is a failure of some kind,
+        // and *which* kind is a property of the signature, not of the task —
+        // the `Issues` block above already prints the type against each
+        // numbered signature. A column would ask a reader to eyeball 6,652
+        // cells to find the timeouts, which is exactly the `--limit 0 | grep`
+        // workflow `--issue` was added to replace: read the type in `Issues`,
+        // then `--issue 23`. The status is stated once in the heading when
+        // `--issue` has pinned it.
+        //
+        // The `-PARALLEL`/`-SEQUENTIAL` axis is not lost with it: `--executions`
+        // is where execution mode is the subject, and it breaks the failures
+        // down by that axis directly.
+        lines.push(taskIdsHeader(result.taskIds, result.taskIdsIssue));
+        // The date as a subheading over its group rather than repeated down a
+        // column. 6,652 rows of `browser_resize_sidebar.js` span 14 days, so
+        // the column was 6,652 copies of 14 strings — pure token cost for the
+        // agents this output is also written for. Rows arrive oldest-first from
+        // the day-index encoding and that order is kept, matching `--history`,
+        // so `--issue` row identity does not shift between runs.
+        let lastDay: string | null | undefined;
         for (const row of shown) {
+            if (row.day !== lastDay) {
+                lastDay = row.day;
+                lines.push(`  ${row.day ?? '(no date recorded)'}`);
+            }
+            const jobName =
+                row.jobName === null
+                    ? '(unknown job)'
+                    : // The real Taskcluster name, chunk suffix and all.
+                      // `<name> chunk 8` was a format used nowhere in
+                      // Taskcluster, Treeherder or the CI logs, so it could
+                      // not be pasted into a search or matched against a job
+                      // name from any other source.
+                      withChunkSuffix(row.jobName, row.chunk);
             lines.push(
-                `  ${row.taskId}.${row.retryId}  ${row.status.padEnd(18)} ` +
-                    `${row.day ?? '—'}  ${row.jobName ?? '(unknown job)'}` +
-                    (row.chunk === null ? '' : ` chunk ${row.chunk}`)
+                `    ${row.taskId}.${row.retryId}  ` +
+                    jobName +
+                    // `×n` rather than the same line twice. Only entries
+                    // identical in every field above are folded, so this never
+                    // hides a second message or a second day.
+                    (row.occurrences > 1 ? `  ×${row.occurrences}` : '')
             );
             // The command rather than the bare ID: a dump ID is only usable
             // paired with its task, and pasting is the point.
             if (row.crashCommand !== undefined) {
-                lines.push(`    ${row.crashCommand}`);
+                lines.push(`      ${row.crashCommand}`);
             }
         }
         lines.push(moreLine(result.taskIds.length, shown.length));
@@ -1959,23 +2207,31 @@ function renderMarkdown(result: TestJson, limit: number): string {
 
     if (result.issues.length > 0) {
         lines.push('');
-        lines.push(md.heading('Issues'));
+        lines.push(md.heading(ISSUES_HEADER));
         lines.push('');
         const shown = applyLimit(result.issues, limit);
         lines.push(
             ...md.table(
                 [
+                    // The `--issue <n>` selector, same numbering as the text
+                    // renderer's, so either transcript can feed the next command.
+                    { header: '#', align: 'right' },
                     { header: 'count', align: 'right' },
                     { header: 'kind' },
                     { header: 'message' },
                 ],
-                shown.map((entry) => [String(entry.count), entry.type, oneLine(entry.message)])
+                shown.map((entry, i) => [
+                    String(i + 1),
+                    String(entry.count),
+                    entry.type,
+                    oneLine(entry.message),
+                ])
             )
         );
         lines.push(md.moreLine(result.issues.length, shown.length));
     } else if (result.configFilter !== null) {
         lines.push('');
-        lines.push(md.heading('Issues'));
+        lines.push(md.heading(ISSUES_HEADER));
         lines.push('');
         lines.push(emptyIssuesUnderFilter());
     }
@@ -2076,6 +2332,34 @@ function describeReach(reach: TestJson['reach']): string | null {
             ? ''
             : ` — not ${reach.absentPlatforms.join(', ')}; see --coverage`;
     return `Runs on ${reach.configCount} configs across ${platforms}${absent}`;
+}
+
+/**
+ * The `Task IDs` heading: how many jobs, and which `--issue` row narrowed them.
+ *
+ * Without the job count a narrowed list is indistinguishable from the full one,
+ * which is the same defect `configFilter` exists to prevent on the totals: a
+ * smaller number with nothing saying what made it smaller reads as fewer
+ * failures.
+ *
+ * The `--issue` clause is also where the status lives. An `Issues` row is one
+ * signature and a signature has one type, so naming the row names the status of
+ * every task under it — once, here, instead of on all 6,652 rows.
+ */
+function taskIdsHeader(rows: readonly TaskIdJson[], issue: TestJson['taskIdsIssue']): string {
+    // How many *jobs* these rows cover, which is the number the verdict quotes
+    // and the one a reader tries to reconcile against. It is smaller than the
+    // row count whenever a job failed under more than one message, and saying
+    // so here is what stops the two numbers reading as a contradiction.
+    const jobs = new Set(rows.map((row) => `${row.taskId}.${row.retryId}`)).size;
+    const parts: string[] = [];
+    if (jobs !== rows.length) {
+        parts.push(`${jobs} jobs`);
+    }
+    if (issue !== undefined) {
+        parts.push(`issue ${issue.position}: ${issue.type} ${truncate(oneLine(issue.message), 60)}`);
+    }
+    return parts.length === 0 ? 'Task IDs' : `Task IDs (${parts.join(', ')})`;
 }
 
 /**

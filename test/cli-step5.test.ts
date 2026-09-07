@@ -1632,6 +1632,77 @@ test('a path column sizes itself to the longest path, not to a constant', async 
     );
 });
 
+test('a group shows its message in full, and the rest only how they differ', async () => {
+    const { messageLines } = await import('../cli/format/text.ts');
+    const head =
+        'Uncaught exception in test - [Exception... "Component returned failure code: ' +
+        '0x80520015" location: "JS frame :: Tabbrowser.sys.mjs :: _internalMaybeFixupLoadURI';
+    const values = [
+        `${head} :: line 10875"  data: no]`,
+        `${head} :: line 10651"  data: no]`,
+        `${head} :: line 10643"  data: no]`,
+    ];
+    const rendered = messageLines(values, 60);
+
+    // Row 1 carries the whole message across as many lines as it needs. This is
+    // the regression that matters: the previous fix showed a stack location and
+    // no failure message at all, sending a reader to --json for what failed.
+    const first = rendered.filter((line) => line.index === 0);
+    const joined = first.map((line) => line.text).join(' ');
+    assert.ok(first.length > 1, 'a 200-character message must wrap, not truncate');
+    assert.ok(
+        joined.includes('Uncaught exception in test') && joined.includes('0x80520015'),
+        `the message must survive whole: ${joined}`
+    );
+    assert.equal(joined.replace(/\s+/g, ' '), values[0]!.replace(/\s+/g, ' '));
+    for (const line of first) {
+        assert.ok(line.text.length <= 60, `wrapped to width: ${line.text.length}`);
+    }
+
+    // Rows 2 and 3 are one line each, naming their leader and their difference.
+    for (const [n, index] of [1, 2].entries()) {
+        const rows = rendered.filter((line) => line.index === index);
+        assert.equal(rows.length, 1, 'a difference-only row fits on one line');
+        assert.match(rows[0]!.text, /^↑ same as 1, but /);
+        assert.ok(
+            rows[0]!.text.includes(['10651', '10643'][n]!),
+            `the discriminator survives: ${rows[0]!.text}`
+        );
+        // And it keeps the word that says what the number *is* — a bare
+        // `10651"` would be a number with no label.
+        assert.ok(rows[0]!.text.includes('line'), `the phrase survives: ${rows[0]!.text}`);
+    }
+});
+
+test('a message with no relatives is shown whole, never cut', async () => {
+    const { messageLines } = await import('../cli/format/text.ts');
+    // Two unrelated messages: neither can be a "same as" of the other, so both
+    // print in full. Nothing is truncated, which is the point — a reader must
+    // not need --json or --full-messages to learn what failed.
+    const values = [
+        `unrelated alpha ${'padding '.repeat(20)}end-of-alpha`,
+        'short beta',
+    ];
+    const rendered = messageLines(values, 40);
+    for (const [i, value] of values.entries()) {
+        const text = rendered
+            .filter((line) => line.index === i)
+            .map((line) => line.text)
+            .join(' ');
+        assert.equal(text.replace(/\s+/g, ' '), value.replace(/\s+/g, ' '));
+    }
+});
+
+test('no wrapping under --markdown, --json or --full-messages', async () => {
+    const { messageLines } = await import('../cli/format/text.ts');
+    // `renderWidth()` is null in those modes, and a null width must pass the
+    // message through as one line rather than wrapping it to a default.
+    const long = `x ${'y '.repeat(200)}z`;
+    const rendered = messageLines([long], null);
+    assert.equal(rendered.length, 1);
+    assert.equal(rendered[0]!.text, long);
+});
+
 test('--markdown emits a real table from every command, not a fenced block', async () => {
     // These four used to render text and wrap it in a fence, which made them
     // the only commands whose `--markdown` was not Markdown: pasting `issues`
