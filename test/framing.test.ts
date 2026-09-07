@@ -761,6 +761,12 @@ const UNCOVERED_COMMANDS: Record<string, string> = {
     guide: 'Prose about what the data can and cannot tell you. No page, and no rows to frame.',
     dates: 'Lists which dates have published data. A provenance query, not a view of test data.',
     cache: 'Inspects the local on-disk cache. Nothing upstream to compare against.',
+    task:
+        'Reads one job’s own `profile_resource-usage.json`. `try.html` reads the same artifact, ' +
+        'but per push and only to aggregate across configurations — it has no single-task view, ' +
+        'and it is the absence of one that this command exists for. Nothing to frame either: no ' +
+        'ranking beyond `try`’s failing-executions sort, no window, no filter, and the harness ' +
+        'is whatever the task ran.',
     crash:
         'Reads one processed crash or hang dump. `crash-viewer.html` covers the crash mode and ' +
         'is the first migration target (`PARITY.md` §6.2); the hang mode has no page at all. ' +

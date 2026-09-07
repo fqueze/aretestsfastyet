@@ -123,6 +123,12 @@ export const COMMAND_FACTS: readonly CommandFact[] = [
         answers: 'Which failures in my push are mine, and which already fail on central?',
     },
     {
+        name: 'task',
+        reads: 'a job’s profile_resource-usage.json artifact',
+        answers: 'What happened in one job — every test’s outcome, pass or fail?',
+        defaultLimit: 20,
+    },
+    {
         name: 'issues',
         reads: '{harness}-issues.json',
         answers: 'What is failing across the tree?',
@@ -220,7 +226,7 @@ export const EXIT_CODE_FACTS: readonly ExitCodeFact[] = [
         code: ExitCode.Gone,
         meaning:
             'Data permanently gone: an expired or never-uploaded Taskcluster artifact. ' +
-            'Only `fx-tests crash` produces this. Retrying will not help.',
+            'Only `crash` and `task` produce it. Retrying will not help.',
     },
 ];
 
@@ -374,10 +380,13 @@ const WORKFLOWS: readonly Workflow[] = [
             '    the same way on that same config and it probably is not.',
             '',
             'fx-tests try <revision> --all-jobs',
-            '    Reads the passing test jobs too. A test that failed and then passed when the',
-            '    harness reran it leaves the job GREEN, so the default run never sees it — it',
-            '    is missing, not ranked low. Costs one profile per test job on the push rather',
-            '    than one per failed job, so reach for it when burning down flakiness.',
+            '    Reads the passing test jobs too. A test that failed and then passed on the',
+            '    harness rerun leaves the job GREEN, so the default never sees it — missing,',
+            '    not ranked low. One profile per test job rather than per failed job: slow.',
+            '',
+            'fx-tests task <taskId>',
+            '    What ELSE failed in one of those jobs. The push view ranks across configs',
+            '    and cannot say; this reads the one job’s own profile.',
             '',
             'fx-tests test <path>',
             '    Whether it already fails on central, and how. Two things change the reading:',

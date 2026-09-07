@@ -50,6 +50,7 @@ import {
 import { MANIFESTS_OPTIONS, runManifests } from './commands/manifests.ts';
 import { SUMMARY_OPTIONS, runSummary } from './commands/summary.ts';
 import { TEST_OPTIONS, runTest } from './commands/test.ts';
+import { TASK_OPTIONS, runTask } from './commands/task.ts';
 import { TRY_OPTIONS, runTry } from './commands/try.ts';
 import { IntermittentsError, intermittentsClient } from '../lib/sources/intermittents.ts';
 import {
@@ -114,6 +115,41 @@ const COMMANDS: CommandSpec[] = [
         usage: 'fx-tests try <revision> [options]',
         options: TRY_OPTIONS,
         run: runTry,
+    },
+    {
+        name: 'task',
+        // "What happened", not "what failed": the command reports every
+        // outcome the profile recorded — the header counts PASS, SKIP and
+        // EXPECTED-FAIL alongside the failures, and `--passed` lists them —
+        // so a summary saying "failed" is narrower than the command.
+        summary: 'What happened in one job, read from its resource-usage profile.',
+        usage: 'fx-tests task <taskId>[.<retryId>] [options]',
+        options: TASK_OPTIONS,
+        rejectsGlobals: [
+            {
+                names: ['day', 'since', 'harness', 'data-source'],
+                message:
+                    'these globals do not apply to task: the report is one job’s profile, ' +
+                    'so there is no date window to choose, no harness to select and no ' +
+                    'aggregate to read it from',
+                hint: 'The job’s date, harness and repository are facts about the task ID you ' +
+                    'passed. For the aggregates, use `fx-tests test <path>`.',
+            },
+            {
+                // Declared rather than thrown from the command body, which is
+                // what the other commands refusing `--config` do and what left
+                // both flags listed in `task --help` while the command exited 1
+                // on them. Declaring it is what makes `commandHelp()` filter
+                // them out, so the help stops promising flags that do not work.
+                names: ['config', 'exclude-config'],
+                message:
+                    '--config cannot be applied to task: a task is one configuration, so ' +
+                    'there is nothing here to filter',
+                hint: 'The configuration is named in the header. For one test across ' +
+                    'configurations, use `fx-tests test <path> --config <substring>`.',
+            },
+        ],
+        run: runTask,
     },
     {
         name: 'issues',

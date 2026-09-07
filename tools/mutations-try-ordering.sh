@@ -140,21 +140,26 @@ mutate cli/commands/try.ts \
 # exists among 400,000 generated ones. It has been removed rather than pinned
 # by a test that could only assert the same answer twice.
 
+# The three below are in `lib/model/test-markers.ts`, not `try.ts`: the marker
+# parser and `isStreamedProfile` moved there when `fx-tests task` needed the
+# same read against a single task. The call site and the counter above are
+# still `try.ts`'s, which is why this section now names two files.
+
 # The first line has to be a complete document; a truncated one is a genuine
 # read failure and must stay in the other bucket.
-mutate cli/commands/try.ts \
+mutate lib/model/test-markers.ts \
     '        JSON.parse(head.slice(0, newline));' \
     '        JSON.parse("null");' \
     'a truncated first line still counts as streamed'
 
 # What follows has to be another document.
-mutate cli/commands/try.ts \
+mutate lib/model/test-markers.ts \
     "    return rest.startsWith('{');" \
     '    return true;' \
     'any trailing content counts as a second document'
 
 # No newline at all is not the streamed shape.
-mutate cli/commands/try.ts \
+mutate lib/model/test-markers.ts \
     '    if (newline < 0) {' \
     '    if (false) {' \
     'a single-line profile is examined as though it were streamed'

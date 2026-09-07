@@ -489,6 +489,43 @@ test('guide --json exposes the same facts the prose is built from', async () => 
     assert.deepEqual(result.traps.map((t) => t.id), TRAPS.map((t) => t.id));
 });
 
+/**
+ * THE COMMANDS is a block a reader scans to pick a command, so every row is a
+ * question that command answers. A row describing a data source instead spends
+ * words on something no other row spends them on, and the guide is read by
+ * every agent on every invocation.
+ *
+ * `task` shipped as "What happened in one job: every test outcome its profile
+ * recorded." — the only row that was not a question, and "its profile" was
+ * ambiguous between three profiles the command puts in play. `CommandFact.reads`
+ * is where the source belongs, and a prior review had already removed exactly
+ * these per-command source annotations from the rendered guide.
+ */
+test('every command row in the guide is a question, not a description of a source', () => {
+    // Contains a question, rather than ends with one: `failures` follows its
+    // question with a gloss, and `summary` is a noun phrase naming what it
+    // returns. Both are fine — neither describes where the data comes from,
+    // which is the thing this rules out.
+    const exempt = new Set(['summary']);
+    for (const fact of COMMAND_FACTS) {
+        if (!exempt.has(fact.name)) {
+            assert.ok(
+                fact.answers.includes('?'),
+                `${fact.name}'s row is "${fact.answers}", which asks nothing. ` +
+                    'THE COMMANDS rows are questions the command answers.'
+            );
+        }
+        // The rule that actually bit: a row must not spend its words naming the
+        // file or artifact the command reads. That is `reads`, which is
+        // asserted separately and deliberately not printed here.
+        assert.doesNotMatch(
+            fact.answers,
+            /\bprofile\b|\.json\b|artifact|aggregate file/i,
+            `${fact.name}'s row names a data source; put it in \`reads\``
+        );
+    }
+});
+
 test('the rendered guide contains each command and each trap title', async () => {
     const { stdout } = await invoke(['guide']);
     for (const fact of COMMAND_FACTS) {

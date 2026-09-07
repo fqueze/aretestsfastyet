@@ -267,3 +267,23 @@ export function taskArtifactName(
 ): DataFileName {
     return { index: taskId, filename: `runs/${retryId}/artifacts/${artifactPath}` };
 }
+
+/**
+ * Names a task's **definition** — not an artifact of it — for the same source.
+ *
+ * `fx-tests task <taskId>` is handed a task ID and nothing else, so it has no
+ * job name, no push and no repository. The queue's task document carries all
+ * three: `metadata.name` and `tags.label` are the Treeherder job name,
+ * `tags.project` the repository, and `metadata.source` the hg URL whose
+ * second-to-last segment is the revision. One request replaces the push lookup
+ * `fx-tests try` does.
+ *
+ * The empty `filename` is deliberate rather than a placeholder: `taskArtifactUrl`
+ * joins the two with a slash, so the URL is `/api/queue/v1/task/<id>/`, and the
+ * queue answers that with the task definition — measured 2026-09-03, HTTP 200
+ * and the same body as the slashless form. Reusing that builder is what keeps
+ * the disk cache keyed on the URL the fetch actually uses.
+ */
+export function taskDefinitionName(taskId: string): DataFileName {
+    return { index: taskId, filename: '' };
+}
