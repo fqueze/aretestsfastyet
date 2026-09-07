@@ -676,6 +676,11 @@ function cachedIntermittents(inner, cache, hooks = {}) {
         () => inner.occurrencesOfBug(tree, range, bug)
       );
     },
+    async runIdsOfJobs(jobIds) {
+      const key = `intermittents:runids:${[...jobIds].sort((a, b) => a - b).join(",")}`;
+      const entries = await through(key, async () => [...await inner.runIdsOfJobs(jobIds)]);
+      return new Map(entries);
+    },
     async bugSummaries(bugs) {
       const key = `bugzilla:summaries:${[...bugs].sort((a, b) => a - b).join(",")}`;
       const entries = await through(key, async () => [
@@ -6873,6 +6878,7 @@ function readJob(row, columns) {
 
 // lib/sources/intermittents.ts
 var BUGZILLA_ROOT = "https://bugzilla.mozilla.org";
+var UNKNOWN_TASK_ID = "unknown";
 var IntermittentsError = class extends Error {
   url;
   status;
@@ -6921,6 +6927,7 @@ function intermittentsClient(options) {
       const rows2 = await getJson(url);
       return rows2.map((row) => ({
         bugId: row.bug_id,
+        jobId: row.job_id,
         testSuite: row.test_suite,
         platform: row.platform,
         buildType: row.build_type,
@@ -6929,8 +6936,38 @@ function intermittentsClient(options) {
         pushTime: row.push_time,
         machineName: row.machine_name,
         taskId: row.task_id,
+        runId: null,
         lines: row.lines
       }));
+    },
+    async runIdsOfJobs(jobIds) {
+      const found = /* @__PURE__ */ new Map();
+      for (const batch of chunk([...new Set(jobIds)], JOB_BATCH_SIZE)) {
+        if (batch.length === 0) {
+          continue;
+        }
+        const url = `${root}/api/jobs/?id__in=${batch.join(",")}`;
+        const data = await getJson(url);
+        if (data.next != null) {
+          throw new IntermittentsError(
+            `Treeherder paginated a ${batch.length}-job request, so ${JOB_BATCH_SIZE} is above its current page size; lower JOB_BATCH_SIZE or follow "next"`,
+            url
+          );
+        }
+        const names = data.job_property_names ?? [];
+        const idColumn = names.indexOf("id");
+        const retryColumn = names.indexOf("retry_id");
+        if (idColumn === -1 || retryColumn === -1) {
+          throw new IntermittentsError(
+            `Treeherder's job_property_names is missing id or retry_id, so the positional rows cannot be decoded; got: ${names.join(", ")}`,
+            url
+          );
+        }
+        for (const row of data.results ?? []) {
+          found.set(Number(row[idColumn]), Number(row[retryColumn] ?? 0));
+        }
+      }
+      return found;
     },
     async bugSummaries(bugs) {
       const found = /* @__PURE__ */ new Map();
@@ -6949,6 +6986,7 @@ function intermittentsClient(options) {
   };
 }
 var BUG_BATCH_SIZE = 100;
+var JOB_BATCH_SIZE = 200;
 function rangeQuery(tree, range) {
   return `startday=${encodeURIComponent(range.start)}&endday=${encodeURIComponent(range.end)}&tree=${encodeURIComponent(tree)}`;
 }
@@ -7000,6 +7038,33 @@ function testPathOfLine(line) {
   return candidate;
 }
 
+// lib/model/marker-messages.ts
+function partitionMarkerMessages(messages) {
+  const seenMessage = /* @__PURE__ */ new Set();
+  const seenProfile = /* @__PURE__ */ new Set();
+  const out = { messages: [], profileFilenames: [] };
+  for (const entry of messages) {
+    const message = typeof entry === "string" ? entry : entry.message;
+    if (!message) {
+      continue;
+    }
+    const filename = uploadedProfileName(message);
+    if (filename !== null) {
+      if (!seenProfile.has(filename)) {
+        seenProfile.add(filename);
+        out.profileFilenames.push(filename);
+      }
+      continue;
+    }
+    if (seenMessage.has(message)) {
+      continue;
+    }
+    seenMessage.add(message);
+    out.messages.push(message);
+  }
+  return out;
+}
+
 // lib/query/intermittents.ts
 function scanBugs(options) {
   const { ranking, summaries, harnessOfPath } = options;
@@ -7041,14 +7106,20 @@ function scanBugs(options) {
 function selectHarness(rows2, harness) {
   return harness === void 0 ? [...rows2] : rows2.filter((row) => row.harness === harness);
 }
+function bugsNamingTest(rows2, test) {
+  return rows2.filter((row) => row.test === test);
+}
 function tallyTests(occurrences) {
   return tally(
     occurrences.flatMap((row) => [
       ...new Set(
-        row.lines.map((line) => testPathOfLine(line)).filter((path) => path !== null)
+        partitionOccurrenceLines(row).messages.map((line) => testPathOfLine(line)).filter((path) => path !== null)
       )
     ])
   );
+}
+function partitionOccurrenceLines(occurrence) {
+  return partitionMarkerMessages(occurrence.lines);
 }
 function tally(names) {
   const counts = /* @__PURE__ */ new Map();
@@ -7056,6 +7127,39 @@ function tally(names) {
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   return [...counts].map(([name, count2]) => ({ name, count: count2 })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+function occurrenceConfiguration(row) {
+  return `${occurrenceConfig(row)} ${row.testSuite}`;
+}
+var RERUN_SUFFIX = /-2(\.\w+\.json)$/;
+function occurrenceProfiles(occurrences) {
+  const rows2 = [];
+  for (const occurrence of occurrences) {
+    const filenames = partitionOccurrenceLines(occurrence).profileFilenames;
+    if (filenames.length === 0) {
+      continue;
+    }
+    rows2.push({
+      run: occurrence.runId === null ? occurrence.taskId : `${occurrence.taskId}.${occurrence.runId}`,
+      taskId: occurrence.taskId,
+      runId: occurrence.runId,
+      configuration: occurrenceConfiguration(occurrence),
+      profiles: filenames.map((filename) => ({
+        filename,
+        // `runId` and `taskId` both have to be real. See
+        // `OccurrenceProfile.url`: no guessed `runs/0`, and no
+        // `/task/unknown/` — `"unknown"` is a documented sentinel on
+        // this field (`lib/sources/intermittents.ts`), not a task.
+        url: occurrence.runId === null || occurrence.taskId === UNKNOWN_TASK_ID ? null : testInfoArtifactUrl(
+          occurrence.taskId,
+          occurrence.runId,
+          filename
+        ),
+        isRerun: RERUN_SUFFIX.test(filename)
+      }))
+    });
+  }
+  return rows2;
 }
 function occurrenceConfig(row) {
   return `${row.platform}/${row.buildType}`;
@@ -7074,7 +7178,14 @@ function summariseBug(bugId, occurrences, filter = {}) {
     // Per occurrence, like every other tally here: a job emits the marker
     // once per failing assertion, so counting raw lines reports a job that
     // failed eighteen assertions as eighteen jobs.
-    lines: tally(rows2.flatMap((row) => [...new Set(row.lines.map(failureLineDetail))])),
+    //
+    // Partitioned first, so a `profile uploaded in …` notice is never
+    // counted as a failure message. See `partitionOccurrenceLines`.
+    lines: tally(
+      rows2.flatMap((row) => [
+        ...new Set(partitionOccurrenceLines(row).messages.map(failureLineDetail))
+      ])
+    ),
     unclassifiedOccurrences: rows2.filter(
       (row) => harnessOfOccurrence(row.testSuite) === null
     ).length
@@ -7139,6 +7250,18 @@ var INTERMITTENT_OPTIONS = {
     type: "number",
     placeholder: "<id>",
     describe: "Drill into one bug: its occurrences, platforms, task ids and log lines."
+  },
+  // `--test`, not `--path`: on this command it selects one bug, which is what
+  // `try --test` and `errors --test` do, where `--path <prefix>` filters many
+  // tests on `issues`, `failures`, `crashes`, `skips` and `flaky`.
+  test: {
+    type: "string",
+    placeholder: "<path>",
+    describe: "Drill into the bug annotated on this exact test path, instead of --bug. Lists them all when several bugs name it."
+  },
+  profiles: {
+    type: "boolean",
+    describe: "With --bug or --test, print the raw per-test profile artifact URL of every occurrence whose log named one."
   }
 };
 var INTERMITTENT_NOTES = [
@@ -7182,9 +7305,26 @@ async function runIntermittent(context, args) {
   const tree = stringOption(args, "tree") ?? "trunk";
   const range = resolveRange(globals.day, globals.since);
   const bug = numberOption(args, "bug");
+  const test = stringOption(args, "test");
+  if (bug !== void 0 && test !== void 0) {
+    throw usageError(
+      "--bug and --test both select one bug, so only one of them can be given",
+      "Use --test <path> when you have a failing test and no bug number, --bug <id> otherwise."
+    );
+  }
   if (bug !== void 0) {
-    await runDrilldown(context, client, tree, range, bug);
+    await runDrilldown(context, client, tree, range, bug, args);
     return;
+  }
+  if (test !== void 0) {
+    await runTestDrilldown(context, client, tree, range, test, args);
+    return;
+  }
+  if (boolOption(args, "profiles")) {
+    throw usageError(
+      "--profiles needs one bug: the ranked list\u2019s rows are bugs, and a profile is an artifact of a single job",
+      "Use --bug <id> --profiles, or --test <path> --profiles."
+    );
   }
   if (globals.config.length > 0 || globals.excludeConfig.length > 0) {
     throw usageError(
@@ -7256,19 +7396,79 @@ async function loadHarnessOfPath(context) {
   }
   return (path) => known.get(path) ?? null;
 }
-async function runDrilldown(context, client, tree, range, bug) {
+async function runTestDrilldown(context, client, tree, range, test, args) {
+  progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}\u2026`);
+  const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
+  const candidates = ranking.filter((row) => row.bugId !== null).map((row) => row.bugId);
+  progress(context, `Reading ${candidates.length} bug summaries\u2026`);
+  const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
+  progress(context, "Reading the mochitest and xpcshell test lists\u2026");
+  const harnessOfPath = await loadHarnessOfPath(context);
+  const matches = bugsNamingTest(scanBugs({ ranking, summaries, harnessOfPath }).rows, test);
+  if (matches.length === 0) {
+    throw notFoundError(
+      `no sheriff-annotated bug names the test ${test} on ${tree} between ${range.start} and ${range.end}`,
+      "A bug is matched by the exact test path in its summary, so a directory prefix will not do. Widen the window with --since <n>, or run without --test to see what was annotated."
+    );
+  }
+  if (matches.length > 1) {
+    emit(context, renderTestMatches(test, tree, range, matches, context.globals.format));
+    return;
+  }
+  await runDrilldown(context, client, tree, range, matches[0].bugId, args);
+}
+function renderTestMatches(test, tree, range, matches, format) {
+  const title = `${count(matches.length)} sheriff-annotated bugs name ${test} on ${tree}, ${range.start} to ${range.end}`;
+  if (format === "markdown") {
+    return joinLines([
+      heading(title),
+      "",
+      ...table2(
+        [{ header: "count", align: "right" }, { header: "bug" }, { header: "failure" }],
+        matches.map((row) => [
+          count(row.count),
+          `[${row.bugId}](https://bugzilla.mozilla.org/show_bug.cgi?id=${row.bugId})`,
+          row.failure
+        ])
+      )
+    ]);
+  }
+  if (format === "json") {
+    return toJson({
+      test,
+      tree,
+      startday: range.start,
+      endday: range.end,
+      matchCount: matches.length,
+      rows: matches
+    });
+  }
+  return joinLines([
+    ...wrapText(title),
+    "",
+    ...tableSection(
+      [
+        { header: "count", align: "right", sort: "desc" },
+        { header: "bug", align: "right" },
+        { header: "failure" }
+      ],
+      matches.map((row) => [count(row.count), String(row.bugId), row.failure]),
+      { total: matches.length, shown: matches.length, fit: true }
+    ),
+    "Drill into one with --bug <id>."
+  ]);
+}
+async function runDrilldown(context, client, tree, range, bug, args) {
   const { globals } = context;
   progress(context, `Reading occurrences of bug ${bug} on ${tree} for ${range.start}..${range.end}\u2026`);
-  const occurrences = await withUpstreamErrors(
-    () => client.occurrencesOfBug(tree, range, bug),
-    tree
-  );
-  if (occurrences.length === 0) {
+  const raw = await withUpstreamErrors(() => client.occurrencesOfBug(tree, range, bug), tree);
+  if (raw.length === 0) {
     throw notFoundError(
       `no sheriff annotations for bug ${bug} on ${tree} between ${range.start} and ${range.end}`,
       "Annotations are per tree and per day range: widen with --since <n>, or try --tree all. A bug with no annotations in the window is not in this data at all."
     );
   }
+  const occurrences = await withRunIds(context, client, tree, raw);
   const filter = {
     ...globals.harness === void 0 ? {} : { harness: globals.harness },
     ...globals.config.length === 0 ? {} : { config: globals.config },
@@ -7284,6 +7484,7 @@ async function runDrilldown(context, client, tree, range, bug) {
   }
   const summaries = await withUpstreamErrors(() => client.bugSummaries([bug]), tree);
   const bugSummary = summaries.get(bug) ?? null;
+  const profiles = globals.format === "json" || boolOption(args, "profiles") ? occurrenceProfiles(shownOccurrences) : null;
   if (globals.format === "json") {
     emit(
       context,
@@ -7293,15 +7494,42 @@ async function runDrilldown(context, client, tree, range, bug) {
         startday: range.start,
         endday: range.end,
         summary: bugSummary,
-        occurrenceRows: shownOccurrences
+        occurrenceRows: shownOccurrences,
+        profiles: profiles ?? []
       })
     );
     return;
   }
   emit(
     context,
-    globals.format === "markdown" ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences) : renderBugText(summary, bugSummary, tree, range, shownOccurrences, globals.limit)
+    globals.format === "markdown" ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences, profiles) : renderBugText(
+      summary,
+      bugSummary,
+      tree,
+      range,
+      shownOccurrences,
+      globals.limit,
+      profiles
+    )
   );
+}
+async function withRunIds(context, client, tree, occurrences) {
+  const jobIds = occurrences.map((row) => row.jobId).filter((id) => Number.isFinite(id) && id > 0);
+  if (jobIds.length === 0) {
+    return [...occurrences];
+  }
+  progress(context, `Reading the run index of ${jobIds.length} jobs\u2026`);
+  let runIds;
+  try {
+    runIds = await withUpstreamErrors(() => client.runIdsOfJobs(jobIds), tree);
+  } catch (error) {
+    warn(
+      context,
+      `could not read job run indexes (${error.message}); task ids are printed without one`
+    );
+    return [...occurrences];
+  }
+  return occurrences.map((row) => ({ ...row, runId: runIds.get(row.jobId) ?? null }));
 }
 function resolveRange(day, since, today = /* @__PURE__ */ new Date()) {
   if (day !== void 0) {
@@ -7482,7 +7710,7 @@ function drilldownCountLine(drilldown, tree, range) {
   const scope = drilldown.occurrences === drilldown.totalOccurrences ? `${count(drilldown.occurrences)} sheriff annotations` : `${count(drilldown.occurrences)} of ${count(drilldown.totalOccurrences)} sheriff annotations match the filter`;
   return `${scope} on ${tree}, ${range.start} to ${range.end}`;
 }
-function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit) {
+function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit, profiles) {
   const lines = [
     // Both are prose — a Bugzilla summary runs to 200 characters — so they
     // wrap rather than setting the width of the whole report.
@@ -7517,6 +7745,10 @@ function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit) {
         { header: "platform", maxWidth: 24 },
         { header: "build" },
         { header: "job name", maxWidth: 30 },
+        // `<taskId>.<runId>`, the format `test --task-ids` and
+        // Treeherder both use. The run index is not decoration: a task
+        // retried after an `exception` has its annotated failure in run
+        // 1, and every artifact URL built from run 0 then 404s.
         { header: "task id" }
       ],
       rows2.map((row) => [
@@ -7525,7 +7757,7 @@ function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit) {
         row.platform,
         row.buildType,
         row.testSuite,
-        row.taskId
+        taskRunId(row)
       ]),
       "  ",
       { fit: true }
@@ -7534,7 +7766,44 @@ function renderBugText(drilldown, bugSummary, tree, range, occurrences, limit) {
   if (rows2.length < occurrences.length) {
     lines.push(`  \u2026 ${occurrences.length - rows2.length} more (--limit 0 for all)`);
   }
+  if (profiles !== null) {
+    lines.push("");
+    lines.push(...profileSection(profiles, limit));
+  }
   return joinLines(lines);
+}
+function taskRunId(row) {
+  return row.runId === null ? row.taskId : `${row.taskId}.${row.runId}`;
+}
+function profileSection(profiles, limit) {
+  const linked = profiles.map((row) => ({ ...row, profiles: row.profiles.filter((entry) => entry.url !== null) })).filter((row) => row.profiles.length > 0);
+  if (linked.length === 0) {
+    return [
+      "Profiles",
+      ...profiles.length === 0 ? [
+        "  (none: no occurrence\u2019s log named an uploaded profile \u2014 the harness only captures one for certain failures)"
+      ] : [
+        `  (none reachable: ${count(profiles.length)} occurrences named a profile, but no artifact URL could be built for any of them \u2014 the run index did not resolve, or Treeherder holds no task for the job)`
+      ]
+    ];
+  }
+  const shown = applyLimit(linked, limit ?? DRILLDOWN_ROWS);
+  const lines = ["Profiles (raw artifact URLs, for profiler-cli)"];
+  for (const row of shown) {
+    lines.push(`  ${row.run}  ${row.configuration}`);
+    for (const profile of row.profiles) {
+      lines.push(`    ${profile.isRerun ? "rerun:  " : "profile:"} ${profile.url}`);
+    }
+  }
+  if (shown.length < linked.length) {
+    lines.push(`  \u2026 ${linked.length - shown.length} more (--limit 0 for all)`);
+  }
+  if (shown.some((row) => row.profiles.some((profile) => profile.isRerun))) {
+    lines.push(
+      "  (a rerun\u2019s first-run profile is uploaded too, but Treeherder keeps only the retry\u2019s log messages, so it is not named here)"
+    );
+  }
+  return lines;
 }
 function tallySection(title, counts, limit, maxWidth) {
   if (counts.length === 0) {
@@ -7555,7 +7824,7 @@ function tallySection(title, counts, limit, maxWidth) {
   lines.push("");
   return lines;
 }
-function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences) {
+function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences, profiles) {
   const lines = [
     heading(`Bug ${drilldown.bugId} \u2014 ${bugSummary ?? "(no summary from Bugzilla)"}`),
     "",
@@ -7585,7 +7854,19 @@ function renderBugMarkdown(drilldown, bugSummary, tree, range, occurrences) {
   lines.push(heading("Task IDs", 2));
   lines.push("");
   for (const row of occurrences) {
-    lines.push(`- \`${row.taskId}\` \u2014 ${row.platform}/${row.buildType} ${row.testSuite}`);
+    lines.push(`- \`${taskRunId(row)}\` \u2014 ${row.platform}/${row.buildType} ${row.testSuite}`);
+  }
+  const linkedProfiles = (profiles ?? []).map((row) => ({ ...row, profiles: row.profiles.filter((entry) => entry.url !== null) })).filter((row) => row.profiles.length > 0);
+  if (profiles !== null && linkedProfiles.length > 0) {
+    lines.push("");
+    lines.push(heading("Profiles", 2));
+    lines.push("");
+    for (const row of linkedProfiles) {
+      lines.push(`- \`${row.run}\` \u2014 ${row.configuration}`);
+      for (const profile of row.profiles) {
+        lines.push(`  - ${profile.isRerun ? "rerun" : "profile"}: ${profile.url}`);
+      }
+    }
   }
   return joinLines(lines);
 }
@@ -9860,33 +10141,6 @@ function normalizeMessage(message) {
     return null;
   }
   return message.replace(/\r\n/g, "\n").replace(/task_\d+/g, "task_id").replace(/\nRejection date: [^\n]+/g, "").replace(/Test ran for \d+s/g, "Test ran for Xs");
-}
-
-// lib/model/marker-messages.ts
-function partitionMarkerMessages(messages) {
-  const seenMessage = /* @__PURE__ */ new Set();
-  const seenProfile = /* @__PURE__ */ new Set();
-  const out = { messages: [], profileFilenames: [] };
-  for (const entry of messages) {
-    const message = typeof entry === "string" ? entry : entry.message;
-    if (!message) {
-      continue;
-    }
-    const filename = uploadedProfileName(message);
-    if (filename !== null) {
-      if (!seenProfile.has(filename)) {
-        seenProfile.add(filename);
-        out.profileFilenames.push(filename);
-      }
-      continue;
-    }
-    if (seenMessage.has(message)) {
-      continue;
-    }
-    seenMessage.add(message);
-    out.messages.push(message);
-  }
-  return out;
 }
 
 // lib/model/test-path.ts

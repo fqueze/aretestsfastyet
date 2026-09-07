@@ -22,12 +22,15 @@
 import {
     type BugFailureCount,
     type BugOccurrence,
+    UNKNOWN_TASK_ID,
     harnessOfOccurrence,
     stripSuiteChunk,
     summaryRemainder,
     testPathCandidates,
     testPathOfLine,
 } from '../sources/intermittents.ts';
+import { testInfoArtifactUrl } from '../links.ts';
+import { type PartitionedMessages, partitionMarkerMessages } from '../model/marker-messages.ts';
 import { configFilter } from './test-stats.ts';
 
 /** Which harness a scan is looking for. */
@@ -205,22 +208,88 @@ export function selectHarness(
 }
 
 /**
+ * The scanned rows whose bug summary names one exact test path.
+ *
+ * The one path→bug selection in this tool. `intermittent --test` reaches it and
+ * so does `fx-tests test`'s "Bugs naming this test" block, and a second
+ * resolver would agree today and drift the first time `scanBugs` learns a new
+ * summary shape.
+ *
+ * Here rather than in a command module because two commands need it and
+ * `lib/` is where shared code lives — the same rule that put `selectHarness`
+ * here, which this sits beside and mirrors: both are pure selections over
+ * `scanBugs`'s output, taking rows and returning rows.
+ *
+ * **Exact match only.** A directory prefix would select several tests, and
+ * several tests have no single bug to drill into. Count-descending, inherited
+ * from `scanBugs`, since a filter preserves order. Empty when nothing names the
+ * path, which is a normal answer rather than an error: the caller decides
+ * whether that is exit 2 or a block it does not print.
+ *
+ * The I/O this needs — the ranking, the summaries, the harness classifier — is
+ * the caller's to fetch, which is what keeps this side of the seam free of
+ * `CommandContext`, progress reporting and CLI exit codes.
+ */
+export function bugsNamingTest(
+    rows: readonly RankedIntermittent[],
+    test: string
+): RankedIntermittent[] {
+    return rows.filter((row) => row.test === test);
+}
+
+/**
  * Counts, per test path, how many occurrences named it — not how many lines.
  *
  * A job emits the marker once per failing assertion, so counting lines can
  * report a path many times more often than the population it is drawn from,
  * beside columns that are per occurrence.
+ *
+ * Reads the partitioned messages, not `lines`, for the reason the
+ * failure-message tally does: a `profile uploaded in …` notice carries the
+ * `TEST-UNEXPECTED-FAIL` marker and a path field of its own, so counting it
+ * ranks artifact metadata as a test. On bug 2060167 that put `shutdown hang` —
+ * a line that is *nothing but* a notice — first with 806 occurrences, above the
+ * test the bug is about. Measured over the top 25 trunk bugs of
+ * 2026-08-28..09-03, 810 of 5,560 occurrences carry a notice-only path that no
+ * failure line names, so this is the common case rather than a corner.
  */
 export function tallyTests(occurrences: readonly BugOccurrence[]): SuiteCount[] {
     return tally(
         occurrences.flatMap((row) => [
             ...new Set(
-                row.lines
-                    .map((line) => testPathOfLine(line))
+                partitionOccurrenceLines(row)
+                    .messages.map((line) => testPathOfLine(line))
                     .filter((path): path is string => path !== null)
             ),
         ])
     );
+}
+
+/**
+ * One occurrence's log lines split into failures and profile artifact names.
+ *
+ * The same `partitionMarkerMessages()` `fx-tests try` runs its `TestStatus`
+ * markers through (`cli/commands/try.ts:1019`), applied to the raw
+ * `TEST-UNEXPECTED-FAIL` lines Treeherder keeps. The marker's message is the
+ * tail of the line and `uploadedProfileName()` searches it, so a raw line needs
+ * no pre-parsing — and running one function over both sources is what keeps
+ * "which of these is a profile notice" a single answer.
+ *
+ * `profile uploaded in profile_foo.js.json` is artifact metadata, not a
+ * failure, and counting it as one put four notices in the top ten of
+ * `--bug 2063582`'s "failure messages" and ranked `shutdown hang` first among
+ * `--bug 2060167`'s "tests named". It belongs to the profile section instead.
+ *
+ * **Every reader of an occurrence's lines goes through here.** `BugOccurrence.
+ * lines` stays raw because `--json`'s `occurrenceRows` promise to keep every
+ * line verbatim (see `normaliseDuration`), so the field cannot be filtered at
+ * the source without breaking that — which makes this the one gate, and a
+ * second direct reader of `lines` a bug. The first version of this change
+ * partitioned at the failure-message tally alone and left `tallyTests` reading
+ * the raw field; that is the defect this docstring exists to prevent recurring.
+ */
+export function partitionOccurrenceLines(occurrence: BugOccurrence): PartitionedMessages {
+    return partitionMarkerMessages(occurrence.lines);
 }
 
 /** Counts occurrences of each name, count-descending then alphabetical. */
@@ -232,6 +301,169 @@ export function tally(names: readonly string[]): SuiteCount[] {
     return [...counts]
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** One per-test profile an occurrence's log lines point at. */
+export interface OccurrenceProfile {
+    /** The artifact filename, e.g. `profile_browser_resize_sidebar-2.js.json`. */
+    filename: string;
+    /**
+     * The raw Taskcluster artifact URL, or `null` when it cannot be built.
+     *
+     * A URL needs a run index and a task ID, and neither is guaranteed: the run
+     * comes from a request that can fail (`withRunIds` warns and yields `null`),
+     * and `taskId` is the string `"unknown"` when Treeherder holds no
+     * Taskcluster metadata for the job. Guessing `runs/0` would print a URL
+     * indistinguishable from a resolved one that 404s — exactly the defect the
+     * run index was added to fix — so the filename is reported without one.
+     */
+    url: string | null;
+    /**
+     * Whether the log named this as the harness's in-job rerun — the
+     * `-2`-suffixed upload.
+     *
+     * Read off the filename the log gave, not inferred. A task that fails twice
+     * uploads both profiles, but Treeherder keeps the retry's messages only, so
+     * the first run's name is usually absent. It is **not** synthesised by
+     * stripping the suffix: `lib/links.ts` states that a caller must not
+     * substitute a guessed filename, and a guess printed beside real data is
+     * indistinguishable from it — while adding nothing, since removing `-2` is
+     * something any reader can do without being told.
+     */
+    isRerun: boolean;
+}
+
+/** The per-test profiles of one occurrence, for a `Profiles` section. */
+export interface OccurrenceProfiles {
+    /** `<taskId>.<runId>`, or `<taskId>` when the run index was not resolved. */
+    run: string;
+    taskId: string;
+    runId: number | null;
+    /**
+     * The configuration that ran, as `<platform>/<buildType> <suite>`.
+     *
+     * **Not a job name**, and deliberately not presented as one. `test
+     * --profiles` prints Treeherder's `job_type_name`
+     * (`test-<platform>/<buildType>-<suite>`), and the bare `test_suite` this
+     * used to print was strictly less — the suite with the platform and build
+     * type stripped, so `mochitest-browser-chrome-5` for every platform alike.
+     *
+     * Reconstructing `job_type_name` from these three fields is what the obvious
+     * fix would be, and it is wrong: Treeherder derives them by *subtracting*
+     * from the job name and gets the boundary wrong on sanitizer builds. A
+     * Windows ASAN job arrives as `platform: "windows11-64-25h2"`,
+     * `build_type: "asan"`, `test_suite: "opt-mochitest-browser-chrome-45"`
+     * while its real name is
+     * `test-windows11-64-25h2-asan/opt-mochitest-browser-chrome-45` — the
+     * `asan` belongs to the platform and the `opt` to the build type, and
+     * nothing in the three fields says so. Measured over the top 25 trunk bugs
+     * of 2026-08-31..09-07, 337 of 6,228 occurrences (5.4%) would get a
+     * fabricated name, and 30 distinct configurations reconstruct wrongly —
+     * including non-test jobs (`snap-upstream-build-amd64-esr/opt`) that have no
+     * `test-` prefix at all.
+     *
+     * So this reports the fields as the API gives them, joined the way the
+     * `--markdown` renderer and the occurrence table already join them. It
+     * carries the same information as a job name without asserting a string
+     * Treeherder would not recognise.
+     */
+    configuration: string;
+    profiles: OccurrenceProfile[];
+}
+
+/**
+ * An occurrence's configuration for display: `<platform>/<buildType> <suite>`.
+ *
+ * Not `occurrenceConfig`, which is `<platform>/<buildType>` and exists to be
+ * *matched* against by `--config`. This one is for reading, so it keeps the
+ * suite — the chunk number included, because a profile belongs to one chunk and
+ * merging them would point at the wrong job.
+ *
+ * The same three fields in the same order as the `Task IDs` markdown section and
+ * the occurrence table, so the three places a reader meets a job in this
+ * command's output agree. See `OccurrenceProfiles.configuration` for why this is
+ * not spliced into a `job_type_name`.
+ */
+export function occurrenceConfiguration(row: BugOccurrence): string {
+    return `${occurrenceConfig(row)} ${row.testSuite}`;
+}
+
+/**
+ * The `-2` rerun suffix the harness appends to a second upload of one test.
+ *
+ * `profile_browser_resize_sidebar-2.js.json` against
+ * `profile_browser_resize_sidebar.js.json`: the suffix sits before the test's
+ * own extension, not at the end of the name.
+ *
+ * Used to **recognise** a name the log gave, never to build one it did not.
+ */
+const RERUN_SUFFIX = /-2(\.\w+\.json)$/;
+
+/**
+ * Every per-test profile one bug's occurrences point at, occurrence order.
+ *
+ * Built from the `profile uploaded in …` notices `partitionOccurrenceLines`
+ * takes out of the failure tally — the same notices, read once for both
+ * purposes — and turned into URLs by `testInfoArtifactUrl()`, which is what
+ * `cli/commands/try.ts:1540` does with the same `profileFilenames` field.
+ * `uploadedProfileUrl()` is the other half of the same pair and re-parses a
+ * message; the filenames are already extracted here, so this calls the shared
+ * URL builder directly.
+ *
+ * **Only filenames a log line actually named.** A task that failed twice
+ * uploads both profiles and Treeherder keeps the retry's messages only, so the
+ * first run's name is usually missing — and it is left missing. Synthesising it
+ * by stripping `-2` is what `lib/links.ts` prohibits ("a caller must not
+ * substitute a guessed filename — nothing in the data supports one"), and it is
+ * information-free besides: the transformation is one any consumer can apply
+ * itself, so printing the result doubles the section with output that only
+ * looks like data.
+ *
+ * No request is made: the occurrence carries the task ID, and `runId` supplies
+ * the run index, so the URL is a composition of data already in hand.
+ *
+ * Occurrences whose lines name no profile are omitted, and an occurrence whose
+ * run index was never resolved is kept with a `null` URL: a row with a task ID,
+ * a filename and no URL still tells a reader where to look, where dropping it
+ * says the profile does not exist and a guessed URL says it is somewhere it is
+ * not.
+ */
+export function occurrenceProfiles(
+    occurrences: readonly BugOccurrence[]
+): OccurrenceProfiles[] {
+    const rows: OccurrenceProfiles[] = [];
+    for (const occurrence of occurrences) {
+        const filenames = partitionOccurrenceLines(occurrence).profileFilenames;
+        if (filenames.length === 0) {
+            continue;
+        }
+        rows.push({
+            run:
+                occurrence.runId === null
+                    ? occurrence.taskId
+                    : `${occurrence.taskId}.${occurrence.runId}`,
+            taskId: occurrence.taskId,
+            runId: occurrence.runId,
+            configuration: occurrenceConfiguration(occurrence),
+            profiles: filenames.map((filename) => ({
+                filename,
+                // `runId` and `taskId` both have to be real. See
+                // `OccurrenceProfile.url`: no guessed `runs/0`, and no
+                // `/task/unknown/` — `"unknown"` is a documented sentinel on
+                // this field (`lib/sources/intermittents.ts`), not a task.
+                url:
+                    occurrence.runId === null || occurrence.taskId === UNKNOWN_TASK_ID
+                        ? null
+                        : testInfoArtifactUrl(
+                              occurrence.taskId,
+                              occurrence.runId,
+                              filename
+                          ),
+                isRerun: RERUN_SUFFIX.test(filename),
+            })),
+        });
+    }
+    return rows;
 }
 
 /** How the drill-down groups one bug's occurrences. */
@@ -326,7 +558,14 @@ export function summariseBug(
         // Per occurrence, like every other tally here: a job emits the marker
         // once per failing assertion, so counting raw lines reports a job that
         // failed eighteen assertions as eighteen jobs.
-        lines: tally(rows.flatMap((row) => [...new Set(row.lines.map(failureLineDetail))])),
+        //
+        // Partitioned first, so a `profile uploaded in …` notice is never
+        // counted as a failure message. See `partitionOccurrenceLines`.
+        lines: tally(
+            rows.flatMap((row) => [
+                ...new Set(partitionOccurrenceLines(row).messages.map(failureLineDetail)),
+            ])
+        ),
         unclassifiedOccurrences: rows.filter(
             (row) => harnessOfOccurrence(row.testSuite) === null
         ).length,

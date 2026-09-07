@@ -44,6 +44,7 @@ import {
     type BugOccurrence,
     type IntermittentsClient,
     IntermittentsError,
+    UNKNOWN_TASK_ID,
     intermittentsClient,
     summaryRemainder,
     testPathCandidates,
@@ -51,7 +52,9 @@ import {
 } from '../lib/sources/intermittents.ts';
 import {
     type ScanHarness,
+    bugsNamingTest,
     failureLineDetail,
+    occurrenceProfiles,
     scanBugs,
     selectHarness,
     stripLogTimestamp,
@@ -80,9 +83,12 @@ interface Fixture {
             push_time: string;
             machine_name: string;
             task_id: string;
+            job_id: number;
             lines: string[];
         }[]
     >;
+    /** Each recorded `job_id`'s Taskcluster run index, from `/api/jobs/`. */
+    runIds: Record<string, number>;
 }
 
 const fixture: Fixture = JSON.parse(await readFile(FIXTURE, 'utf8')) as Fixture;
@@ -108,8 +114,21 @@ function fixtureClient(): IntermittentsClient & { calls: string[] } {
                 pushTime: row.push_time,
                 machineName: row.machine_name,
                 taskId: row.task_id,
+                jobId: row.job_id,
+                runId: null,
                 lines: row.lines,
             }));
+        },
+        async runIdsOfJobs(jobIds): Promise<Map<number, number>> {
+            calls.push(`runids:${jobIds.length}`);
+            // The **recorded** run indexes, so what a test asserts about
+            // `<taskId>.<runId>` is Treeherder's answer rather than this file's.
+            return new Map(
+                jobIds.flatMap((jobId) => {
+                    const runId = fixture.runIds[String(jobId)];
+                    return runId === undefined ? [] : [[jobId, runId] as [number, number]];
+                })
+            );
         },
         async bugSummaries(bugs): Promise<Map<number, string>> {
             calls.push(`bugzilla:${[...bugs].join(',')}`);
@@ -242,8 +261,25 @@ function toOccurrence(row: Fixture['failuresbybug'][string][number]): BugOccurre
         pushTime: row.push_time,
         machineName: row.machine_name,
         taskId: row.task_id,
+        jobId: row.job_id,
+        runId: null,
         lines: row.lines,
     };
+}
+
+/**
+ * One recorded row with its run index filled in, as the command has it.
+ *
+ * `toOccurrence` leaves `runId` null because that is what the client returns;
+ * `withRunIds` resolves it before anything builds a URL. A test about URLs has
+ * to model the resolved state, and doing it through the recorded `runIds` map
+ * keeps it Treeherder's answer rather than a constant.
+ */
+function toResolvedOccurrence(
+    row: Fixture['failuresbybug'][string][number]
+): BugOccurrence {
+    const runId = fixture.runIds[String(row.job_id)];
+    return { ...toOccurrence(row), runId: runId ?? null };
 }
 
 /** The fixture's window, so a test is not affected by today's date. */
@@ -912,6 +948,521 @@ test('a bug with no annotations in the window is exit 2 explaining the window', 
     assert.match(stderr, /--tree all/);
 });
 
+// --- the run index, the profile notices and the profile URLs -------------
+
+test('a task id prints with its run index, as `test --task-ids` does', async () => {
+    // The defect: a subagent took an occurrence's task ID, fetched `runs/0`,
+    // and the annotated failure was not there — run 0 had ended in `exception`.
+    // The recorded window holds one such job, `retry_id` 5, so this asserts
+    // Treeherder's own answer rather than a constructed one.
+    const { code, stdout } = await invoke([
+        'intermittent',
+        '--bug',
+        '2063359',
+        ...WINDOW,
+        '--limit',
+        '0',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    for (const occurrence of fixture.failuresbybug['2063359']!) {
+        const runId = fixture.runIds[String(occurrence.job_id)];
+        assert.ok(
+            stdout.includes(`${occurrence.task_id}.${runId}`),
+            `expected ${occurrence.task_id}.${runId} in the occurrence rows`
+        );
+    }
+    // The one job that is not run 0. Without it this test would pass against a
+    // hardcoded `.0`.
+    assert.match(stdout, /FsWPMrs5RkORDe3E0CLckg\.5/);
+});
+
+test('a run index the API does not answer for is omitted, not guessed as 0', async () => {
+    const client = fixtureClient();
+    const withoutRunIds: IntermittentsClient & { calls: string[] } = {
+        ...client,
+        runIdsOfJobs: () => Promise.resolve(new Map<number, number>()),
+    };
+    const { code, stdout } = await invoke(
+        ['intermittent', '--bug', '2063359', ...WINDOW, '--limit', '0'],
+        withoutRunIds
+    );
+    assert.equal(code, ExitCode.Success);
+    // A guessed `.0` reads exactly like a known one, which is the defect.
+    assert.ok(stdout.includes('FsWPMrs5RkORDe3E0CLckg'));
+    assert.ok(!stdout.includes('FsWPMrs5RkORDe3E0CLckg.'));
+});
+
+test('a profile notice is not counted as a failure message', async () => {
+    // Four of the top eight "failure messages" on live bug 2063582 were
+    // `profile uploaded in …`, which is artifact metadata rather than a failure.
+    const { code, stdout } = await invoke([
+        'intermittent',
+        '--bug',
+        '2062444',
+        ...WINDOW,
+        '--limit',
+        '0',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    const recorded = fixture.failuresbybug['2062444']!;
+    assert.ok(
+        recorded.some((row) => row.lines.some((line) => line.includes('profile uploaded in'))),
+        'the fixture must carry a profile notice for this test to mean anything'
+    );
+    const tally = stdout.slice(stdout.indexOf('Failure messages, per annotated job'));
+    assert.ok(!tally.includes('profile uploaded in'), tally);
+});
+
+test('--profiles emits only filenames a log line named, and labels a rerun', async () => {
+    // This test used to assert the opposite: that a `-2` notice also produced
+    // the first run's URL, synthesised by stripping the suffix. That is a
+    // guessed filename, which `lib/links.ts` prohibits in terms, and it is
+    // information-free — removing `-2` is a transformation any consumer can
+    // apply, so printing the result doubled the section with output that only
+    // looked like data. It now pins the prohibition instead.
+    const { code, stdout } = await invoke([
+        'intermittent',
+        '--bug',
+        '2062444',
+        ...WINDOW,
+        '--profiles',
+        '--limit',
+        '0',
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^Profiles \(raw artifact URLs, for profiler-cli\)$/m);
+
+    // Every filename printed must appear verbatim in some occurrence's log.
+    const named = new Set(
+        fixture.failuresbybug['2062444']!.flatMap((row) =>
+            row.lines.flatMap((line) => {
+                const match = /profile uploaded in (profile_\S+\.json)/.exec(line);
+                return match === null ? [] : [match[1]!];
+            })
+        )
+    );
+    assert.ok(named.size > 0, 'the fixture must name at least one profile');
+    const printed = [...stdout.matchAll(/public\/test_info\/(profile_\S+\.json)/g)].map(
+        (match) => match[1]!
+    );
+    assert.ok(printed.length > 0);
+    for (const filename of printed) {
+        assert.ok(named.has(filename), `${filename} was printed but no log line named it`);
+    }
+
+    // A named `-2` file is still labelled as the rerun: reading the data, not
+    // inventing it.
+    const first = fixture.failuresbybug['2062444']![0]!;
+    const rerun = /profile uploaded in (profile_\S+-2\.\w+\.json)/.exec(first.lines.join('\n'));
+    assert.ok(rerun, 'the fixture row must name a -2 profile');
+    const runId = fixture.runIds[String(first.job_id)];
+    const base = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${first.task_id}/runs/${runId}/artifacts/public/test_info`;
+    assert.ok(stdout.includes(`rerun:   ${base}/${rerun[1]}`), stdout);
+    // The stripped name is never emitted, in any label.
+    assert.ok(
+        !stdout.includes(rerun[1]!.replace(/-2(\.\w+\.json)$/, '$1')),
+        'the first run\u2019s filename was synthesised by stripping -2'
+    );
+    assert.ok(!stdout.includes('first run'), stdout);
+    // The absence is explained once, for the section, not per row.
+    assert.equal(stdout.split('Treeherder keeps only the').length - 1, 1);
+});
+
+test('no profile filename is ever synthesised, over every recorded bug', () => {
+    // The class, not the one case: whatever the log named is what is emitted,
+    // for every bug in the fixture. `lib/links.ts` — "a caller must not
+    // substitute a guessed filename — nothing in the data supports one".
+    for (const [bug, rows] of Object.entries(fixture.failuresbybug)) {
+        const occurrences = rows.map(toResolvedOccurrence);
+        const named = new Set(
+            rows.flatMap((row) =>
+                row.lines.flatMap((line) => {
+                    const match = /profile uploaded in (profile_\S+\.json)/.exec(line);
+                    return match === null ? [] : [match[1]!];
+                })
+            )
+        );
+        for (const built of occurrenceProfiles(occurrences)) {
+            for (const profile of built.profiles) {
+                assert.ok(
+                    named.has(profile.filename),
+                    `bug ${bug} emitted ${profile.filename}, which no log line named`
+                );
+            }
+        }
+    }
+});
+
+test('--json carries the profiles without the flag, and costs no extra request', async () => {
+    const { stdout, calls } = await invoke(['intermittent', '--bug', '2062444', ...WINDOW, '--json']);
+    const parsed = JSON.parse(stdout) as {
+        profiles: { run: string; jobName: string; profiles: { url: string }[] }[];
+    };
+    assert.ok(parsed.profiles.length > 0);
+    assert.ok(parsed.profiles.every((row) => row.profiles.length > 0));
+    // Item 1's "no new network request", asserted against the **whole** call
+    // list rather than a prefix filter. The first version of this test filtered
+    // for a `taskcluster` prefix the fixture client never emits, so it was
+    // always comparing `[]` to `[]` and would have passed had
+    // `occurrenceProfiles` fetched every artifact it names.
+    //
+    // Exactly three: the occurrences, one batched run-index lookup for all
+    // eight of them, and the bug summary. A URL is built from data already in
+    // hand, so adding a request per profile — or per occurrence — fails here.
+    assert.deepEqual(calls, [
+        `failuresbybug:2062444:trunk:${fixture.startday}:${fixture.startday}`,
+        `runids:${fixture.failuresbybug['2062444']!.length}`,
+        'bugzilla:2062444',
+    ]);
+});
+
+test('a pure profile notice is not ranked as a test path', () => {
+    // The defect the first version of this change left behind: the notices were
+    // partitioned out of the failure-message tally but `tallyTests` still read
+    // the raw `lines`, so a line that is *nothing but* a notice was ranked as a
+    // test. These two lines are verbatim from live bug 2060167, where
+    // `shutdown hang` came first with 806 occurrences — above the test the bug
+    // is about. Measured over the top 25 trunk bugs of 2026-08-28..09-03, 810
+    // of 5,560 occurrences carry a notice-only path.
+    const test2060167: BugOccurrence = {
+        bugId: 2060167,
+        jobId: 1,
+        testSuite: 'mochitest-browser-chrome-1',
+        platform: 'linux2404-64',
+        buildType: 'opt',
+        revision: 'abc',
+        tree: 'autoland',
+        pushTime: '2026-09-03 21:00:00',
+        machineName: 'm',
+        taskId: 'T1',
+        runId: 0,
+        lines: [
+            '21:34:29     INFO - TEST-UNEXPECTED-FAIL | browser/components/aiwindow/ui/test/browser/browser_aiwindow_group_tabs_button.js | This test exceeded the timeout threshold.',
+            '21:42:03    ERROR - GECKO(23125) | TEST-UNEXPECTED-FAIL | shutdown hang | profile uploaded in profile_shutdown_hang_23125.json',
+            '21:30:45    ERROR - GECKO(1575) | TEST-UNEXPECTED-FAIL | shutdown hang | profile uploaded in profile_shutdown_hang_1575.json',
+        ],
+    };
+    // `shutdown hang` is the path field of a notice and of nothing else, so it
+    // is not a test and must not be a row.
+    assert.deepEqual(tallyTests([test2060167]), [
+        {
+            name: 'browser/components/aiwindow/ui/test/browser/browser_aiwindow_group_tabs_button.js',
+            count: 1,
+        },
+    ]);
+    const summary = summariseBug(2060167, [test2060167]);
+    assert.deepEqual(summary.tests, tallyTests([test2060167]));
+    assert.ok(!summary.lines.some((entry) => entry.name.includes('profile uploaded in')));
+    // Both notices still reach the profile section — partitioned out of the
+    // tallies, not discarded.
+    assert.deepEqual(
+        occurrenceProfiles([test2060167])[0]!.profiles.map((entry) => entry.filename),
+        ['profile_shutdown_hang_23125.json', 'profile_shutdown_hang_1575.json']
+    );
+});
+
+test('no reader of an occurrence reaches the raw lines past the partition', async () => {
+    // The class rather than the two symptoms: whatever a caller asks for, a
+    // `profile uploaded in …` notice must not appear as a failure message or as
+    // a test path. Checked over every recorded bug and every rendered mode.
+    for (const bug of Object.keys(fixture.failuresbybug)) {
+        const rows = fixture.failuresbybug[bug]!.map(toOccurrence);
+        const summary = summariseBug(Number(bug), rows);
+        for (const [label, counts] of Object.entries({
+            tests: summary.tests,
+            lines: summary.lines,
+        })) {
+            for (const entry of counts) {
+                assert.ok(
+                    !entry.name.includes('profile uploaded in'),
+                    `bug ${bug} ${label} ranks a profile notice: ${entry.name}`
+                );
+            }
+        }
+    }
+    // And through the command, where the tallies are rendered.
+    for (const format of [[], ['--markdown']]) {
+        const { stdout } = await invoke([
+            'intermittent',
+            '--bug',
+            '2062444',
+            ...WINDOW,
+            ...format,
+            '--limit',
+            '0',
+        ]);
+        const tallies = stdout.slice(0, stdout.indexOf('Profiles'));
+        assert.ok(!tallies.includes('profile uploaded in'), tallies);
+    }
+});
+
+test('a profile URL is omitted rather than guessed when the run is unknown', async () => {
+    // The row header already declined to guess `.0`; the URL beneath it did not,
+    // so a `runs/0` URL that 404s was printed as if resolved. Reachable through
+    // the documented degraded path: `withRunIds` warns and yields `null`.
+    const client = fixtureClient();
+    const withoutRunIds: IntermittentsClient & { calls: string[] } = {
+        ...client,
+        runIdsOfJobs: () => Promise.resolve(new Map<number, number>()),
+    };
+    const { code, stdout } = await invoke(
+        ['intermittent', '--bug', '2062444', ...WINDOW, '--json'],
+        withoutRunIds
+    );
+    assert.equal(code, ExitCode.Success);
+    const parsed = JSON.parse(stdout) as {
+        profiles: { runId: number | null; profiles: { url: string | null; filename: string }[] }[];
+    };
+    assert.ok(parsed.profiles.length > 0);
+    for (const row of parsed.profiles) {
+        assert.equal(row.runId, null);
+        for (const profile of row.profiles) {
+            assert.equal(profile.url, null, 'no URL may be built from an unresolved run');
+            assert.ok(profile.filename.length > 0, 'the filename is still reported');
+        }
+    }
+    assert.ok(!stdout.includes('/runs/0/'));
+});
+
+test('a profile with no URL is not rendered, nor is the row it empties', async () => {
+    // A bare filename is not an answer: the run index a reader would need to
+    // build the URL is exactly what is missing. So the entry goes, the row goes
+    // with it when it empties, and the section says why rather than printing an
+    // empty heading — a silent absence reads as "this bug has no profiles".
+    const client = fixtureClient();
+    const withoutRunIds: IntermittentsClient & { calls: string[] } = {
+        ...client,
+        runIdsOfJobs: () => Promise.resolve(new Map<number, number>()),
+    };
+    for (const format of [[], ['--markdown']]) {
+        const { code, stdout } = await invoke(
+            ['intermittent', '--bug', '2062444', ...WINDOW, '--profiles', ...format, '--limit', '0'],
+            withoutRunIds
+        );
+        assert.equal(code, ExitCode.Success);
+        assert.ok(!stdout.includes('no URL'), stdout);
+        assert.ok(!stdout.includes('.js.json'), 'no bare filename may be rendered');
+    }
+    // Text names the cause; markdown drops the section rather than heading an
+    // empty list, as it does for every other empty section.
+    const { stdout: text } = await invoke(
+        ['intermittent', '--bug', '2062444', ...WINDOW, '--profiles', '--limit', '0'],
+        withoutRunIds
+    );
+    assert.match(text, /^Profiles$/m);
+    assert.match(text, /none reachable: .* named a profile/);
+    assert.match(text, /run index did not resolve/);
+    const { stdout: markdown } = await invoke(
+        ['intermittent', '--bug', '2062444', ...WINDOW, '--profiles', '--markdown', '--limit', '0'],
+        withoutRunIds
+    );
+    assert.ok(!markdown.includes('## Profiles'), markdown);
+});
+
+test('the profile row names the platform and build type, not the bare suite', async () => {
+    // `test --profiles` prints Treeherder's full `job_type_name`; this printed
+    // the stripped `test_suite`, so two rows on different platforms read
+    // identically. The three fields are reported as the API gives them rather
+    // than spliced into a job name — see `OccurrenceProfiles.configuration`:
+    // Treeherder mis-splits sanitizer builds, so the splice would be a string
+    // that does not exist for 5.4% of occurrences.
+    const rows = fixture.failuresbybug['2062444']!.map(toResolvedOccurrence);
+    const built = occurrenceProfiles(rows);
+    assert.ok(built.length > 0);
+    for (const row of built) {
+        const source = rows.find((occurrence) => occurrence.taskId === row.taskId)!;
+        assert.equal(
+            row.configuration,
+            `${source.platform}/${source.buildType} ${source.testSuite}`
+        );
+        // The chunk survives: a profile belongs to one chunk, so merging them
+        // would point a reader at a different job.
+        assert.ok(row.configuration.endsWith(source.testSuite));
+    }
+    const { stdout } = await invoke([
+        'intermittent',
+        '--bug',
+        '2062444',
+        ...WINDOW,
+        '--profiles',
+        '--limit',
+        '0',
+    ]);
+    // Only the rows whose URL resolved are rendered, so the assertion is made
+    // against one of those rather than against `built[0]`.
+    const rendered = built.filter((row) => row.profiles.some((entry) => entry.url !== null));
+    assert.ok(rendered.length > 0, 'the fixture must resolve at least one run');
+    for (const row of rendered) {
+        assert.ok(
+            stdout.includes(`${row.run}  ${row.configuration}`),
+            `expected "${row.run}  ${row.configuration}" in the Profiles section`
+        );
+    }
+});
+
+test('a sanitizer build is reported as Treeherder splits it, not as a spliced job name', () => {
+    // The Windows ASAN shape, verbatim from live bug 2021221: the `asan` is in
+    // `build_type` and the `opt` at the head of `test_suite`, while the real job
+    // is `test-windows11-64-25h2-asan/opt-mochitest-chrome-1proc-2`. Splicing
+    // `test-<platform>/<buildType>-<suite>` would assert a job name that does
+    // not exist, so the fields are reported unjoined.
+    const asan: BugOccurrence = {
+        ...fixture.failuresbybug['2062444']!.map(toResolvedOccurrence)[0]!,
+        platform: 'windows11-64-25h2',
+        buildType: 'asan',
+        testSuite: 'opt-mochitest-chrome-1proc-2',
+    };
+    const [row] = occurrenceProfiles([asan]);
+    assert.ok(row);
+    assert.equal(row.configuration, 'windows11-64-25h2/asan opt-mochitest-chrome-1proc-2');
+    // The string Treeherder would not recognise.
+    assert.ok(!row.configuration.includes('test-windows11-64-25h2/asan-opt'));
+});
+
+test('an occurrence with no Taskcluster metadata gets no artifact URL', () => {
+    // `UNKNOWN_TASK_ID` is a documented sentinel on this field, not a task, so
+    // `…/task/unknown/runs/0/artifacts/…` would present a value that cannot be
+    // fetched as one that can.
+    const noMetadata: BugOccurrence = {
+        ...fixture.failuresbybug['2062444']!.map(toResolvedOccurrence)[0]!,
+        taskId: UNKNOWN_TASK_ID,
+    };
+    const [row] = occurrenceProfiles([noMetadata]);
+    assert.ok(row, 'the occurrence is still listed — it named a profile');
+    assert.ok(row.profiles.length > 0);
+    for (const profile of row.profiles) {
+        assert.equal(profile.url, null);
+    }
+});
+
+test('a paginated /api/jobs/ response is refused rather than silently truncated', async () => {
+    // `JOB_BATCH_SIZE` is set below Treeherder's measured page size so one batch
+    // is one page. That is a measurement of someone else's default, and a
+    // smaller page would leave the tail of a batch with no run index — which is
+    // indistinguishable from run 0 to every caller downstream.
+    const client = intermittentsClient({
+        root: 'https://th.test',
+        fetch: (url: string) =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                url,
+                arrayBuffer: () =>
+                    Promise.resolve(
+                        new TextEncoder().encode(
+                            JSON.stringify({
+                                job_property_names: ['id', 'retry_id'],
+                                results: [[1, 0]],
+                                next: 'https://th.test/api/jobs/?id__in=2&page=2',
+                            })
+                        ).buffer as ArrayBuffer
+                    ),
+            }),
+    });
+    await assert.rejects(() => client.runIdsOfJobs([1, 2]), (error: Error) => {
+        assert.ok(error instanceof IntermittentsError);
+        assert.match(error.message, /paginated a 2-job request/);
+        assert.match(error.message, /JOB_BATCH_SIZE/);
+        return true;
+    });
+});
+
+test('--profiles is refused on the ranked list, where a row is a bug', async () => {
+    const { code, stderr } = await invoke(['intermittent', ...WINDOW, '--profiles']);
+    assert.equal(code, ExitCode.Usage);
+    assert.match(stderr, /--profiles needs one bug/);
+    assert.match(stderr, /--bug <id> --profiles/);
+});
+
+// --- --test <path> -------------------------------------------------------
+
+test('bugsNamingTest selects on the exact path, and lives in lib', () => {
+    // Shared by `intermittent --test` and `fx-tests test`'s bug block, so it is
+    // in `lib/query/` beside `selectHarness` rather than exported from a command
+    // module for another command to import across.
+    const scan = scanBugs({
+        ranking: fixture.failures.map((row) => ({ bugId: row.bug_id, count: row.bug_count })),
+        summaries: new Map(
+            Object.entries(fixture.summaries).map(([bug, summary]) => [Number(bug), summary])
+        ),
+        harnessOfPath: fixtureHarnessOfPath,
+    });
+    const path = 'toolkit/profile/test/xpcshell/test_check_backup.js';
+    const matches = bugsNamingTest(scan.rows, path);
+    assert.deepEqual(
+        matches.map((row) => row.bugId),
+        [2063359]
+    );
+    // A directory prefix selects nothing: several tests have no single bug.
+    assert.deepEqual(bugsNamingTest(scan.rows, 'toolkit/profile/test/xpcshell'), []);
+    // Count-descending, inherited from `scanBugs`.
+    const counts = bugsNamingTest(scan.rows, path).map((row) => row.count);
+    assert.deepEqual(counts, [...counts].sort((a, b) => b - a));
+});
+
+test('--test selects the bug by test path, without a bug number', async () => {
+    const { code, stdout } = await invoke([
+        'intermittent',
+        '--test',
+        'toolkit/profile/test/xpcshell/test_check_backup.js',
+        ...WINDOW,
+    ]);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /^Bug 2063359 — /m);
+});
+
+test('--test takes an exact path, not a directory prefix', async () => {
+    const { code, stderr } = await invoke([
+        'intermittent',
+        '--test',
+        'toolkit/profile/test/xpcshell',
+        ...WINDOW,
+    ]);
+    assert.equal(code, ExitCode.NotFound);
+    assert.match(stderr, /no sheriff-annotated bug names the test/);
+    assert.match(stderr, /a directory prefix will not do/);
+});
+
+test('--test lists every bug naming the test rather than choosing one', async () => {
+    // Two bugs on one test is item 5's case: choosing the larger for the reader
+    // hides the one they did not get. The recorded window holds no such pair,
+    // so a second bug with the same summary path is injected over the fixture.
+    const inner = fixtureClient();
+    const path = 'toolkit/profile/test/xpcshell/test_check_backup.js';
+    const twoBugs: IntermittentsClient & { calls: string[] } = {
+        ...inner,
+        async rankBugs(tree, range) {
+            return [...(await inner.rankBugs(tree, range)), { bugId: 9999999, count: 3 }];
+        },
+        async bugSummaries(bugs) {
+            const found = await inner.bugSummaries(bugs);
+            if (bugs.includes(9999999)) {
+                found.set(9999999, `Intermittent ${path} | a second failure of the same test`);
+            }
+            return found;
+        },
+    };
+    const { code, stdout } = await invoke(['intermittent', '--test', path, ...WINDOW], twoBugs);
+    assert.equal(code, ExitCode.Success);
+    assert.match(stdout, /2 sheriff-annotated bugs name /);
+    assert.match(stdout, /\b2063359\b/);
+    assert.match(stdout, /\b9999999\b/);
+    assert.match(stdout, /Drill into one with --bug <id>\./);
+});
+
+test('--test and --bug together are a usage error, not a silent precedence', async () => {
+    const { code, stderr } = await invoke([
+        'intermittent',
+        '--bug',
+        '2063359',
+        '--test',
+        'toolkit/profile/test/xpcshell/test_check_backup.js',
+        ...WINDOW,
+    ]);
+    assert.equal(code, ExitCode.Usage);
+    assert.match(stderr, /both select one bug/);
+});
+
 // --- the tallies are per annotated job -----------------------------------
 
 test('a test path is counted once per job that named it, not once per line', () => {
@@ -930,6 +1481,8 @@ test('a test path is counted once per job that named it, not once per line', () 
             pushTime: '2026-08-10 00:00:00',
             machineName: 'm',
             taskId: 'T1',
+            jobId: 1,
+            runId: 0,
             lines: [
                 '00:00:01     INFO - TEST-UNEXPECTED-FAIL | a/b/test_one.js | first - failed',
                 '00:00:02     INFO - TEST-UNEXPECTED-FAIL | a/b/test_one.js | second - failed',
@@ -952,18 +1505,7 @@ test('no tally can exceed the number of occurrences it was built from', async ()
     // rather than a constructed case: every count in a per-occurrence tally is
     // bounded by the population.
     for (const [bug, rows] of Object.entries(fixture.failuresbybug)) {
-        const occurrences: BugOccurrence[] = rows.map((row) => ({
-            bugId: row.bug_id,
-            testSuite: row.test_suite,
-            platform: row.platform,
-            buildType: row.build_type,
-            revision: row.revision,
-            tree: row.tree,
-            pushTime: row.push_time,
-            machineName: row.machine_name,
-            taskId: row.task_id,
-            lines: row.lines,
-        }));
+        const occurrences: BugOccurrence[] = rows.map(toOccurrence);
         const summary = summariseBug(Number(bug), occurrences);
         for (const [label, counts] of Object.entries({
             jobNames: summary.jobNames,

@@ -44,6 +44,8 @@ export interface BugFailureCount {
 /** One row of `/api/failuresbybug/`, as `FailuresByBugSerializer` returns it. */
 export interface BugOccurrence {
     bugId: number | null;
+    /** Treeherder's own job ID, which `runIdsOfJobs` resolves to a run index. */
+    jobId: number;
     /**
      * The job type with the platform and build type removed:
      * `mochitest-browser-chrome-39`, `xpcshell-spi-nw-2`. The **suite**, not a
@@ -57,11 +59,32 @@ export interface BugOccurrence {
     /** `YYYY-MM-DD HH:MM:SS`, as the API formats it. */
     pushTime: string;
     machineName: string;
-    /** `"unknown"` when Treeherder has no Taskcluster metadata for the job. */
+    /** `UNKNOWN_TASK_ID` when Treeherder has no Taskcluster metadata for the job. */
     taskId: string;
+    /**
+     * Taskcluster's `runs/<n>` for `taskId`, or `null` when it was not resolved.
+     *
+     * **Not on `/api/failuresbybug/`**, which carries only `task_id`. A task
+     * whose first run ended in `exception` is retried, and the annotated failure
+     * is then in run 1 — so a caller that assumes run 0 fetches the wrong
+     * artifacts, or none. `runIdsOfJobs` resolves it from `job_id`; a caller
+     * that has not called it leaves this `null` rather than guessing 0.
+     */
+    runId: number | null;
     /** The job's `TEST-UNEXPECTED-FAIL` log lines. Empty when none were kept. */
     lines: string[];
 }
+
+/**
+ * What `taskId` holds when Treeherder has no Taskcluster metadata for the job.
+ *
+ * `intermittents_view.py` writes the literal string rather than omitting the
+ * field, so it is a value every consumer receives and none can index. Exported
+ * because it is not a null check but a sentinel comparison: a caller building a
+ * Taskcluster URL has to reject it, and `"unknown"` spelled out at each such
+ * site is the same magic string repeated.
+ */
+export const UNKNOWN_TASK_ID = 'unknown';
 
 /** Thrown when Treeherder or Bugzilla answers with something unreadable. */
 export class IntermittentsError extends Error {
@@ -100,6 +123,19 @@ export interface IntermittentsClient {
     rankBugs(tree: string, range: DayRange): Promise<BugFailureCount[]>;
     /** `/api/failuresbybug/`: every occurrence of one bug in the range. */
     occurrencesOfBug(tree: string, range: DayRange, bug: number): Promise<BugOccurrence[]>;
+    /**
+     * `/api/jobs/?id__in=`: the Taskcluster run index of each job, batched.
+     *
+     * The intermittents endpoints do not carry it, and it is not derivable: a
+     * task that was retried has its annotated failure in a run other than 0.
+     * This is the same `/api/jobs/` listing `lib/sources/treeherder.ts` reads,
+     * selected by job ID rather than by push, so the run index comes from
+     * Treeherder's own job record rather than from a Taskcluster run list.
+     *
+     * A job Treeherder does not return is absent from the map rather than
+     * defaulted.
+     */
+    runIdsOfJobs(jobIds: readonly number[]): Promise<Map<number, number>>;
     /** Bugzilla summaries for a set of bug numbers, batched. */
     bugSummaries(bugs: readonly number[]): Promise<Map<number, string>>;
 }
@@ -165,11 +201,13 @@ export function intermittentsClient(options: IntermittentsOptions): Intermittent
                     push_time: string;
                     machine_name: string;
                     task_id: string;
+                    job_id: number;
                     lines: string[];
                 }[]
             >(url);
             return rows.map((row) => ({
                 bugId: row.bug_id,
+                jobId: row.job_id,
                 testSuite: row.test_suite,
                 platform: row.platform,
                 buildType: row.build_type,
@@ -178,8 +216,54 @@ export function intermittentsClient(options: IntermittentsOptions): Intermittent
                 pushTime: row.push_time,
                 machineName: row.machine_name,
                 taskId: row.task_id,
+                runId: null,
                 lines: row.lines,
             }));
+        },
+
+        async runIdsOfJobs(jobIds: readonly number[]): Promise<Map<number, number>> {
+            const found = new Map<number, number>();
+            for (const batch of chunk([...new Set(jobIds)], JOB_BATCH_SIZE)) {
+                if (batch.length === 0) {
+                    continue;
+                }
+                const url = `${root}/api/jobs/?id__in=${batch.join(',')}`;
+                const data = await getJson<{
+                    results?: unknown[][];
+                    job_property_names?: string[];
+                    next?: string | null;
+                }>(url);
+                // `/api/jobs/` is paginated and the page size is Treeherder's
+                // choice — `lib/sources/treeherder.ts` follows `next` for that
+                // reason. `JOB_BATCH_SIZE` is set below the measured page size
+                // so one batch is one page, but "measured" is not "guaranteed":
+                // a smaller page would silently leave the tail of the batch
+                // unresolved, and an unresolved run is indistinguishable from
+                // run 0 to every caller. So it is checked rather than assumed.
+                if (data.next != null) {
+                    throw new IntermittentsError(
+                        `Treeherder paginated a ${batch.length}-job request, so ${JOB_BATCH_SIZE} ` +
+                            `is above its current page size; lower JOB_BATCH_SIZE or follow "next"`,
+                        url
+                    );
+                }
+                const names = data.job_property_names ?? [];
+                const idColumn = names.indexOf('id');
+                const retryColumn = names.indexOf('retry_id');
+                if (idColumn === -1 || retryColumn === -1) {
+                    throw new IntermittentsError(
+                        `Treeherder's job_property_names is missing id or retry_id, so the ` +
+                            `positional rows cannot be decoded; got: ${names.join(', ')}`,
+                        url
+                    );
+                }
+                for (const row of data.results ?? []) {
+                    // A null `retry_id` is how Treeherder writes run 0, the same
+                    // convention `lib/sources/treeherder.ts` reads it under.
+                    found.set(Number(row[idColumn]), Number(row[retryColumn] ?? 0));
+                }
+            }
+            return found;
         },
 
         async bugSummaries(bugs: readonly number[]): Promise<Map<number, string>> {
@@ -207,6 +291,20 @@ export function intermittentsClient(options: IntermittentsOptions): Intermittent
  * Bounded by URL length rather than by the API, which takes a comma-joined `id`.
  */
 export const BUG_BATCH_SIZE = 100;
+
+/**
+ * How many job IDs go in one `/api/jobs/?id__in=` request.
+ *
+ * Bounded by URL length, like `BUG_BATCH_SIZE`: a job ID is nine digits plus a
+ * comma, so 200 of them is a 2 KB query string.
+ *
+ * Also has to stay **below Treeherder's page size**, measured at 2,000 on
+ * 2026-09-04, so that one batch is one page and `runIdsOfJobs` needs no
+ * pagination loop. That is a measurement of someone else's default rather than
+ * a contract, so `runIdsOfJobs` rejects a paginated response instead of
+ * trusting this number.
+ */
+export const JOB_BATCH_SIZE = 200;
 
 /** The query string all three intermittents endpoints share. */
 function rangeQuery(tree: string, range: DayRange): string {

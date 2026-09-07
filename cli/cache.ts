@@ -764,6 +764,7 @@ export function cachedIntermittents<
             range: { start: string; end: string },
             bug: number
         ): Promise<unknown>;
+        runIdsOfJobs(jobIds: readonly number[]): Promise<Map<number, number>>;
         bugSummaries(bugs: readonly number[]): Promise<Map<number, string>>;
     },
 >(
@@ -802,6 +803,15 @@ export function cachedIntermittents<
                 `intermittents:failuresbybug:${tree}:${range.start}:${range.end}:${bug}`,
                 () => inner.occurrencesOfBug(tree, range, bug)
             );
+        },
+        async runIdsOfJobs(jobIds: readonly number[]): Promise<Map<number, number>> {
+            // A completed job's run index never changes, but a job still
+            // running can gain one, so this rides the same one-hour query TTL
+            // rather than claiming to be immutable. Sorted for the reason
+            // `bugSummaries` sorts: call order must not split the entry.
+            const key = `intermittents:runids:${[...jobIds].sort((a, b) => a - b).join(',')}`;
+            const entries = await through(key, async () => [...(await inner.runIdsOfJobs(jobIds))]);
+            return new Map(entries);
         },
         async bugSummaries(bugs: readonly number[]): Promise<Map<number, string>> {
             // A `Map` does not survive `JSON.stringify`, so the entry array is

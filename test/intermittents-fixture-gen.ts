@@ -135,6 +135,30 @@ for (const row of ranking) {
 }
 
 /**
+ * The Taskcluster run index of every recorded job.
+ *
+ * `/api/failuresbybug/` carries `job_id` and `task_id` but no run, and the run
+ * is not derivable: a task retried after an `exception` has its annotated
+ * failure in a later run, and an artifact URL built from `runs/0` 404s. Recorded
+ * from the same `/api/jobs/` listing the client reads, so a test can assert the
+ * printed `<taskId>.<runId>` against Treeherder's own answer rather than an
+ * invented one. This window happens to contain a `retry_id` of 5.
+ */
+const recordedJobIds = [
+    ...new Set(Object.values(failuresbybug).flatMap((rows) => rows.map((row) => row['job_id']))),
+];
+const jobsData = await getJson<{ results?: unknown[][]; job_property_names?: string[] }>(
+    `${BASE}/jobs/?id__in=${recordedJobIds.join(',')}`
+);
+const jobNames = jobsData.job_property_names ?? [];
+const idColumn = jobNames.indexOf('id');
+const retryColumn = jobNames.indexOf('retry_id');
+const runIds: Record<string, number> = {};
+for (const row of jobsData.results ?? []) {
+    runIds[String(row[idColumn])] = Number(row[retryColumn] ?? 0);
+}
+
+/**
  * The published test lists, so the recorded summaries can be classified.
  *
  * Only the paths those summaries actually name are kept: the real lists are
@@ -164,7 +188,8 @@ await writeFile(
                 'summary whose path verifies, one whose path does not (the xpcshell harness ' +
                 'script, a wpt test), and one with no path at all. `knownTestPaths` is the ' +
                 'subset of the published test lists those summaries name, so a test can ' +
-                'classify without reading a 6 MB aggregate.',
+                'classify without reading a 6 MB aggregate. `runIds` is each recorded ' +
+                'job_id\'s Taskcluster run index, which /api/failuresbybug/ does not carry.',
             tree: TREE,
             startday: START,
             endday: END,
@@ -172,6 +197,7 @@ await writeFile(
             summaries,
             knownTestPaths,
             failuresbybug,
+            runIds,
         },
         null,
         1

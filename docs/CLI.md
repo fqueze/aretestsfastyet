@@ -81,7 +81,7 @@ Installed as a `bin` entry in `package.json`; run without installing via
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--harness <xpcshell\|mochitest>` | inferred from the test path, else `xpcshell` — but `mochitest` for `errors` (see below) | Which harness's data files to read. |
+| `--harness <xpcshell\|mochitest>` | inferred from the test path, else `xpcshell` — but `mochitest` for `errors`, and **both** for a directory path on `failures` and `flaky` (see below) | Which harness's data files to read. |
 | `--json` | off | Emit JSON instead of text. Stable shape, documented per command. |
 | `--markdown` | off | Emit Markdown (tables, fenced blocks). For pasting into a bug or PR. |
 | `--limit <n>` | varies per command | Max rows. `0` means no limit. |
@@ -132,6 +132,25 @@ That misclassifies a mochitest-plain `test_foo.js`, and the symptom is
 indistinguishable from a typo: the CLI reads xpcshell data and does not find the
 test. Telling the caller to retry with the other harness is not enough — the tool
 knows which harness holds it and should just look.
+
+A **directory** has no filename at all, so the same fallthrough sent
+`failures --path <dir>` and `flaky <dir>` to xpcshell with the same misleading
+"check your path for typos". Nothing in the aggregates says which harness runs a
+folder — that is in its manifests, and the CLI has no mozilla-central checkout —
+so with no `--harness` both aggregates are read and the data decides: the harness
+with rows is printed, both are when both have rows (each under its own header,
+and `--json` wraps them as `{ "harnesses": [...] }`), and the not-found message
+appears only when neither has any, and it names both files it searched. The rule
+is `harnessesForPathFilter()` (`lib/model/harness.ts`), shared by both commands.
+An explicit `--harness`, and a query with no path at all, are never widened.
+
+Two limits worth stating, because both are deliberate. **`failures` and `flaky`
+only**: `issues`, `crashes` and `skips` take the same `--path` and still read
+xpcshell alone. And a path naming a test **file** is not widened either — these
+commands do not call `detectHarness()` at all, so `--path <some>/browser_x.js`
+reads xpcshell like any other path. `fx-tests test <path>` is the per-file view,
+and it resolves a file across both harnesses through
+`lib/query/test-lookup.ts`.
 
 ### A test path is resolved, not required
 
@@ -283,7 +302,22 @@ rather than literally yesterday. This is the same effect that makes
 
 ### Task IDs and profile URLs
 
-`--task-ids` prints the raw task IDs.
+`--task-ids` prints the raw task IDs, grouped under a date subheading, with the
+**real** Taskcluster job name — chunk suffix included, `…-browser-chrome-8`, so
+it can be pasted into a Treeherder search. There is no status column: the kind
+of failure belongs to the signature, so `Issues` shows it and `--issue <n>`
+narrows to one, naming it in the heading. The aggregate records a job's failure
+once per attempt, so the same `(taskId, retryId)` can appear more than once —
+usually under a *different* message, which stays a separate row. Only entries
+identical in every printed field collapse, into one row with an `×n` marker.
+
+So the printed row count is **not** the job count, and the heading states the
+job count outright — `Task IDs (6409 jobs)` — which is the number the verdict
+quotes. Summing `occurrences` gives the failure total instead.
+
+`--issue <n>` narrows the list to one signature, by the `Issues` row's printed
+number. The `Issues` block is numbered for this; `--limit` hides rows but does
+not renumber them.
 
 `--profiles` prints **raw profile JSON URLs** — Taskcluster artifact URLs, not
 `profiler.firefox.com/from-url/...` links. The consumer is
@@ -299,7 +333,8 @@ Two kinds of profile, with different availability:
   retry alone —
   `…/task/<taskId>/runs/<retryId>/artifacts/public/test_info/profile_resource-usage.json`.
   Shows whether a timeout was the test being slow or the machine saturated.
-  Available for any job, so any command with a task ID can emit it.
+  Available for any job, so any command with a task ID can emit it. It also
+  holds the job's per-test outcomes, which is what `fx-tests task` reads.
 - **Per-test failure profile**, uploaded only when a test fails: the filename is
   *not* derivable from the task ID. It appears in the failure message as
   `"profile uploaded in profile_<name>.json"`, so getting it means reading that
@@ -309,9 +344,13 @@ Two kinds of profile, with different availability:
 For commands working from aggregated data the failure message is in the data
 file, so the same extraction applies. In practice few tests keep a
 `profile uploaded in …` message there, so `fx-tests test --profiles` is
-resource-usage profiles plus the occasional per-test URL, and it points at
-`fx-tests try <rev> --profiles` for the per-test profiles of a push. Where no
-name is found no URL is emitted — the command does not guess a filename.
+resource-usage profiles plus the occasional per-test URL. Where no name is found
+no URL is emitted — the command does not guess a filename.
+
+When it extracted none it points at
+`fx-tests intermittent --test <path> --profiles`, which needs only the path —
+unlike `fx-tests try <rev> --profiles`, which it used to name and which is no use
+on a trunk intermittent with no try push.
 
 Progress and diagnostics go to **stderr**; only the requested data goes to
 **stdout**, so `fx-tests ... > out.md` and piping into `jq` both behave.
@@ -362,6 +401,19 @@ Skips
   672x  skip-if: os == 'android'      (4 android configs × 168 runs)
 ```
 
+The `Issues` section is headed `Issues (first failure per run)`, and that is
+what the counts are. A failing browser-chrome run logs every `TEST-UNEXPECTED`
+line — five distinct messages is ordinary — and the aggregate keeps only the
+first, so a row means "runs whose first failure was this" and the rows sum to
+the failure total. There is no flag to show the rest; the aggregate does not
+retain them.
+
+Messages are **wrapped, never truncated**: they run to 350 characters, so no
+one line holds both the message and what distinguishes it from its neighbours.
+Rows sharing a long prefix group together — the first prints in full, the rest
+print `↑ same as 1, but line 10651"…` — so the failure is legible without a
+second `--json` call.
+
 Options:
 
 - `--coverage` — **every** config the test ran on, passing ones included, with
@@ -374,10 +426,42 @@ Options:
 - `--recent-days <n>` — override the automatically-sized recent window
   (see "recent window" below).
 - `--task-ids`, `--links` — provenance for each failure (see above).
+- `--issue <n>` — with `--task-ids`, only the tasks whose failure was row *n* of
+  the `Issues` block, which is numbered on screen for this.
 - `--durations` — per-config run-time distribution (min/median/p95/max) from
   the pass durations, for "is this test slow?" rather than "is it failing?".
 - `--history` — a per-day sparkline of pass/fail counts, which distinguishes
-  "broken since Tuesday" from "flaky for a month".
+  "broken since Tuesday" from "flaky for a month". The default output points at
+  it when a day's fail+timeout+crash count is more than an order of magnitude
+  from the window median, counting days with no runs.
+- `--bugs` — the sheriff-annotated bugs naming this test, as a block under the
+  verdict. The only flag here that queries a live API (Treeherder and Bugzilla)
+  rather than the published aggregate, so it is off by default; see the
+  `annotatedBugs` shape below.
+
+#### `--bugs`: the `annotatedBugs` JSON shape
+
+`--help` describes the flag. What it cannot carry is the `--json` contract, which
+has four spellings meaning three different things — a caller that collapses any
+two of them reports a confidently wrong answer:
+
+| `annotatedBugs` | meaning |
+| --- | --- |
+| *key absent* | `--bugs` was not passed. No request was made. |
+| `[]` | Asked: no annotated bug names this test. |
+| `[{bugId, bugSummary, count, days, tree}, …]` | Asked, count-descending. |
+| `{"error": "…"}` | Asked, and the lookup failed. Also warned on stderr. |
+
+The unasked state is an **absent key** (`'annotatedBugs' in result`), not
+`null` — `null` reads as "no bugs", the opposite of what it would mean.
+`{error}` is a warning rather than a non-zero exit, because everything else the
+command prints came from a published file and a live-API outage must not take
+that answer with it; keeping it distinct from `[]` stops a consumer reading an
+outage as "this test has no bugs". `bugSummary` is the Bugzilla summary minus
+the triage prefix and the test path.
+
+`days` is `intermittent`'s 7-day window, not `test`'s 21: the count has to agree
+with the `fx-tests intermittent --bug <id>` command printed beside it.
 
 #### `--coverage`: where does this test actually run?
 
@@ -506,7 +590,7 @@ platform it is scheduled on. There is no list of configs it was not scheduled
 on, and no platform entry with both counts zero — see `--coverage` above for
 why absence is the answer rather than something to enumerate.
 
-### `fx-tests try <revision>` — triage a Try push
+### `fx-tests try <revision|treeherder-url|landoCommitID>` — triage a Try push
 
 The command most useful to an agent that just pushed to Try. Aggregates the
 push's test failures, leads with the ones that failed **every run of some
@@ -615,6 +699,38 @@ the first section — the highest-signal output for an agent), `--all-jobs`
 (read the passing test jobs too — see below), `--other-jobs` (list the non-test
 job failures), `--task-ids`, `--profiles`, `--config <list>`,
 `--concurrency <n>` (default 8).
+
+**The argument does not have to be a revision.** `try --help` has the details;
+the rule is:
+
+| Argument | Read as |
+| --- | --- |
+| `4f2c1a9e8b3d` | a revision |
+| all digits, fewer than 8 characters | a `landoCommitID` |
+| a Treeherder URL with `revision=` | that revision, directly |
+| a Treeherder URL with `landoCommitID=` | that landing job |
+
+A short all-digit argument is too short to be a revision anyone would paste, so
+it goes to Lando; 8 characters or more, or any hex letter, is a revision. A
+`landoCommitID` is resolved through Lando's `/landing_jobs/<id>/` before
+anything else — a URL's own `landoInstance` picks the host, a bare ID uses
+`lando.moz.tools` — and a URL's `repo=` becomes the default `--project`. Only
+`treeherder.mozilla.org` and `treeherder.allizom.org` count as Treeherder URLs.
+
+**Not** through Treeherder's push API: it accepts `lando_instance` and
+`lando_commit_id`, echoes them back under `filter_params` and ignores them, so a
+lookup built on it returns whatever landed most recently and triages the wrong
+push while looking correct.
+
+A job Lando has not landed yet has no push to triage, so its status goes to
+stderr and the command stops, exiting 0:
+
+```
+$ fx-tests try <id-of-a-queued-landing>
+Lando job 87341 is SUBMITTED and has no revision yet, so there is no push to triage.
+```
+
+An unknown ID is exit 2; a URL naming two landing jobs is exit 1.
 
 **`--all-jobs` changes which jobs are read, not which rows are printed.** By
 default the command reads one profile per **failed** test job, which is what
@@ -739,6 +855,55 @@ days?, lowConfidence?}`, the value `try.html`'s flakiness column shows —
 for. `central.failRate` is retained beside them as the whole-test, all-platform
 rate; read `headline.rate` for the comparison against this push.
 
+### `fx-tests task <taskId>` — what happened in one job
+
+`fx-tests try` narrowed to a single task: same per-test outcomes, same row
+shape, without the perma-fail verdict, the central comparison or the
+per-configuration aggregation, each of which is a claim about several
+configurations. It reports every outcome the profile recorded — the failures by
+default, and `--passed` adds the rest. Run `fx-tests task --help` for the flags.
+
+Its source is the job's `public/test_info/profile_resource-usage.json`, parsed by
+the same `parseTestMarkers()` (`lib/model/test-markers.ts`) that `try` uses —
+the URL `try --profiles` and `test --profiles` have printed all along.
+`<taskId>.<retryId>` is accepted with `.0` implied, as `crash` accepts it.
+
+**The header's three counts are independent; none is derivable from another.**
+
+| Count | Is | Is **not** |
+| --- | --- | --- |
+| `tests` | distinct test paths | — |
+| `executions` | `Test` markers, after path normalization | `tests` + reruns |
+| `rerunCount` | markers inside the harness's retry phase | `executions - tests` |
+
+A test listed in two manifests executes twice under one path, since
+`normalizeTestPath` strips the `manifest.toml:` prefix that told them apart, so
+`executions - tests` overstates the reruns — 325 against 7 on one measured job.
+`Outcomes, counted per test` likewise does not partition `tests`: a test that
+failed and was then rescued on rerun counts under both `FAIL` and `PASS`.
+
+**Exit codes**, beyond the table at the end of this file:
+
+| | |
+| --- | --- |
+| missing profile (expired, or never uploaded) | **4**, permanent |
+| 5xx | **3** |
+| task ID Taskcluster will not parse (HTTP 400) | **1** |
+
+The 400 rule is `task`'s alone — a retry loop over a typo never terminates —
+and `crash` still reports the same 400 as 3, so the same typo yields different
+codes from the two commands. A job killed for exceeding `maxRunTime` uploaded a
+partial stream rather than a profile, and is reported as that rather than as an
+unreadable download.
+
+`--json` shape: `{ taskId, retryId, jobName, project, revision, treeherderUrl,
+profileUrl, testCount, executionCount, rerunCount, statusCounts, failures[],
+passed[] }`. The four identity fields are `null` when the task definition could
+not be read; they are header presentation and cost no rows. Each failure carries
+`path`, `failureCount` (what rows are ranked on), `executionCount`, `statuses[]`
+(failing only), `passedOnRerun`, `parallelOnly`, `messages[]`, `allMessages[]`,
+`testProfiles[]` — absolute URLs, which the text output shortens to filenames.
+
 ### `fx-tests issues` — what is failing right now, across the tree
 
 The triage view, and **it leads with components rather than tests** — the same
@@ -780,6 +945,10 @@ Options: `--component <substring>`, `--path <prefix>` (directory subtree),
 `--group-by message` is the "one bug, many tests" view: a single harness
 change or infra fault often shows up as the same message across dozens of
 tests, and grouping by message makes that one line instead of thirty.
+
+`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with
+rather than the issues counted here — see §`fx-tests guide`'s
+`annotations-are-not-failures`, which `issues --help` also points at.
 
 `--sort count` ranks on fail+timeout+crash+skip — every outcome, not just the
 `--type` union, which is what makes it different from `--sort issues`. It means
@@ -1077,7 +1246,7 @@ a failure nobody triaged has no row at all. Use `issues` and `flaky` for the
 aggregates' view.
 
 ```
-$ fx-tests intermittent --limit 5
+$ fx-tests intermittent --harness mochitest --limit 5
 
 Sheriff-annotated mochitest intermittents on trunk, 2026-08-12 to 2026-08-18
 
@@ -1099,7 +1268,8 @@ count = jobs sheriffs annotated with this bug.
 
 Options: `--tree <name>` (a repository, a repo group — `trunk`,
 `firefox-releases`, `comm-releases` — or `all`; default `trunk`), `--bug <id>`,
-`--harness <mochitest|xpcshell|unknown>`. Omit `--harness` for every bug; `--since <n>` / `--day <date>` set the window, default 7 days.
+`--harness <mochitest|xpcshell|unknown>`, `--test <path>`, `--history`,
+`--profiles`. Omit `--harness` for every bug; `--since <n>` / `--day <date>` set the window, default 7 days.
 
 The test path is a real path, so it pastes straight into `fx-tests test <path>`,
 which is where you dig into one of these failures.
@@ -1139,8 +1309,9 @@ the two harnesses:
 The unfiltered list is the honest default: the tool ranks what sheriffs
 annotated, and the harness is an attribute of a row rather than a precondition
 for appearing. An `[taskcluster:error]` bug outranking every real test failure is
-a fact about the window, so it appears — marked `(no test named)`, since it has
-no path to show, and never silently blank.
+a fact about the window, so it appears — with an empty `test` cell, since it has
+no path to show, and its message under `failure` where the other rows' messages
+are.
 
 #### What it costs, and why the ranking is complete
 
@@ -1169,26 +1340,39 @@ row of the selection.
 #### `--bug <id>` — one bug's occurrences
 
 ```
-$ fx-tests intermittent --bug 1829935
+$ fx-tests intermittent --bug 1829935 --since 14
 
-Bug 1829935 — Frequent netwerk/test/browser/browser_103_cleanup.js | single tracking bug
-127 sheriff annotations on trunk, 2026-08-12 to 2026-08-18
+Bug #: 1829935
+Summary: Frequent netwerk/test/browser/browser_103_cleanup.js | single tracking bug
+106 sheriff annotations on trunk, 2026-08-25 to 2026-09-07
+
+Failure messages, per annotated job
+    106x  finished in <n>ms
+    106x  test_103_cancel_parent_connect - "" == "parent-connect-timeout"
+      4x  test_xpcom_graph_wait - AfterRunBackgroundTaskNamed: should have no unexpected …
+  … 4 more (--limit 0 for all)
 
 Job names, chunk numbers merged
-     99x  mochitest-browser-chrome
-     28x  mochitest-browser-chrome-no-nv
+     87x  mochitest-browser-chrome
+     19x  mochitest-browser-chrome-no-nv
 
 Platforms
-     99x  macosx1500-aarch64
-     28x  macosx1500-aarch64-shippable
+     88x  macosx1500-aarch64
+     18x  macosx1500-aarch64-shippable
 
 Build types
-    114x  opt
-     13x  debug
+     99x  opt
+      7x  debug
 ```
 
-Job names, platforms, build types, trees, tests and failure messages, then the
-occurrence rows with their task IDs.
+Failure messages first — what the annotated jobs printed, where the four axes
+below are guessable — then job names, platforms, build types, trees and tests,
+then the occurrence rows with their task IDs.
+
+`Summary:` is keyed on its own line because it is the Bugzilla summary, which is
+regularly **not** the failure annotated today: on bug 2036743 it named service
+CIDs from another repository while every annotated job carried a different one.
+What is failing now is in `Failure messages`.
 
 **Chunk numbers are merged.** `mochitest-browser-chrome-1` through `-12` are one
 configuration run twelve ways, so grouping the raw values answers "where does
@@ -1205,19 +1389,24 @@ test path 2,486 times against 140 occurrences.
 `--harness` and `--config` both narrow the drill-down, and compose:
 
 ```
-$ fx-tests intermittent --bug 1829935 --config debug
+$ fx-tests intermittent --bug 1829935 --since 14 --config debug
 
-Bug 1829935 — Frequent netwerk/test/browser/browser_103_cleanup.js | single tracking bug
-13 of 127 sheriff annotations match the filter on trunk, 2026-08-12 to 2026-08-18
+Bug #: 1829935
+Summary: Frequent netwerk/test/browser/browser_103_cleanup.js | single tracking bug
+7 of 106 sheriff annotations match the filter on trunk, 2026-08-25 to 2026-09-07
+
+Failure messages, per annotated job
+      7x  finished in <n>ms
+      7x  test_103_cancel_parent_connect - "" == "parent-connect-timeout"
 
 Job names, chunk numbers merged
-     13x  mochitest-browser-chrome
+      7x  mochitest-browser-chrome
 
 Platforms
-     13x  macosx1500-aarch64
+      7x  macosx1500-aarch64
 
 Build types
-     13x  debug
+      7x  debug
 ```
 
 `--config` matches a substring of `<platform>/<buildType>`, the same way
@@ -1225,7 +1414,7 @@ Build types
 and `macosx1500-aarch64/debug` all work.
 
 Two properties worth relying on. **The header states the filter's effect** —
-`13 of 127`, not a bare `13` — because a smaller number on its own is
+`7 of 106`, not a bare `7` — because a smaller number on its own is
 indistinguishable from the bug having got quieter. And **every section comes from
 the same filtered population**: the counts in Job names, Platforms, Build types
 and Trees all sum to the header's figure, so no table disagrees with the total
@@ -1238,6 +1427,132 @@ summary names, because a bug spans many jobs; here the row itself says what ran.
 
 `--config` is **refused on the ranked list**, where the rows are bugs and a bug
 spans every configuration it was annotated on. The refusal points at `--bug`.
+
+##### `--bug`/`--test` provenance, and what the fields mean
+
+`--help` describes the flags; this is only what it cannot carry.
+
+| field | meaning |
+| --- | --- |
+| task id column | `<taskId>.<runId>`, as `test --task-ids` prints it. The run is **not** always 0: a task retried after an `exception` has its annotated failure in a later run, so a URL built from `runs/0` 404s. Resolved from `job_id` via `/api/jobs/`, batched at `JOB_BATCH_SIZE` (so `ceil(occurrences / 200)` extra requests, not one); if that fails the report still prints, warned, with bare task IDs. |
+| `Profiles` row | `<taskId>.<runId>  <platform>/<buildType> <suite>`. The three fields as Treeherder sends them, **not** spliced into a `job_type_name`: it mis-splits sanitizer builds (`build_type: "asan"`, `test_suite: "opt-mochitest-…"` for a job really named `…-asan/opt-mochitest-…`), so a splice would be a string that does not exist for ~5% of occurrences. |
+| `Profiles` entries | Only filenames a log line named — never a synthesised one. A test that failed twice uploads a `-2`-suffixed rerun profile *and* a first-run one, but Treeherder keeps the retry's log messages only, so usually just the `-2` name is available; the first is left unlisted rather than guessed by stripping the suffix. A named `-2` file is labelled `rerun`. |
+| omitted rows | A profile whose URL cannot be built — run index unresolved, or `task_id` is the sentinel `unknown` — is **not printed**, and a row it empties goes with it. No `runs/0` is ever guessed. If that empties the section, one line names the cause. |
+| `--json` `profiles[]` | `{run, taskId, runId, configuration, profiles: [{filename, url, isRerun}]}`. Present without `--profiles`, since it costs no request. `url` is `null` where the text renderer omits the entry; `runId` is `null` when unresolved. |
+
+The `profile uploaded in …` notices are partitioned out of **every** tally, so
+they appear neither under `Failure messages` nor under `Tests named`. They are
+not failures and not tests; they are the input to `Profiles`. Note that a path
+field is not always a test name — `leakcheck` is a real failure whose message is
+a leak report, and it keeps its row.
+
+#### `--test <path>` — the bug for a failing test
+
+Someone starting from a red test does not have a bug number. `--test` takes the
+exact test path and drills into the bug whose summary names it, using the same
+ranking `intermittent` already builds:
+
+```
+$ fx-tests intermittent --test browser/components/sidebar/tests/browser/browser_resize_sidebar.js
+
+Bug #: 2063582
+Summary: Intermittent browser/…/browser_resize_sidebar.js | single tracking bug
+221 sheriff annotations on trunk, 2026-08-21 to 2026-09-03
+…
+```
+
+**An exact path only** — not a directory prefix, unlike `errors --test`: a prefix
+matching several tests has no single bug to drill into. When several bugs name
+one test, all of them are listed with their counts rather than one being chosen
+for you. When none does, exit 2 says so.
+
+It is `--test` and not `--path` for the reason the rest of the CLI splits them:
+`--path <prefix>` filters many tests on `issues`, `failures`, `crashes`, `skips`
+and `flaky`, while `--test <path>` selects one test on `try` and `errors`. This
+selects one, so it is `--test`.
+
+#### `--profiles` — the Gecko profile of each failing job
+
+Every occurrence's log lines carry the artifact name of the per-test profile the
+harness uploaded, and the occurrence carries the task ID and run, so the URL is a
+composition of data already in hand — **no extra request**:
+
+```
+$ fx-tests intermittent --bug 2063582 --profiles
+
+…
+Profiles (raw artifact URLs, for profiler-cli)
+  c68SpT41QyiHK2XwZUcNtg.0  mochitest-browser-chrome-no-nv-5
+    first run: https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/c68SpT41QyiHK2XwZUcNtg/runs/0/artifacts/public/test_info/profile_browser_resize_sidebar.js.json
+    rerun:     https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/c68SpT41QyiHK2XwZUcNtg/runs/0/artifacts/public/test_info/profile_browser_resize_sidebar-2.js.json
+  (first run: not named in the log — Treeherder keeps the retry’s messages only — but uploaded alongside the rerun)
+```
+
+Raw artifact URLs, for `profiler-cli`, in the shape `fx-tests test --profiles`
+uses. **Both uploads of a task that failed twice are emitted.** The harness
+reruns a failing test and uploads a second, `-2`-suffixed profile, but
+Treeherder's log parser keeps the messages of the retry only — on bug 2063582,
+198 of 221 occurrences named only the `-2` profile — so the first run's URL is
+derived from the `-2` name and labelled `first run`. Comparing the two is what
+the pair is for: dropping either loses the evidence that the test passed on the
+rerun, or did not.
+
+`--profiles` is refused on the ranked list, where a row is a bug rather than a
+job. `--json` carries the same `profiles` array unconditionally, since it costs
+no request and a machine-readable shape should not change with a flag.
+
+##### The profile notice is not a failure message
+
+The `profile uploaded in …` lines are partitioned out before the failure tally,
+by the same `partitionMarkerMessages()` `fx-tests try` runs its markers through.
+Before that, four of the top eight "failure messages" on bug 2063582 were
+artifact metadata. There is no flag to bring them back: the notice is not a
+failure, and it is reported in `Profiles` instead.
+
+#### `--json`: the two row shapes
+
+Neither shape is in `--help`, so both are specified here; `--json` always
+carries every row of the selection, never a prefix.
+
+**A ranking row** (the default list):
+
+| field | type | what it holds |
+| --- | --- | --- |
+| `bugId` | number | the Bugzilla number |
+| `count` | number | jobs sheriffs annotated with this bug in the window |
+| `harness` | `mochitest`\|`xpcshell`\|`unknown` | from the test the summary names |
+| `test` | string\|null | the verified test path; `null` on an `unknown` row |
+| `failure` | string | the summary with its triage prefix and test path cut out |
+| `bugSummary` | string\|null | the whole Bugzilla summary, uncut |
+
+`failure` is what the text table's `failure` column prints; `bugSummary` keeps
+the triage prefix and path it strips, which a caller reconstructing a bug
+reference needs and would otherwise cost one Bugzilla request per bug.
+
+**An occurrence row** (`--bug`/`--test`, in `occurrenceRows`), one per annotated
+job, all of them whatever `--limit` says:
+
+| field | what it holds |
+| --- | --- |
+| `bugId`, `tree`, `revision`, `pushTime` | which push, on which repository |
+| `testSuite` | the raw job suite, **chunk number kept** (the `jobNames` tally merges it) |
+| `platform`, `buildType` | `--config` matches `<platform>/<buildType>` |
+| `machineName` | the worker that ran the job — `macmini-m4-76` |
+| `jobId`, `taskId`, `runId` | `runId` is `null` when unresolved, never a guessed `0` |
+| `lines` | the job's `TEST-UNEXPECTED-FAIL` lines, verbatim |
+
+Worker identity is regularly the decisive variable in an intermittent, so
+`machineName` is there; there is no `--by-worker` tally, since one field the
+caller groups itself is the right weight for an occasional analysis.
+
+```
+$ fx-tests intermittent --bug 2036743 --json | jq -r '.occurrenceRows[].machineName' | sort | uniq -c | sort -rn | head
+```
+
+The `--bug` response also carries `bugSummary` (**not** the observed failure,
+which is in `lines`), plus `history` and `profiles` — both unconditional, since
+a machine-readable shape whose fields depend on a flag is what `--json` exists
+to avoid.
 
 ### `fx-tests summary` — the landing-page numbers
 
@@ -1379,6 +1694,10 @@ table showing 21, with nothing saying so.
 terminal cannot be drilled) and `--group-by days` is the trend as a table of
 numbers, one row per day with a centred 7-day mean. There is no ASCII chart: see
 Non-goals.
+
+`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with
+rather than the tests counted flaky here — see §`fx-tests guide`'s
+`annotations-are-not-failures`, which `flaky --help` also points at.
 
 #### `fx-tests flaky <path>` — the flaky tests in a folder
 
@@ -1573,8 +1892,9 @@ inspects the local cache.
 
 The 3/4 split exists so a script can tell "try again in a minute" from "this crash
 dump is never coming back". Taskcluster artifacts expire (typically after a year,
-sooner for some), so `fx-tests crash` on an old task exits 4 — the crash existed,
-its dump is gone — while the same command during a Taskcluster outage exits 3.
+sooner for some), so `fx-tests crash` or `fx-tests task` on an old task exits 4 —
+the job ran, its artifact is gone — while the same command during a Taskcluster
+outage exits 3.
 
 `fx-tests try` exits 0 whether or not it found failures: the failures are the
 answer, not an error. Scripts should branch on `--json` output, not the exit
@@ -1602,6 +1922,7 @@ code.
 | --- | --- | --- |
 | `test <path>` | 64-bucket file, or daily with `--day` | Is this test failing, where, since when, and where does it run at all? |
 | `try <rev>` | Treeherder + 21-day aggregate | Which failures in my push are mine? |
+| `task <taskId>` | that job's `profile_resource-usage.json` | What happened in one job: every test outcome its profile recorded. |
 | `issues` | `-issues.json` | What is failing across the tree? |
 | `failures` / `crashes` | `-issues.json` | Grouped by message / signature. |
 | `crash <task-id> <minidump>` | task artifact | What crashed or deadlocked, and where? |

@@ -1718,6 +1718,7 @@ export function checkIntermittents(c: Checker, data: unknown, _ctx: FileContext)
         'summaries',
         'knownTestPaths',
         'failuresbybug',
+        'runIds',
     ]);
     c.string(data['note'], '.note');
     c.string(data['tree'], '.tree');
@@ -1782,6 +1783,19 @@ export function checkIntermittents(c: Checker, data: unknown, _ctx: FileContext)
         }
     }
 
+    // `/api/failuresbybug/` carries no run index, so it is recorded separately
+    // from `/api/jobs/` and joined on `job_id`. A recorded job with no run index
+    // is the same silent-subsetting failure the rest of this file catches: the
+    // occurrence would print a bare task ID and the test asserting the run would
+    // pass vacuously.
+    const runIds = new Set<string>();
+    if (c.object(data['runIds'], '.runIds')) {
+        for (const [key, value] of Object.entries(data['runIds'] as Record<string, unknown>)) {
+            runIds.add(key);
+            c.integer(value, `.runIds["${key}"]`);
+        }
+    }
+
     if (!c.object(data['failuresbybug'], '.failuresbybug')) {
         return;
     }
@@ -1828,7 +1842,16 @@ export function checkIntermittents(c: Checker, data: unknown, _ctx: FileContext)
             c.string(row['revision'], `${rowAt}.revision`);
             c.string(row['tree'], `${rowAt}.tree`);
             c.string(row['push_time'], `${rowAt}.push_time`);
-            c.integer(row['job_id'], `${rowAt}.job_id`);
+            if (
+                c.integer(row['job_id'], `${rowAt}.job_id`) &&
+                !runIds.has(String(row['job_id']))
+            ) {
+                c.error(
+                    `job ${String(row['job_id'])} has no entry in .runIds, so its run index ` +
+                        `is unknown`,
+                    `${rowAt}.job_id`
+                );
+            }
             c.string(row['machine_name'], `${rowAt}.machine_name`);
             // `"unknown"` when Treeherder has no Taskcluster metadata for the
             // job (`intermittents_view.py:98`), so it is a string and never

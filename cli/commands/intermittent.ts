@@ -12,8 +12,8 @@
  */
 
 import type { OptionSpecs, ParsedArgs } from '../args.ts';
-import { numberOption, stringOption } from '../args.ts';
-import { type CommandContext, emit, progress } from '../context.ts';
+import { boolOption, numberOption, stringOption } from '../args.ts';
+import { type CommandContext, emit, progress, warn } from '../context.ts';
 import { notFoundError, upstreamError, usageError } from '../errors.ts';
 import * as md from '../format/markdown.ts';
 import { toJson } from '../format/json.ts';
@@ -40,11 +40,14 @@ import {
     type DrilldownFilter,
     type HarnessOfPath,
     type HarnessSelector,
+    type OccurrenceProfiles,
     type RankedIntermittent,
     type ScanHarness,
     type ScanResult,
     type SuiteCount,
+    bugsNamingTest,
     filterOccurrences,
+    occurrenceProfiles,
     scanBugs,
     selectHarness,
     summariseBug,
@@ -128,6 +131,22 @@ export const INTERMITTENT_OPTIONS: OptionSpecs = {
         placeholder: '<id>',
         describe: 'Drill into one bug: its occurrences, platforms, task ids and log lines.',
     },
+    // `--test`, not `--path`: on this command it selects one bug, which is what
+    // `try --test` and `errors --test` do, where `--path <prefix>` filters many
+    // tests on `issues`, `failures`, `crashes`, `skips` and `flaky`.
+    test: {
+        type: 'string',
+        placeholder: '<path>',
+        describe:
+            'Drill into the bug annotated on this exact test path, instead of --bug. Lists them ' +
+            'all when several bugs name it.',
+    },
+    profiles: {
+        type: 'boolean',
+        describe:
+            'With --bug or --test, print the raw per-test profile artifact URL of every ' +
+            'occurrence whose log named one.',
+    },
 };
 
 /**
@@ -188,6 +207,14 @@ export interface IntermittentBugJson extends BugDrilldown {
     summary: string | null;
     /** Every occurrence, always in full. */
     occurrenceRows: BugOccurrence[];
+    /**
+     * The per-test profile URLs, unconditionally.
+     *
+     * Not behind `--profiles`: they cost no request, and a machine-readable
+     * shape whose fields depend on a flag is the thing `--json` exists to avoid.
+     * Empty when no occurrence's log named a profile.
+     */
+    profiles: OccurrenceProfiles[];
 }
 
 /** Runs the command. */
@@ -208,9 +235,29 @@ export async function runIntermittent(context: CommandContext, args: ParsedArgs)
     const range = resolveRange(globals.day, globals.since);
 
     const bug = numberOption(args, 'bug');
+    const test = stringOption(args, 'test');
+    if (bug !== undefined && test !== undefined) {
+        throw usageError(
+            '--bug and --test both select one bug, so only one of them can be given',
+            'Use --test <path> when you have a failing test and no bug number, --bug <id> otherwise.'
+        );
+    }
     if (bug !== undefined) {
-        await runDrilldown(context, client, tree, range, bug);
+        await runDrilldown(context, client, tree, range, bug, args);
         return;
+    }
+    if (test !== undefined) {
+        await runTestDrilldown(context, client, tree, range, test, args);
+        return;
+    }
+    if (boolOption(args, 'profiles')) {
+        // The ranked list's rows are bugs, and a profile belongs to one job of
+        // one occurrence. There is nothing here to print URLs for.
+        throw usageError(
+            '--profiles needs one bug: the ranked list’s rows are bugs, and a profile is an ' +
+                'artifact of a single job',
+            'Use --bug <id> --profiles, or --test <path> --profiles.'
+        );
     }
     if (globals.config.length > 0 || globals.excludeConfig.length > 0) {
         // Accepted on `--bug`, where each occurrence carries a platform and a
@@ -243,9 +290,16 @@ async function runRanking(
     progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}…`);
     const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
 
-    // Every candidate's summary, in one batched Bugzilla request rather than one
-    // per bug: classification reads the summary, so this is not the drill-down's
-    // "look up what I am about to print" but an input to the ranking itself.
+    // Every candidate's summary, batched rather than one request per bug:
+    // classification reads the summary, so this is not the drill-down's "look up
+    // what I am about to print" but an input to the ranking itself.
+    //
+    // **Batched is not one request.** `bugSummaries` chunks by
+    // `BUG_BATCH_SIZE`, so the count is `ceil(candidates / BUG_BATCH_SIZE)` and
+    // scales with the ranking: a trunk week runs to several hundred annotated
+    // bugs and therefore several Bugzilla requests, not one. Stated because the
+    // saving here is against *one per bug*, and understating the real load is
+    // how a caller concludes this path is cheaper than it is.
     const candidates = ranking
         .filter((row) => row.bugId !== null)
         .map((row) => row.bugId as number);
@@ -338,21 +392,122 @@ async function loadHarnessOfPath(context: CommandContext): Promise<HarnessOfPath
     return (path: string) => known.get(path) ?? null;
 }
 
+/**
+ * `--test <path>`: the same drill-down, reached by test path.
+ *
+ * Someone starting from a failing test has no bug number, and the mapping is
+ * already in the ranking this command builds — every classified row carries the
+ * verified path its bug's summary names. So this is the ranking, matched on
+ * `test`, rather than a second source of truth.
+ *
+ * **An exact path only.** `errors --test` accepts a directory prefix; here a
+ * prefix matching several tests has no single bug to drill into, and the answer
+ * would be a list of lists. Several bugs naming *one* test is a real case and
+ * does print them all, without picking one.
+ */
+async function runTestDrilldown(
+    context: CommandContext,
+    client: IntermittentsClient,
+    tree: string,
+    range: DayRange,
+    test: string,
+    args: ParsedArgs
+): Promise<void> {
+    progress(context, `Ranking annotated bugs on ${tree} for ${range.start}..${range.end}…`);
+    const ranking = await withUpstreamErrors(() => client.rankBugs(tree, range), tree);
+    const candidates = ranking
+        .filter((row) => row.bugId !== null)
+        .map((row) => row.bugId as number);
+    progress(context, `Reading ${candidates.length} bug summaries…`);
+    const summaries = await withUpstreamErrors(() => client.bugSummaries(candidates), tree);
+    progress(context, 'Reading the mochitest and xpcshell test lists…');
+    const harnessOfPath = await loadHarnessOfPath(context);
+
+    const matches = bugsNamingTest(scanBugs({ ranking, summaries, harnessOfPath }).rows, test);
+    if (matches.length === 0) {
+        throw notFoundError(
+            `no sheriff-annotated bug names the test ${test} on ${tree} between ` +
+                `${range.start} and ${range.end}`,
+            'A bug is matched by the exact test path in its summary, so a directory prefix will ' +
+                'not do. Widen the window with --since <n>, or run without --test to see what ' +
+                'was annotated.'
+        );
+    }
+    if (matches.length > 1) {
+        emit(context, renderTestMatches(test, tree, range, matches, context.globals.format));
+        return;
+    }
+    await runDrilldown(context, client, tree, range, matches[0]!.bugId, args);
+}
+
+/**
+ * The bugs naming one test, when there is more than one.
+ *
+ * Printed instead of drilling into the largest: two bugs on one test are two
+ * different failures of it, and choosing for the reader hides the one they did
+ * not get.
+ */
+function renderTestMatches(
+    test: string,
+    tree: string,
+    range: DayRange,
+    matches: readonly RankedIntermittent[],
+    format: string
+): string {
+    const title = `${fmtCount(matches.length)} sheriff-annotated bugs name ${test} on ${tree}, ${range.start} to ${range.end}`;
+    if (format === 'markdown') {
+        return joinLines([
+            md.heading(title),
+            '',
+            ...md.table(
+                [{ header: 'count', align: 'right' }, { header: 'bug' }, { header: 'failure' }],
+                matches.map((row) => [
+                    fmtCount(row.count),
+                    `[${row.bugId}](https://bugzilla.mozilla.org/show_bug.cgi?id=${row.bugId})`,
+                    row.failure,
+                ])
+            ),
+        ]);
+    }
+    if (format === 'json') {
+        return toJson({
+            test,
+            tree,
+            startday: range.start,
+            endday: range.end,
+            matchCount: matches.length,
+            rows: matches,
+        });
+    }
+    return joinLines([
+        ...wrapText(title),
+        '',
+        ...tableSection(
+            [
+                { header: 'count', align: 'right', sort: 'desc' },
+                { header: 'bug', align: 'right' },
+                { header: 'failure' },
+            ],
+            matches.map((row) => [fmtCount(row.count), String(row.bugId), row.failure]),
+            { total: matches.length, shown: matches.length, fit: true }
+        ),
+        'Drill into one with --bug <id>.',
+    ]);
+}
+
 /** The `--bug <id>` drill-down. */
 async function runDrilldown(
     context: CommandContext,
     client: IntermittentsClient,
     tree: string,
     range: DayRange,
-    bug: number
+    bug: number,
+    args: ParsedArgs
 ): Promise<void> {
     const { globals } = context;
     progress(context, `Reading occurrences of bug ${bug} on ${tree} for ${range.start}..${range.end}…`);
-    const occurrences = await withUpstreamErrors(
-        () => client.occurrencesOfBug(tree, range, bug),
-        tree
-    );
-    if (occurrences.length === 0) {
+    const raw = await withUpstreamErrors(() => client.occurrencesOfBug(tree, range, bug), tree);
+    if (raw.length === 0) {
         // Exit 2, and the message names all three things that could be wrong,
         // because "no rows" here means "no sheriff annotated this bug on this
         // tree in this window" — not "this bug does not exist".
@@ -362,6 +517,7 @@ async function runDrilldown(
                 'A bug with no annotations in the window is not in this data at all.'
         );
     }
+    const occurrences = await withRunIds(context, client, tree, raw);
 
     const filter: DrilldownFilter = {
         ...(globals.harness === undefined ? {} : { harness: globals.harness }),
@@ -381,6 +537,12 @@ async function runDrilldown(
     }
     const summaries = await withUpstreamErrors(() => client.bugSummaries([bug]), tree);
     const bugSummary = summaries.get(bug) ?? null;
+    // Always in `--json`, which is the escape hatch, and behind the flag in the
+    // rendered views, where it is thirty lines nobody asked for.
+    const profiles =
+        globals.format === 'json' || boolOption(args, 'profiles')
+            ? occurrenceProfiles(shownOccurrences)
+            : null;
 
     if (globals.format === 'json') {
         emit(
@@ -392,6 +554,7 @@ async function runDrilldown(
                 endday: range.end,
                 summary: bugSummary,
                 occurrenceRows: shownOccurrences,
+                profiles: profiles ?? [],
             } satisfies IntermittentBugJson)
         );
         return;
@@ -399,9 +562,59 @@ async function runDrilldown(
     emit(
         context,
         globals.format === 'markdown'
-            ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences)
-            : renderBugText(summary, bugSummary, tree, range, shownOccurrences, globals.limit)
+            ? renderBugMarkdown(summary, bugSummary, tree, range, shownOccurrences, profiles)
+            : renderBugText(
+                  summary,
+                  bugSummary,
+                  tree,
+                  range,
+                  shownOccurrences,
+                  globals.limit,
+                  profiles
+              )
     );
+}
+
+/**
+ * The occurrences with Taskcluster's run index filled in.
+ *
+ * Costs `ceil(occurrences / JOB_BATCH_SIZE)` extra requests — one for a bug with
+ * a few hundred annotations, more for a busier one, never one per occurrence.
+ * Stated as the formula rather than as a number so it cannot read as a flat
+ * "one request" the way this comment first did.
+ *
+ * What it buys is the difference between a task ID that can be turned into an
+ * artifact URL and one that cannot: a task whose first run ended in `exception`
+ * has its annotated failure in run 1, and `runs/0` 404s. Measured on bug
+ * 1988796, 5 of its 122 occurrences.
+ *
+ * A failure here is not fatal. The run index improves every task ID printed but
+ * is not what the drill-down is for, so an outage degrades to the task IDs
+ * alone, warned about, rather than failing the whole report.
+ */
+async function withRunIds(
+    context: CommandContext,
+    client: IntermittentsClient,
+    tree: string,
+    occurrences: readonly BugOccurrence[]
+): Promise<BugOccurrence[]> {
+    const jobIds = occurrences.map((row) => row.jobId).filter((id) => Number.isFinite(id) && id > 0);
+    if (jobIds.length === 0) {
+        return [...occurrences];
+    }
+    progress(context, `Reading the run index of ${jobIds.length} jobs…`);
+    let runIds: Map<number, number>;
+    try {
+        runIds = await withUpstreamErrors(() => client.runIdsOfJobs(jobIds), tree);
+    } catch (error) {
+        warn(
+            context,
+            `could not read job run indexes (${(error as Error).message}); ` +
+                `task ids are printed without one`
+        );
+        return [...occurrences];
+    }
+    return occurrences.map((row) => ({ ...row, runId: runIds.get(row.jobId) ?? null }));
 }
 
 /**
@@ -722,7 +935,8 @@ function renderBugText(
     tree: string,
     range: DayRange,
     occurrences: readonly BugOccurrence[],
-    limit: number | undefined
+    limit: number | undefined,
+    profiles: readonly OccurrenceProfiles[] | null
 ): string {
     const lines: (string | null)[] = [
         // Both are prose — a Bugzilla summary runs to 200 characters — so they
@@ -768,6 +982,10 @@ function renderBugText(
                 { header: 'platform', maxWidth: 24 },
                 { header: 'build' },
                 { header: 'job name', maxWidth: 30 },
+                // `<taskId>.<runId>`, the format `test --task-ids` and
+                // Treeherder both use. The run index is not decoration: a task
+                // retried after an `exception` has its annotated failure in run
+                // 1, and every artifact URL built from run 0 then 404s.
                 { header: 'task id' },
             ],
             rows.map((row) => [
@@ -776,7 +994,7 @@ function renderBugText(
                 row.platform,
                 row.buildType,
                 row.testSuite,
-                row.taskId,
+                taskRunId(row),
             ]),
             '  ',
             { fit: true }
@@ -785,7 +1003,90 @@ function renderBugText(
     if (rows.length < occurrences.length) {
         lines.push(`  … ${occurrences.length - rows.length} more (--limit 0 for all)`);
     }
+    if (profiles !== null) {
+        lines.push('');
+        lines.push(...profileSection(profiles, limit));
+    }
     return joinLines(lines);
+}
+
+/**
+ * An occurrence's run, as `<taskId>.<runId>`.
+ *
+ * Falls back to the bare task ID when the run index was not resolved, rather
+ * than printing `.0`: a guessed run reads exactly like a known one, and getting
+ * it wrong is the defect this carries the field to fix.
+ */
+function taskRunId(row: BugOccurrence): string {
+    return row.runId === null ? row.taskId : `${row.taskId}.${row.runId}`;
+}
+
+/**
+ * The `Profiles` section, in the shape `fx-tests test --profiles` prints.
+ *
+ * `taskId.runId  <job name>` with the URLs indented beneath, so someone who
+ * learned the layout on `test` reads this one without learning a second.
+ *
+ * The URLs are **raw artifact URLs**, per `lib/links.ts`: the consumer is
+ * `profiler-cli`, which downloads the profile itself.
+ */
+function profileSection(
+    profiles: readonly OccurrenceProfiles[],
+    limit: number | undefined
+): string[] {
+    // A profile whose URL could not be built is dropped, and a row left with no
+    // profiles is dropped with it. The bare filename is not an answer: the run
+    // index a reader would need to construct the URL themselves is exactly what
+    // is missing, so the line costs space and delivers nothing. `--json` keeps
+    // `{"filename": …, "url": null}`, where a consumer can tell the states apart.
+    const linked = profiles
+        .map((row) => ({ ...row, profiles: row.profiles.filter((entry) => entry.url !== null) }))
+        .filter((row) => row.profiles.length > 0);
+    if (linked.length === 0) {
+        // Named causes, not a bare "none". A silent absence reads as "this bug
+        // has no profiles", which is the misreading the section exists to
+        // prevent — and "the run index did not resolve" is a different fact
+        // about this run from "the harness captured nothing".
+        return [
+            'Profiles',
+            ...(profiles.length === 0
+                ? [
+                      '  (none: no occurrence’s log named an uploaded profile — the harness ' +
+                          'only captures one for certain failures)',
+                  ]
+                : [
+                      `  (none reachable: ${fmtCount(profiles.length)} occurrences named a ` +
+                          `profile, but no artifact URL could be built for any of them — the ` +
+                          `run index did not resolve, or Treeherder holds no task for the job)`,
+                  ]),
+        ];
+    }
+    const shown = applyLimit(linked, limit ?? DRILLDOWN_ROWS);
+    const lines = ['Profiles (raw artifact URLs, for profiler-cli)'];
+    for (const row of shown) {
+        lines.push(`  ${row.run}  ${row.configuration}`);
+        for (const profile of row.profiles) {
+            // The label reads the name the log gave; a `-2` file is the
+            // harness's in-job rerun. Nothing is emitted that a log line did
+            // not name, so there is no third state to label.
+            lines.push(`    ${profile.isRerun ? 'rerun:  ' : 'profile:'} ${profile.url}`);
+        }
+    }
+    if (shown.length < linked.length) {
+        lines.push(`  … ${linked.length - shown.length} more (--limit 0 for all)`);
+    }
+    if (shown.some((row) => row.profiles.some((profile) => profile.isRerun))) {
+        // One line for the section, and only when a rerun is actually shown.
+        // It explains an absence a reader will otherwise puzzle over — the
+        // first run's profile exists but is not listed — and the answer is not
+        // guessable from the output. Per row it would be the noise this section
+        // just shed.
+        lines.push(
+            '  (a rerun’s first-run profile is uploaded too, but Treeherder keeps only the ' +
+                'retry’s log messages, so it is not named here)'
+        );
+    }
+    return lines;
 }
 
 /** One counted group of the drill-down, or nothing when it is empty. */
@@ -829,7 +1130,8 @@ function renderBugMarkdown(
     bugSummary: string | null,
     tree: string,
     range: DayRange,
-    occurrences: readonly BugOccurrence[]
+    occurrences: readonly BugOccurrence[],
+    profiles: readonly OccurrenceProfiles[] | null
 ): string {
     const lines: (string | null)[] = [
         md.heading(`Bug ${drilldown.bugId} — ${bugSummary ?? '(no summary from Bugzilla)'}`),
@@ -862,7 +1164,25 @@ function renderBugMarkdown(
     lines.push(md.heading('Task IDs', 2));
     lines.push('');
     for (const row of occurrences) {
-        lines.push(`- \`${row.taskId}\` — ${row.platform}/${row.buildType} ${row.testSuite}`);
+        lines.push(`- \`${taskRunId(row)}\` — ${row.platform}/${row.buildType} ${row.testSuite}`);
+    }
+    // Same rule as the text renderer's: an entry with no URL is not printable,
+    // and a row emptied by that is not a row. See `profileSection`.
+    const linkedProfiles = (profiles ?? [])
+        .map((row) => ({ ...row, profiles: row.profiles.filter((entry) => entry.url !== null) }))
+        .filter((row) => row.profiles.length > 0);
+    if (profiles !== null && linkedProfiles.length > 0) {
+        lines.push('');
+        lines.push(md.heading('Profiles', 2));
+        lines.push('');
+        // Uncapped, like every other Markdown section here: it is a file format
+        // for pasting into a bug, so a silently partial list is the defect.
+        for (const row of linkedProfiles) {
+            lines.push(`- \`${row.run}\` — ${row.configuration}`);
+            for (const profile of row.profiles) {
+                lines.push(`  - ${profile.isRerun ? 'rerun' : 'profile'}: ${profile.url}`);
+            }
+        }
     }
     return joinLines(lines);
 }
