@@ -48,6 +48,12 @@
 import { bucketFileSuffix, bucketIndexForPath, type BucketFile, decodeBucket } from '../../lib/formats/buckets.ts';
 import { computeConfigStats } from '../../lib/query/config-stats.ts';
 import {
+    CURRENT_LANDO_INSTANCE,
+    LandoError,
+    looksLikeLandoCommitId,
+    parseTreeherderUrl,
+} from '../../lib/sources/lando.ts';
+import {
     MIN_RECENT_RUNS,
     type HeadlineRate,
     flakinessTooltip,
@@ -75,7 +81,7 @@ import { treeherderPushUrl } from '../../lib/links.ts';
 import { type TreeherderJob } from '../../lib/sources/treeherder.ts';
 import { fetchJson, timingsIndex } from '../../lib/sources/source.ts';
 import { type OptionSpecs, type ParsedArgs, boolOption, stringOption } from '../args.ts';
-import { type CommandContext, emit, progress, warn } from '../context.ts';
+import { type CommandContext, emit, notice, progress, warn } from '../context.ts';
 import { usageError } from '../errors.ts';
 import { MESSAGE_CAP, messageLines } from '../format/failure-lines.ts';
 import { toJson } from '../format/json.ts';
@@ -138,6 +144,31 @@ export const TRY_OPTIONS: OptionSpecs = {
         describe: 'How many job profiles to fetch at once. Default 8.',
     },
 };
+
+/**
+ * The standing definitions `try --help` prints, rather than the command
+ * printing them on every run.
+ *
+ * The Lando forms are here and not in an option's `describe` because they are
+ * not an option: they are what the positional argument accepts. Nothing else
+ * tells a reader that the URL Lando handed them is a valid argument, and that
+ * URL is the only thing they have — it carries no revision.
+ */
+export const TRY_NOTES: readonly string[] = [
+    'The argument may be any of:',
+    '  a revision          4f2c1a9e8b3d',
+    '  a Treeherder URL    https://treeherder.mozilla.org/jobs?repo=try&revision=4f2c1a9e8b3d',
+    '  a Lando URL         https://treeherder.mozilla.org/jobs?repo=try'
+        + '&landoInstance=lando-prod-2025&landoCommitID=86670',
+    '  a landoCommitID     86670',
+    'Quote a URL: the shell would otherwise split it at the ampersands.',
+    'A URL carrying a revision is used directly. Lando\'s carries none — it names the',
+    'landing job — so the ID is resolved against Lando before anything else, and a job',
+    'that has not landed yet is reported with its Lando status instead.',
+    'An all-digit argument shorter than 8 characters is read as a landoCommitID: that',
+    'is too short to be a revision anyone would paste. 8 digits or more, or any hex',
+    'letter, is a revision.',
+];
 
 /** Default rows per section. */
 const DEFAULT_LIMIT = 10;
@@ -365,13 +396,107 @@ export interface TryJson {
     newIntermittents: TryFailure[];
 }
 
+/**
+ * Resolves the positional argument to a revision, going through Lando only
+ * when the argument names a landing job rather than a push.
+ *
+ * Three forms, and the reason all three are accepted is that all three are
+ * things a user actually has in the clipboard:
+ *
+ * - **A revision.** The default, and untouched: nothing is parsed out of it
+ *   and Lando is never asked.
+ * - **A Treeherder `/jobs` URL.** Either kind. `?revision=<hash>` is what the
+ *   UI's address bar shows and needs no resolution at all; `?landoCommitID=`
+ *   is what Lando hands back and does. `parseTreeherderUrl()` prefers a
+ *   revision when a URL somehow carries both.
+ * - **A bare `landoCommitID`.** All decimal digits, fewer than 8 characters —
+ *   too short to be a hash anyone would paste. See `looksLikeLandoCommitId()`.
+ *
+ * This runs **before anything else** because everything below needs a
+ * revision and two of the three forms do not have one yet.
+ *
+ * Returns the `repo` a URL named alongside the revision, when it had one:
+ * that parameter is already in Treeherder's vocabulary, so honouring it costs
+ * nothing and saves a `--project autoland` the pasted URL already implied.
+ * Lando's own `repository` field is **not** used for this — it says
+ * `firefox-autoland` where Treeherder says `autoland`, and translating between
+ * the two is a table this command has no way to keep correct.
+ *
+ * A landing job with no revision yet is not an error. It is reported and the
+ * command stops, because there is no push to triage.
+ */
+async function resolveRevision(
+    context: CommandContext,
+    raw: string
+): Promise<{ revision: string; project: string | undefined } | 'not-landed'> {
+    // A URL naming two landing jobs is a bad argument, not a bad upstream, so
+    // the parser's throw is re-raised as exit 1 rather than reaching main.ts's
+    // `LandoError` arm and reporting a retryable failure.
+    let target;
+    try {
+        target = parseTreeherderUrl(raw);
+    } catch (error) {
+        throw usageError(
+            error instanceof LandoError ? error.message : String(error),
+            'Pass one landoCommitID, or the revision the push landed as.'
+        );
+    }
+    if (target?.kind === 'revision') {
+        // Already a revision: no round trip, and the URL's own repo becomes
+        // the project default.
+        return { revision: target.revision, project: target.repository };
+    }
+    const reference =
+        target ??
+        (looksLikeLandoCommitId(raw)
+            ? {
+                  commitId: Number(raw.trim()),
+                  instance: CURRENT_LANDO_INSTANCE,
+                  repository: undefined,
+              }
+            : undefined);
+    if (reference === undefined) {
+        return { revision: raw, project: undefined };
+    }
+    const lando = context.lando;
+    if (lando === undefined) {
+        throw new Error('try needs a Lando client but none was supplied');
+    }
+
+    progress(
+        context,
+        `Resolving Lando job ${reference.commitId} (${reference.instance}) to a revision…`
+    );
+    const job = await lando.landingJob(reference.commitId, reference.instance);
+    if (job.revision === undefined) {
+        // stderr, not stdout: "still queued" is not the data the command was
+        // asked for, and a `--json` caller must not be handed a shape that is
+        // not `TryJson`. Exit 0 for the same reason `try` exits 0 on failures —
+        // nothing went wrong, the push simply is not there yet.
+        notice(
+            context,
+            `Lando job ${job.id} is ${job.status} and has no revision yet, so there is ` +
+                `no push to triage.` +
+                (job.error === '' ? '' : `\nLando reports: ${job.error}`) +
+                (job.url === undefined ? '' : `\n${job.url}`)
+        );
+        return 'not-landed';
+    }
+    progress(context, `Lando job ${job.id} landed ${job.revision}.`);
+    return { revision: job.revision, project: reference.repository };
+}
+
 /** Runs the command. */
 export async function runTry(context: CommandContext, args: ParsedArgs): Promise<void> {
-    const revision = args.positionals[0];
-    if (revision === undefined) {
+    const argument = args.positionals[0];
+    if (argument === undefined) {
         throw usageError(
-            'try requires a revision',
-            'Usage: fx-tests try <revision>, e.g. fx-tests try 4f2c1a9e8b3d'
+            'try requires a revision, a Treeherder URL, or a landoCommitID',
+            'Usage: fx-tests try <revision>, e.g. fx-tests try 4f2c1a9e8b3d\n' +
+                'A pasted Treeherder URL works too, whether it carries a revision or the\n' +
+                'landoCommitID Lando returns:\n' +
+                '  fx-tests try "https://treeherder.mozilla.org/jobs?repo=try' +
+                '&landoInstance=lando-prod-2025&landoCommitID=86670"'
         );
     }
     if (args.positionals.length > 1) {
@@ -400,7 +525,19 @@ export async function runTry(context: CommandContext, args: ParsedArgs): Promise
         );
     }
 
-    const project = stringOption(args, 'project') ?? 'try';
+    // Before anything else, as the Lando form has to be: everything below
+    // needs a revision and the argument may not be one yet.
+    const resolved = await resolveRevision(context, argument);
+    if (resolved === 'not-landed') {
+        return;
+    }
+    const { revision } = resolved;
+
+    // An explicit `--project` still wins: the `repo` in a pasted URL is a
+    // default, not an override. `||` rather than `??`, because an empty
+    // `--project ''` is as absent as a missing one — passing it through builds
+    // `/api/project//push/`, which 404s naming no repository at all.
+    const project = stringOption(args, 'project') || resolved.project || 'try';
 
     progress(context, `Looking up ${revision} on ${project}…`);
     const push = await treeherder.findPush(project, revision);

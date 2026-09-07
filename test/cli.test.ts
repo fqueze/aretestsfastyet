@@ -40,6 +40,7 @@ import assert from 'node:assert/strict';
 
 import { type DataFileName, type DataSource, DataFetchError, DataFileNotFoundError } from '../lib/sources/source.ts';
 import type { TreeherderClient, TreeherderJob } from '../lib/sources/treeherder.ts';
+import type { LandingJob, LandoClient } from '../lib/sources/lando.ts';
 import { CANDIDATE_LIMIT } from '../lib/query/test-lookup.ts';
 import { ExitCode } from '../cli/errors.ts';
 import { type CommandContext, captureStreams } from '../cli/context.ts';
@@ -2922,15 +2923,48 @@ test('a transport failure exits 3, so a script can tell it from missing data', a
 // --- fx-tests try ---------------------------------------------------------
 
 /** A Treeherder client over canned jobs. */
-function fakeTreeherder(jobs: TreeherderJob[]): TreeherderClient {
+/**
+ * A Lando that answers for one ID, recording what it was asked.
+ *
+ * `revision: undefined` is the not-yet-landed job: Lando writes `commit_id:
+ * ""` for it, which `lib/sources/lando.ts` normalises away.
+ */
+function fakeLando(
+    job: Partial<LandingJob> & { status: string }
+): { lando: LandoClient; asked: { commitId: number; instance: string }[] } {
+    const asked: { commitId: number; instance: string }[] = [];
     return {
-        findPush: () =>
-            Promise.resolve({
+        asked,
+        lando: {
+            landingJob: (commitId: number, instance = 'lando-prod-2025') => {
+                asked.push({ commitId, instance });
+                return Promise.resolve({
+                    id: commitId,
+                    repository: 'try',
+                    error: '',
+                    url: `https://lando.moz.tools/landings/${commitId}`,
+                    revision: undefined,
+                    ...job,
+                });
+            },
+        },
+    };
+}
+
+function fakeTreeherder(
+    jobs: TreeherderJob[],
+    lookups?: { repository: string; revision: string }[]
+): TreeherderClient {
+    return {
+        findPush: (repository: string, revision: string) => {
+            lookups?.push({ repository, revision });
+            return Promise.resolve({
                 pushId: 1,
                 revision: 'abcdef1234567890',
-                repository: 'try',
+                repository,
                 revisions: [],
-            }),
+            });
+        },
         jobsOfPush: () => Promise.resolve(jobs),
     };
 }
@@ -5054,4 +5088,270 @@ test('try still answers when a central bucket cannot be read', async () => {
     const perma = result['permaFails'] as { central: unknown }[];
     assert.equal(perma.length, 1);
     assert.equal(perma[0]!.central, null);
+});
+
+test('try resolves a Lando URL to a revision before it looks up anything', async () => {
+    // The URL Lando returns carries no revision at all, so without this the
+    // whole string went to Treeherder as one — measured before the change:
+    // "no push found for revision https://treeherder.mozilla.org/jobs?…".
+    const lookups: { repository: string; revision: string }[] = [];
+    const { lando, asked } = fakeLando({
+        status: 'LANDED',
+        revision: '276928d856a67e2fff01925eeea1d3777087b17f',
+    });
+    const streams = captureStreams();
+    const code = await run({
+        argv: [
+            'try',
+            'https://treeherder.mozilla.org/jobs?repo=try' +
+                '&landoInstance=lando-prod-2025&landoCommitID=86670',
+            '--json',
+        ],
+        streams,
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], lookups),
+        lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.equal(code, ExitCode.Success);
+    // The URL's own instance is honoured, not a default.
+    assert.deepEqual(asked, [{ commitId: 86670, instance: 'lando-prod-2025' }]);
+    // And what reached Treeherder is a revision, on the repo the URL named.
+    assert.deepEqual(lookups, [
+        { repository: 'try', revision: '276928d856a67e2fff01925eeea1d3777087b17f' },
+    ]);
+});
+
+test('a bare landoCommitID goes to Lando, and a revision does not', async () => {
+    // A deliberate reassignment, not a fix: before this rule Treeherder
+    // prefix-matched `86670` and reported a real push. Five digits is simply
+    // too short to be a hash anyone would paste, so it is a Lando ID.
+    const digits: { repository: string; revision: string }[] = [];
+    const { lando, asked } = fakeLando({ status: 'LANDED', revision: 'deadbeefcafe1234' });
+    assert.equal(
+        await run({
+            argv: ['try', '86670', '--json'],
+            streams: captureStreams(),
+            source: fixtureSource(),
+            cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+            treeherder: fakeTreeherder([], digits),
+            lando,
+            fetchUrl: () => Promise.resolve(null),
+        }),
+        ExitCode.Success
+    );
+    assert.equal(asked.length, 1);
+    assert.equal(digits[0]?.revision, 'deadbeefcafe1234');
+
+    // A hex revision is untouched: Lando is never asked.
+    const hex: { repository: string; revision: string }[] = [];
+    const untouched = fakeLando({ status: 'LANDED', revision: 'must-not-be-used' });
+    assert.equal(
+        await run({
+            argv: ['try', 'abcdef123456', '--json'],
+            streams: captureStreams(),
+            source: fixtureSource(),
+            cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+            treeherder: fakeTreeherder([], hex),
+            lando: untouched.lando,
+            fetchUrl: () => Promise.resolve(null),
+        }),
+        ExitCode.Success
+    );
+    assert.deepEqual(untouched.asked, []);
+    assert.deepEqual(hex, [{ repository: 'try', revision: 'abcdef123456' }]);
+});
+
+test('a Treeherder URL carrying a revision is used with no Lando round trip', async () => {
+    // The user's rule covers "a treeherder url that contains a try hash or
+    // lando id". A revision in the URL needs no resolution, so Lando must not
+    // be asked at all.
+    const lookups: { repository: string; revision: string }[] = [];
+    const untouched = fakeLando({ status: 'LANDED', revision: 'must-not-be-used' });
+    const code = await run({
+        argv: [
+            'try',
+            'https://treeherder.mozilla.org/jobs?repo=autoland' +
+                '&revision=276928d856a67e2fff01925eeea1d3777087b17f',
+            '--json',
+        ],
+        streams: captureStreams(),
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], lookups),
+        lando: untouched.lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.equal(code, ExitCode.Success);
+    assert.deepEqual(untouched.asked, [], 'a revision in the URL needs no Lando lookup');
+    // And the URL's own repo became the project, without a --project flag.
+    assert.deepEqual(lookups, [
+        { repository: 'autoland', revision: '276928d856a67e2fff01925eeea1d3777087b17f' },
+    ]);
+});
+
+test('the landoCommitID boundary is 8 digits, and an empty repo= is not a project', async () => {
+    // Seven digits go to Lando; eight stay a revision. This is the line a
+    // reader will want to check, so it is pinned end to end rather than only
+    // in the unit test.
+    const seven = fakeLando({ status: 'LANDED', revision: 'resolvedbylando' });
+    const sevenLookups: { repository: string; revision: string }[] = [];
+    await run({
+        argv: ['try', '1234567', '--json'],
+        streams: captureStreams(),
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], sevenLookups),
+        lando: seven.lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.deepEqual(seven.asked, [{ commitId: 1234567, instance: 'lando-prod-2025' }]);
+    assert.equal(sevenLookups[0]?.revision, 'resolvedbylando');
+
+    const eight = fakeLando({ status: 'LANDED', revision: 'must-not-be-used' });
+    const eightLookups: { repository: string; revision: string }[] = [];
+    await run({
+        argv: ['try', '12345678', '--json'],
+        streams: captureStreams(),
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], eightLookups),
+        lando: eight.lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.deepEqual(eight.asked, [], '8 digits is a revision, not a Lando ID');
+    assert.deepEqual(eightLookups, [{ repository: 'try', revision: '12345678' }]);
+
+    // `?repo=` present and empty must not become a project named "", which
+    // reaches Treeherder as `/api/project//push/`.
+    const emptyRepo = fakeLando({ status: 'LANDED', revision: 'abc123def456' });
+    const emptyLookups: { repository: string; revision: string }[] = [];
+    await run({
+        argv: [
+            'try',
+            'https://treeherder.mozilla.org/jobs?repo=&landoInstance=lando-prod-2025' +
+                '&landoCommitID=86670',
+            '--json',
+        ],
+        streams: captureStreams(),
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], emptyLookups),
+        lando: emptyRepo.lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.equal(emptyLookups[0]?.repository, 'try', 'an empty repo= falls back to the default');
+});
+
+test('a URL naming two landing jobs is a usage error, not a retryable failure', async () => {
+    const streams = captureStreams();
+    const { lando, asked } = fakeLando({ status: 'LANDED', revision: 'must-not-be-used' });
+    const code = await run({
+        argv: [
+            'try',
+            'https://treeherder.mozilla.org/jobs?landoCommitID=86670&landoCommitID=86671',
+        ],
+        streams,
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([]),
+        lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    // Exit 1, not 3: the argument is bad, and no retry can help.
+    assert.equal(code, ExitCode.Usage);
+    assert.match(streams.stderr, /more than one landing job/);
+    assert.deepEqual(asked, []);
+});
+
+test('--project still wins over the repo a pasted Lando URL carries', async () => {
+    const lookups: { repository: string; revision: string }[] = [];
+    const { lando } = fakeLando({ status: 'LANDED', revision: 'abc123def456' });
+    await run({
+        argv: [
+            'try',
+            'https://treeherder.mozilla.org/jobs?repo=try&landoCommitID=86670',
+            '--project',
+            'autoland',
+            '--json',
+        ],
+        streams: captureStreams(),
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], lookups),
+        lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    assert.equal(lookups[0]?.repository, 'autoland');
+});
+
+test('a Lando job that has not landed is reported, not treated as an error', async () => {
+    const lookups: { repository: string; revision: string }[] = [];
+    const { lando } = fakeLando({
+        status: 'SUBMITTED',
+        // No revision: the job is still in Lando's queue.
+    });
+    const streams = captureStreams();
+    const code = await run({
+        argv: ['try', '87340'],
+        streams,
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder([], lookups),
+        lando,
+        fetchUrl: () => Promise.resolve(null),
+    });
+    // Nothing went wrong — the push simply is not there yet — so exit 0, as
+    // `try` already does for a push that is full of failures.
+    assert.equal(code, ExitCode.Success);
+    assert.match(streams.stderr, /87340 is SUBMITTED/);
+    assert.match(streams.stderr, /no push to triage/);
+    // Not on stdout: a `--json` caller must not be handed a shape that is not
+    // `TryJson`, and a `> out.md` must not collect a status line.
+    assert.equal(streams.stdout, '');
+    // And Treeherder was never asked, since there is no revision to ask about.
+    assert.deepEqual(lookups, []);
+});
+
+test('a failed Lando job reports the hg error Lando recorded', async () => {
+    const { lando } = fakeLando({
+        status: 'FAILED',
+        error: 'abort: /tmp/tmpo7h6_a2qdiff: no diffs found',
+    });
+    const streams = captureStreams();
+    assert.equal(
+        await run({
+            argv: ['try', '87000'],
+            streams,
+            source: fixtureSource(),
+            cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+            treeherder: fakeTreeherder([]),
+            lando,
+            fetchUrl: () => Promise.resolve(null),
+        }),
+        ExitCode.Success
+    );
+    assert.match(streams.stderr, /87000 is FAILED/);
+    assert.match(streams.stderr, /no diffs found/);
+});
+
+test('try --help documents both Lando forms', async () => {
+    const streams = captureStreams();
+    await run({ argv: ['try', '--help'], streams, source: fixtureSource() });
+    assert.match(streams.stdout, /landoCommitID/);
+    assert.match(streams.stdout, /a Treeherder URL/);
+    // The disambiguation rule is stated, since it is the surprising part.
+    assert.match(streams.stdout, /shorter than 8 characters/);
+    // And every URL shown must be one that works: a Lando URL with no
+    // landoInstance falls back to lando-prod, which 404s for every ID.
+    for (const line of streams.stdout.split('\n')) {
+        if (line.includes('landoCommitID=')) {
+            assert.ok(
+                line.includes('landoInstance=') ||
+                    streams.stdout.includes('&landoInstance=lando-prod-2025'),
+                `a pasteable landoCommitID URL must name an instance: ${line}`
+            );
+        }
+    }
 });

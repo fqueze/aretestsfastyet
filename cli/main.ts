@@ -51,8 +51,9 @@ import { MANIFESTS_OPTIONS, runManifests } from './commands/manifests.ts';
 import { SUMMARY_OPTIONS, runSummary } from './commands/summary.ts';
 import { TEST_OPTIONS, runTest } from './commands/test.ts';
 import { TASK_OPTIONS, runTask } from './commands/task.ts';
-import { TRY_OPTIONS, runTry } from './commands/try.ts';
+import { TRY_NOTES, TRY_OPTIONS, runTry } from './commands/try.ts';
 import { IntermittentsError, intermittentsClient } from '../lib/sources/intermittents.ts';
+import { LandingJobNotFoundError, LandoError, landoClient } from '../lib/sources/lando.ts';
 import {
     DataFetchError,
     DataFileNotFoundError,
@@ -112,8 +113,9 @@ const COMMANDS: CommandSpec[] = [
     {
         name: 'try',
         summary: 'Triage a Try push: which failures are caused by the patch.',
-        usage: 'fx-tests try <revision> [options]',
+        usage: 'fx-tests try <revision|treeherder-url|landoCommitID> [options]',
         options: TRY_OPTIONS,
+        notes: TRY_NOTES,
         run: runTry,
     },
     {
@@ -320,6 +322,8 @@ export interface RunOptions {
     cache?: DiskCache | undefined;
     /** Overrides Treeherder, for `fx-tests try` tests. */
     treeherder?: CommandContext['treeherder'];
+    /** Overrides Lando, for the `fx-tests try <landoCommitID>` tests. */
+    lando?: CommandContext['lando'];
     /** Overrides the intermittents API, for `fx-tests intermittent` tests. */
     intermittents?: CommandContext['intermittents'];
     /**
@@ -402,6 +406,16 @@ export async function run(options: RunOptions): Promise<ExitCodeValue> {
             return ExitCode.NotFound;
         }
         if (error instanceof DataFetchError) {
+            streams.err(`fx-tests: ${error.message}\n`);
+            return ExitCode.Upstream;
+        }
+        // A Lando ID that does not exist is an answer, not a fault: exit 2,
+        // the same code a revision with no push gets.
+        if (error instanceof LandingJobNotFoundError) {
+            streams.err(`fx-tests: ${error.message}\n`);
+            return ExitCode.NotFound;
+        }
+        if (error instanceof LandoError) {
             streams.err(`fx-tests: ${error.message}\n`);
             return ExitCode.Upstream;
         }
@@ -518,6 +532,9 @@ async function dispatch(options: RunOptions): Promise<ExitCodeValue> {
         ...(options.treeherder === undefined
             ? { treeherder: buildTreeherder(globals, cache, streams, options.httpFetch ?? nodeFetch) }
             : { treeherder: options.treeherder }),
+        ...(options.lando === undefined
+            ? { lando: landoClient({ fetch: options.httpFetch ?? nodeFetch }) }
+            : { lando: options.lando }),
         ...(options.intermittents === undefined
             ? {
                   intermittents: buildIntermittents(

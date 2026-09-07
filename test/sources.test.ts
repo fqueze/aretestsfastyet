@@ -54,6 +54,18 @@ import {
     isFailedJob,
     treeherderClient,
 } from '../lib/sources/treeherder.ts';
+import {
+    CURRENT_LANDO_INSTANCE,
+    DEFAULT_LANDO_INSTANCE,
+    LANDO_INSTANCES,
+    LandingJobNotFoundError,
+    LandoError,
+    MIN_REVISION_DIGITS,
+    landingJobUrl,
+    landoClient,
+    looksLikeLandoCommitId,
+    parseTreeherderUrl,
+} from '../lib/sources/lando.ts';
 
 const ROOT = 'https://firefox-ci-tc.services.mozilla.com';
 
@@ -483,4 +495,265 @@ test('findTimingsJobs keeps the last completed job per harness', () => {
     assert.equal(found.get('xpcshell'), 'SECOND');
     assert.equal(found.get('mochitest'), 'MOCHI');
     assert.equal(found.size, 2);
+});
+
+// --- Lando ---------------------------------------------------------------
+
+test('a Treeherder URL carrying a revision is used directly, with no Lando trip', () => {
+    // What the Treeherder UI's own address bar shows once a push is open, and
+    // what gets pasted into a bug. It needs no resolution at all.
+    assert.deepEqual(
+        parseTreeherderUrl(
+            'https://treeherder.mozilla.org/jobs?repo=try' +
+                '&revision=276928d856a67e2fff01925eeea1d3777087b17f'
+        ),
+        {
+            kind: 'revision',
+            revision: '276928d856a67e2fff01925eeea1d3777087b17f',
+            repository: 'try',
+        }
+    );
+    // A URL somehow carrying both prefers the revision: asking Lando could
+    // only produce the string already in hand.
+    const both = parseTreeherderUrl(
+        'https://treeherder.mozilla.org/jobs?repo=try&revision=abc123&landoCommitID=86670'
+    );
+    assert.equal(both?.kind, 'revision');
+    // An empty `revision=` is no revision, so a `landoCommitID` beside it wins.
+    assert.equal(
+        parseTreeherderUrl(
+            'https://treeherder.mozilla.org/jobs?revision=&landoCommitID=86670'
+        )?.kind,
+        'lando'
+    );
+});
+
+test('a Treeherder Lando URL is read for its instance, ID and repo', () => {
+    // The exact string Lando hands back after accepting a push.
+    assert.deepEqual(
+        parseTreeherderUrl(
+            'https://treeherder.mozilla.org/jobs?repo=try' +
+                '&landoInstance=lando-prod-2025&landoCommitID=86670'
+        ),
+        { kind: 'lando', commitId: 86670, instance: 'lando-prod-2025', repository: 'try' }
+    );
+    // Surrounding whitespace survives a paste.
+    assert.equal(
+        parseTreeherderUrl(
+            '  https://treeherder.mozilla.org/jobs?landoCommitID=86670  '
+        )?.kind,
+        'lando'
+    );
+    // No `landoInstance` falls back to Treeherder's own default, not to the
+    // instance a bare ID would use — a URL reproduces the UI's behaviour.
+    const bare = parseTreeherderUrl('https://treeherder.mozilla.org/jobs?landoCommitID=86670');
+    assert.equal(bare?.kind === 'lando' ? bare.instance : undefined, DEFAULT_LANDO_INSTANCE);
+    assert.equal(bare?.repository, undefined);
+    // `Number.parseInt`, as `getLandoJobsUrl()` uses: `1e3` is job 1 on both
+    // sides, and trailing garbage is truncated rather than rejected.
+    const exponent = parseTreeherderUrl(
+        'https://treeherder.mozilla.org/jobs?landoCommitID=1e3'
+    );
+    assert.equal(exponent?.kind === 'lando' ? exponent.commitId : undefined, 1);
+    const garbage = parseTreeherderUrl(
+        'https://treeherder.mozilla.org/jobs?landoCommitID=86670abc'
+    );
+    assert.equal(garbage?.kind === 'lando' ? garbage.commitId : undefined, 86670);
+});
+
+test('an empty repo= is treated as absent rather than as a project named ""', () => {
+    // `??` would keep the empty string, which reaches Treeherder as
+    // `/api/project//push/`: a 404 naming no repository, reported as a
+    // retryable upstream failure for a permanent input problem.
+    assert.equal(
+        parseTreeherderUrl('https://treeherder.mozilla.org/jobs?repo=&landoCommitID=86670')
+            ?.repository,
+        undefined
+    );
+    // The same for an empty landoInstance.
+    const empty = parseTreeherderUrl(
+        'https://treeherder.mozilla.org/jobs?landoInstance=&landoCommitID=86670'
+    );
+    assert.equal(empty?.kind === 'lando' ? empty.instance : undefined, DEFAULT_LANDO_INSTANCE);
+});
+
+test('a URL naming two landing jobs is refused rather than silently halved', () => {
+    // Two IDs name two pushes, and picking either is a coin flip whose result
+    // looks like a complete answer.
+    assert.throws(
+        () =>
+            parseTreeherderUrl(
+                'https://treeherder.mozilla.org/jobs?landoCommitID=86670&landoCommitID=86671'
+            ),
+        (error: unknown) => error instanceof LandoError && /more than one landing job/.test(error.message)
+    );
+});
+
+test('anything that is not a Treeherder URL is left for Treeherder to resolve', () => {
+    // A plain revision, the overwhelmingly common argument.
+    assert.equal(parseTreeherderUrl('4f2c1a9e8b3d'), undefined);
+    // Not a URL at all.
+    assert.equal(parseTreeherderUrl('not a url'), undefined);
+    // A URL, but not http(s) — nothing to fetch.
+    assert.equal(parseTreeherderUrl('file:///tmp/x?landoCommitID=1'), undefined);
+    // A Treeherder URL naming neither a revision nor a landing job.
+    assert.equal(parseTreeherderUrl('https://treeherder.mozilla.org/jobs?repo=try'), undefined);
+    // Not Treeherder's host. Nothing is ever fetched from the pasted origin,
+    // but reading a landoCommitID out of someone else's URL and answering as
+    // if it were Treeherder's is a confusing answer to a bad input.
+    assert.equal(
+        parseTreeherderUrl('https://evil.example.com/jobs?repo=try&landoCommitID=86670'),
+        undefined
+    );
+    assert.equal(
+        parseTreeherderUrl('https://evil.example.com/jobs?repo=try&revision=abc123'),
+        undefined
+    );
+    // The staging deployment is Treeherder, though.
+    assert.equal(
+        parseTreeherderUrl('https://treeherder.allizom.org/jobs?revision=abc123')?.kind,
+        'revision'
+    );
+    // A `landoCommitID` that is not a positive integer is not an ID.
+    assert.equal(
+        parseTreeherderUrl('https://treeherder.mozilla.org/jobs?landoCommitID=abc'),
+        undefined
+    );
+    assert.equal(
+        parseTreeherderUrl('https://treeherder.mozilla.org/jobs?landoCommitID=0'),
+        undefined
+    );
+    assert.equal(
+        parseTreeherderUrl('https://treeherder.mozilla.org/jobs?landoCommitID=-3'),
+        undefined
+    );
+});
+
+test('a bare argument is a landoCommitID only when it is too short to be a hash', () => {
+    // The rule: all decimal digits, fewer than MIN_REVISION_DIGITS (8).
+    assert.equal(MIN_REVISION_DIGITS, 8);
+    assert.equal(looksLikeLandoCommitId('86670'), true);
+    assert.equal(looksLikeLandoCommitId('  86670  '), true);
+    assert.equal(looksLikeLandoCommitId('1'), true);
+    // The boundary a reader will want to check: seven digits go to Lando,
+    // eight stay a revision.
+    assert.equal(looksLikeLandoCommitId('1234567'), true);
+    assert.equal(looksLikeLandoCommitId('12345678'), false);
+    // The literal in the regexp must track the constant.
+    assert.equal(looksLikeLandoCommitId('9'.repeat(MIN_REVISION_DIGITS - 1)), true);
+    assert.equal(looksLikeLandoCommitId('9'.repeat(MIN_REVISION_DIGITS)), false);
+    // Any hex letter makes it a revision, at any length.
+    assert.equal(looksLikeLandoCommitId('86670a'), false);
+    assert.equal(looksLikeLandoCommitId('4f2c1a9e8b3d'), false);
+    // Zero is not an ID, and neither is a non-integer.
+    assert.equal(looksLikeLandoCommitId('0'), false);
+    assert.equal(looksLikeLandoCommitId('866.70'), false);
+    assert.equal(looksLikeLandoCommitId(''), false);
+    // Shapes that must not sneak past the digit test.
+    for (const odd of ['-1', '+5', '5.0', '1e5', '0x10', '1_0', '１２３']) {
+        assert.equal(looksLikeLandoCommitId(odd), false, `${odd} is not a Lando ID`);
+    }
+});
+
+test('the landing-job URL keeps its trailing slash and maps every instance', () => {
+    // Without the slash Lando answers 301, and a `FetchLike` is not required
+    // to follow one.
+    assert.equal(
+        landingJobUrl(86670, 'lando-prod-2025'),
+        'https://lando.moz.tools/landing_jobs/86670/'
+    );
+    // Every instance in Treeherder's table is reachable.
+    for (const [instance, host] of Object.entries(LANDO_INSTANCES)) {
+        assert.equal(landingJobUrl(7, instance), `https://${host}/landing_jobs/7/`);
+    }
+    // An unknown instance falls back the way `getLandoJobsUrl()` does.
+    assert.equal(
+        landingJobUrl(7, 'lando-from-the-future'),
+        `https://${LANDO_INSTANCES[DEFAULT_LANDO_INSTANCE]}/landing_jobs/7/`
+    );
+    // The instance a bare ID uses is the one that actually serves the
+    // endpoint, which is not the URL fallback.
+    assert.notEqual(CURRENT_LANDO_INSTANCE, DEFAULT_LANDO_INSTANCE);
+    assert.equal(
+        landingJobUrl(86670, CURRENT_LANDO_INSTANCE),
+        'https://lando.moz.tools/landing_jobs/86670/'
+    );
+});
+
+test('a landed job yields its revision, and an unlanded one yields its status', async () => {
+    const landed = JSON.stringify({
+        id: 86670,
+        status: 'LANDED',
+        commit_id: '276928d856a67e2fff01925eeea1d3777087b17f',
+        repository: 'try',
+        error: '',
+        url: 'https://lando.moz.tools/landings/86670',
+    });
+    // Lando writes `""`, not `null` and not an absent field, before a job
+    // lands. Normalised to `undefined` so it cannot be mistaken for a
+    // revision — `findPush('')` would otherwise return the newest push.
+    const queued = JSON.stringify({
+        id: 87340,
+        status: 'SUBMITTED',
+        commit_id: '',
+        repository: 'firefox-autoland',
+        error: '',
+        url: 'https://lando.moz.tools/landings/87340',
+    });
+    const { fetch, urls } = fakeFetch((url) => ({
+        body: url.includes('/86670/') ? landed : queued,
+    }));
+    const client = landoClient({ fetch });
+
+    const job = await client.landingJob(86670, 'lando-prod-2025');
+    assert.equal(job.revision, '276928d856a67e2fff01925eeea1d3777087b17f');
+    assert.equal(job.status, 'LANDED');
+    assert.equal(job.repository, 'try');
+    assert.deepEqual(urls, ['https://lando.moz.tools/landing_jobs/86670/']);
+
+    const pending = await client.landingJob(87340, 'lando-prod-2025');
+    assert.equal(pending.revision, undefined);
+    assert.equal(pending.status, 'SUBMITTED');
+});
+
+test('an unknown landing job is not-found, and an unreadable answer is upstream', async () => {
+    const missing = landoClient({
+        // Lando returns a JSON *body* with the 404, so a client that only
+        // looked at the body would read a job with no status.
+        fetch: fakeFetch(() => ({
+            ok: false,
+            status: 404,
+            body: JSON.stringify({ title: 'Landing job not found', status: 404 }),
+        })).fetch,
+    });
+    await assert.rejects(
+        () => missing.landingJob(999999, 'lando-prod-2025'),
+        (error: unknown) => error instanceof LandingJobNotFoundError
+    );
+
+    const broken = landoClient({
+        fetch: fakeFetch(() => ({ body: 'not json' })).fetch,
+    });
+    await assert.rejects(
+        () => broken.landingJob(1, 'lando-prod-2025'),
+        (error: unknown) => error instanceof LandoError
+    );
+
+    // A 200 with no `status` cannot say why there is no revision, which is the
+    // whole of the not-yet-landed report, so it is an error rather than a job.
+    const statusless = landoClient({
+        fetch: fakeFetch(() => ({ body: JSON.stringify({ id: 1, commit_id: '' }) })).fetch,
+    });
+    await assert.rejects(
+        () => statusless.landingJob(1, 'lando-prod-2025'),
+        (error: unknown) => error instanceof LandoError
+    );
+
+    const down = landoClient({
+        fetch: fakeFetch(() => ({ ok: false, status: 503 })).fetch,
+    });
+    await assert.rejects(
+        () => down.landingJob(1, 'lando-prod-2025'),
+        (error: unknown) => error instanceof LandoError && error.status === 503
+    );
 });

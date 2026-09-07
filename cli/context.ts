@@ -17,6 +17,7 @@
 import type { DecodedTimingFile } from '../lib/formats/decode.ts';
 import type { DataSource } from '../lib/sources/source.ts';
 import type { IntermittentsClient } from '../lib/sources/intermittents.ts';
+import type { LandoClient } from '../lib/sources/lando.ts';
 import type { TreeherderClient } from '../lib/sources/treeherder.ts';
 import type { GlobalOptions } from './options.ts';
 
@@ -55,6 +56,16 @@ export interface CommandContext {
     taskArtifacts?: DataSource | undefined;
     /** Treeherder, for `fx-tests try`. Absent when a command does not need it. */
     treeherder?: TreeherderClient | undefined;
+    /**
+     * Lando, for the `landoCommitID` `fx-tests try` accepts in place of a
+     * revision.
+     *
+     * Its own client rather than a method on `treeherder`: it is a different
+     * host, and Treeherder's push API cannot answer the question — it accepts
+     * `lando_commit_id`, echoes it back and ignores it. See
+     * `lib/sources/lando.ts`.
+     */
+    lando?: LandoClient | undefined;
     /**
      * The intermittents endpoints plus Bugzilla, for `fx-tests intermittent`.
      *
