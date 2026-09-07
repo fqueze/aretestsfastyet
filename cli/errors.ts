@@ -13,6 +13,8 @@
  * assert on the code without spawning anything.
  */
 
+import { IntermittentsError, TREE_GROUPS } from '../lib/sources/intermittents.ts';
+
 /** `CLI.md`'s exit-code table, as a type. */
 export const ExitCode = {
     /** Success. */
@@ -74,4 +76,44 @@ export function upstreamError(message: string, hint?: string): CliError {
 /** Permanently missing data — exit 4. */
 export function goneError(message: string, hint?: string): CliError {
     return new CliError(ExitCode.Gone, message, hint);
+}
+
+/**
+ * Turns a Treeherder or Bugzilla failure into the CLI's exit codes.
+ *
+ * A 400 from those endpoints is almost always a `tree` they do not know — that
+ * is the one thing `validate_tree` rejects — so it becomes a usage error naming
+ * the groups they do accept, rather than exit 3 telling the user to retry a
+ * request that will fail identically forever.
+ *
+ * Here rather than in `cli/commands/intermittent.ts` because `fx-tests test`
+ * now makes the same two requests and needs the same mapping. It stays in
+ * `cli/` — its whole job is producing exit codes, which is a CLI concern that
+ * `lib/` must not know about — but in the module that owns the error
+ * constructors it calls, so a second command imports it from there rather than
+ * from another command.
+ */
+export async function withUpstreamErrors<T>(
+    work: () => Promise<T>,
+    tree: string
+): Promise<T> {
+    try {
+        return await work();
+    } catch (error) {
+        if (error instanceof IntermittentsError) {
+            if (error.status === 400) {
+                throw usageError(
+                    `Treeherder rejected the query, which for these endpoints means an unknown ` +
+                        `tree: "${tree}"`,
+                    `--tree takes a repository name (autoland, mozilla-central, …), a repo group ` +
+                        `(${TREE_GROUPS.join(', ')}), or all.`
+                );
+            }
+            throw upstreamError(
+                `${error.message} from ${error.url}`,
+                'Treeherder’s intermittents API and Bugzilla are both live services; retrying may work.'
+            );
+        }
+        throw error;
+    }
 }

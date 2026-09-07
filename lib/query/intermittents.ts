@@ -29,9 +29,12 @@ import {
     testPathCandidates,
     testPathOfLine,
 } from '../sources/intermittents.ts';
+import { type IssuesFile } from '../formats/issues.ts';
 import { testInfoArtifactUrl } from '../links.ts';
 import { type PartitionedMessages, partitionMarkerMessages } from '../model/marker-messages.ts';
+import { type DataSource, fetchJson, timingsIndex } from '../sources/source.ts';
 import { dateOfDay } from './flakiness.ts';
+import { collectTestPaths } from './test-lookup.ts';
 import { configFilter } from './test-stats.ts';
 
 /** Which harness a scan is looking for. */
@@ -51,12 +54,70 @@ export type HarnessSelector = ScanHarness | 'unknown';
 export type HarnessOfPath = (path: string) => ScanHarness | null;
 
 /**
+ * Builds a `HarnessOfPath` from the published 21-day aggregates.
+ *
+ * Two files for the whole run — the same `{harness}-issues.json` five other
+ * commands already read, so a warm cache makes this free. Deliberately not the
+ * per-test bucket files: those are 3.5 MB *each* and would make the cost scale
+ * with the number of bugs examined, when the question here is only "is this
+ * path a test of this harness".
+ *
+ * Here rather than in a command module because `intermittent` and
+ * `fx-tests test` both need it, and a second copy would have to re-derive the
+ * tie-break below — agreeing today and drifting the first time either file
+ * gains a path the other already has. It takes a `DataSource`, which is a
+ * `lib/` type, so nothing about it reaches back into `cli/`: the caller decides
+ * where the bytes come from and reports its own progress.
+ */
+export async function loadHarnessOfPath(source: DataSource): Promise<HarnessOfPath> {
+    const known = new Map<string, ScanHarness>();
+    for (const harness of ['mochitest', 'xpcshell'] as const) {
+        const file = await fetchJson<IssuesFile>(source, {
+            index: timingsIndex(harness),
+            filename: `${harness}-issues.json`,
+        });
+        for (const path of collectTestPaths([file])) {
+            // First wins, so a path in both files keeps the mochitest answer
+            // rather than depending on iteration order.
+            if (!known.has(path)) {
+                known.set(path, harness);
+            }
+        }
+    }
+    return (path: string) => known.get(path) ?? null;
+}
+
+/**
  * One ranked bug, whatever its classification.
  *
  * A single type rather than one for classified rows and one for the rest,
  * because with no `--harness` they share a list ordered by count. What separates
  * them is `harness`, an attribute of the row rather than a precondition for
  * having one.
+ *
+ * ## Which text field to display
+ *
+ * This type carries the bug's summary twice, cut two ways, and a caller must
+ * choose deliberately — two commands picking differently is how the same bug
+ * comes to render as two different strings.
+ *
+ * - **`failure`** — the summary with the triage prefix and the test path
+ *   removed. Use it in a **table that already has `test` and `bugId` columns**,
+ *   where repeating the path would spend width on something the row shows
+ *   twice. This is what the ranked list prints.
+ * - **`bugSummary`** — the raw Bugzilla summary, prefix and path intact. Use it
+ *   **standalone**: a one-line bug reference, a `--markdown` link title, or any
+ *   context with no `test` column beside it. The prefix (`Perma`, `Frequent`)
+ *   is triage state a reader wants, and it is the string Bugzilla will show
+ *   them when they open the bug.
+ *
+ * The two really differ — on live bug 2060167, `failure` is
+ * `shutdown hang | profile uploaded in …` where `bugSummary` is
+ * `Frequent shutdown hang | profile uploaded in …`. Neither is derivable from
+ * the other without a Bugzilla request, which is why both are carried.
+ *
+ * The rule of thumb: if the surrounding output already names the test, use
+ * `failure`; if it does not, use `bugSummary`.
  */
 export interface RankedIntermittent {
     bugId: number;
@@ -70,12 +131,15 @@ export interface RankedIntermittent {
     /** The verified test path, or `null` on an `unknown` row. */
     test: string | null;
     /**
-     * What to say about the failure.
+     * What to say about the failure, for a row that names the test elsewhere.
      *
      * On a classified row, the summary with its triage prefix and the path
      * removed — the part the other columns do not already show. On an `unknown`
      * row there is no path to remove, so this is the whole summary minus the
      * prefix, and it is everything the row has.
+     *
+     * **Not the whole summary**: see the type's "Which text field to display".
+     * A caller with no `test` column beside it wants `bugSummary`.
      */
     failure: string;
     /**
