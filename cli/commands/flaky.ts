@@ -206,6 +206,25 @@ export const FLAKY_NOTES: string[] = [
     '',
     '--group-by days is the exception: its flaky, stable and skipped columns are mutually',
     'exclusive and do sum to total.',
+    '',
+    // The reciprocal of the paragraph `intermittent --help` carries, since an
+    // agent asked for the most commonly failing tests ranked them from a
+    // failure-count command and then reasoned about sheriff priority from it.
+    // One sentence ending in a pointer: the explanation is `fx-tests guide`'s
+    // `annotations-are-not-failures` trap and paraphrasing it here would be a
+    // copy to keep in step.
+    //
+    // NOT the same sentence as `ISSUES_NOTES`, and the difference is the point.
+    // This command does not count failures: a row is TESTS carrying a flaky
+    // verdict — a per-day mean of them on the folder views, a literal 1 or 0 per
+    // test on the per-test view, with `failures` a separate column the ranking
+    // is not ordered by. The first version of this note was `issues`' sentence
+    // copied verbatim, and its "rather than the failures counted here" was false
+    // of the very command it printed on, which is exactly the confusion the
+    // pointer exists to prevent. Each sentence names its own unit.
+    '`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with rather than',
+    'the tests counted flaky here — see `fx-tests guide`, "`intermittent` counts sheriff',
+    'annotations, not failures".',
 ];
 
 /** `fx-tests flaky` options. */

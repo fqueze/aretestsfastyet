@@ -499,3 +499,63 @@ test('the rendered guide contains each command and each trap title', async () =>
         assert.ok(stdout.includes(trap.title), `the guide does not print "${trap.title}"`);
     }
 });
+
+/**
+ * The `intermittent` pointers on `issues --help` and `flaky --help` resolve, and
+ * each describes the command it prints on.
+ *
+ * Two regressions, both of which happened:
+ *
+ * 1. The notes quote the guide trap's title so a reader can find it — `fx-tests
+ *    guide` takes no topic argument and text mode renders `trap.title`, never
+ *    `trap.id`, so the title is the only handle a text-mode reader has. Nothing
+ *    asserted the quoted string matched, leaving a retitle free to silently
+ *    break both pointers. This reads the title out of `TRAPS` rather than
+ *    repeating the literal, so a retitle updates the expectation and cannot
+ *    drift from it.
+ * 2. The two notes shipped **byte-identical**, `flaky`'s being `issues`'
+ *    sentence copied whole. It read "rather than the failures counted here",
+ *    which is false of `flaky`: that command ranks TESTS carrying a flaky
+ *    verdict — 1 or 0 per test on the per-test view — while `issues` ranks the
+ *    fail+timeout+crash+skip union, whose top rows are routinely all skips. A
+ *    contrast sentence that misdescribes its own command defeats its purpose,
+ *    so the nouns are asserted per command and the two are asserted to differ.
+ */
+test('the `intermittent` pointer resolves and names each command’s own unit', async () => {
+    const trap = TRAPS.find((t) => t.id === 'annotations-are-not-failures');
+    assert.ok(trap, 'the annotations-are-not-failures trap is gone; the pointers name it');
+
+    const { stdout: guide } = await invoke(['guide']);
+    assert.ok(guide.includes(trap.title), 'the guide does not print the title the pointers quote');
+
+    const nouns: Record<string, string> = {
+        issues: 'the issues counted here',
+        flaky: 'the tests counted flaky here',
+    };
+    const sentences: string[] = [];
+    for (const [command, noun] of Object.entries(nouns)) {
+        const { stdout } = await invoke([command, '--help']);
+        // Unwrapped: the notes are hard-wrapped, so a phrase spanning a line
+        // break is not a substring of the raw help text.
+        const flat = stdout.replace(/\s+/g, ' ');
+        assert.ok(
+            flat.includes('`fx-tests intermittent` ranks'),
+            `${command} --help does not point at intermittent`
+        );
+        assert.ok(
+            flat.includes(noun),
+            `${command} --help does not describe what ${command} itself counts ("${noun}")`
+        );
+        assert.ok(
+            flat.includes(trap.title),
+            `${command} --help does not quote the trap title verbatim, so the pointer dead-ends`
+        );
+        const sentence = flat.slice(flat.indexOf('`fx-tests intermittent` ranks'));
+        sentences.push(sentence.slice(0, sentence.indexOf('".') + 2));
+    }
+    assert.notEqual(
+        sentences[0],
+        sentences[1],
+        'issues and flaky carry the same sentence again; they count different things'
+    );
+});

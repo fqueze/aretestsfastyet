@@ -34,6 +34,7 @@ import { GUIDE_OPTIONS, runGuide } from './commands/guide.ts';
 import {
     CRASHES_OPTIONS,
     FAILURES_OPTIONS,
+    ISSUES_NOTES,
     ISSUES_OPTIONS,
     SKIPS_OPTIONS,
     runCrashes,
@@ -119,6 +120,7 @@ const COMMANDS: CommandSpec[] = [
         summary: 'What is failing right now, across the tree.',
         usage: 'fx-tests issues [options]',
         options: ISSUES_OPTIONS,
+        notes: ISSUES_NOTES,
         run: runIssues,
     },
     {

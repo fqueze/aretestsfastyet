@@ -86,6 +86,36 @@ const SHARED_OPTIONS: OptionSpecs = {
     },
 };
 
+/**
+ * The standing note printed by `issues --help`, and nothing else.
+ *
+ * The reciprocal of the paragraph `intermittent --help` already carries. Asked
+ * for "the most commonly failing mochitests" an agent reached for `issues
+ * --group-by test`, got a top 20 with almost nothing in common with
+ * `intermittent`'s, and built a whole candidate list on it — because the text
+ * distinguishing the two rankings existed only on the command it did not run.
+ *
+ * One sentence, and it ends in a pointer rather than an explanation. The
+ * explanation is `fx-tests guide`'s `annotations-are-not-failures` trap and
+ * stays there; a fuller paraphrase here would be a second copy of it to keep in
+ * step, which is the failure this note exists to fix rather than repeat. The
+ * trap is named by its title because `fx-tests guide` takes no topic argument
+ * and text mode prints titles, not ids.
+ *
+ * The contrasting noun is **issues**, not failures, and the difference is not
+ * pedantry: an issue is the fail+timeout+crash+skip union, skips dominate it,
+ * and the top rows of the default ranking are routinely 100% skip with zero
+ * failures. A sentence saying "the failures counted here" would misdescribe the
+ * column the rows are actually ordered by. `flaky` states its own unit for the
+ * same reason — see the note at the end of `FLAKY_NOTES`, which is deliberately
+ * *not* the same sentence.
+ */
+export const ISSUES_NOTES: readonly string[] = [
+    '`fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with rather than',
+    'the issues counted here — see `fx-tests guide`, "`intermittent` counts sheriff',
+    'annotations, not failures".',
+];
+
 /** `fx-tests issues` options. */
 export const ISSUES_OPTIONS: OptionSpecs = {
     ...SHARED_OPTIONS,
