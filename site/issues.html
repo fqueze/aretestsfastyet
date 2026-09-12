@@ -454,6 +454,16 @@
             text-decoration: none;
             display: inline-block;
         }
+        /*
+         * The 6px separates the run of buttons from the test path in front of
+         * it, not the buttons from each other: applied to every button it put
+         * 6px of margin between the 📋 and the 🔍 on top of their own 4px of
+         * padding, which read as a gap rather than as a pair. Only the first
+         * button in a run keeps it.
+         */
+        .action-button + .action-button {
+            margin-left: 0;
+        }
 
         .tree-row:hover .action-button,
         .folder-row:hover .action-button {
