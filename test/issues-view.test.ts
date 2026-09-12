@@ -57,15 +57,22 @@ import {
     type IssueFilters,
     ALL_FILTERS,
     CRASH_NO_SIGNATURE,
+    DEFAULT_VIEW,
     FAILURE_NO_MESSAGE,
     INITIAL_SORT,
     NO_COMPONENT,
     STAT_COLUMNS,
     TIMEOUT_MESSAGE,
+    VIEW_MODES,
     buildComponentRows,
+    buildTestRows,
+    effectiveView,
     failureTooltip,
+    groupingOf,
+    hasComponentData,
     headerCounts,
     isHistoricalDate,
+    isViewMode,
     issueEntries,
     nextSort,
     percentageDisplay,
@@ -674,6 +681,258 @@ test('a component whose NAME matches survives even with no issues to show', () =
 });
 
 // =========================================================================
+// The three view modes
+// =========================================================================
+
+test('the fixture can tell the component grouping from the directory grouping', () => {
+    // The precondition this section needs stated rather than assumed, because
+    // it is a near-miss: the fixture's three directories map **one to one**
+    // onto its three components, so the two groupings produce the same number
+    // of rows with the same members and therefore the same counters. Only the
+    // *keys* differ. Every assertion below is written on keys for that reason,
+    // and a test asserting only counts would pass with the grouping ignored.
+    const byComponent = new Set(TALLY.map((row) => row.component));
+    const byDirectory = new Set(handDirectories().values());
+    assert.equal(byComponent.size, 3);
+    assert.equal(byDirectory.size, 3);
+    assert.equal(
+        [...byComponent].filter((key) => byDirectory.has(key)).length,
+        0,
+        'no component name is also a directory, so a key alone says which grouping ran'
+    );
+});
+
+/** Each test's directory, read off the raw fixture arrays. */
+function handDirectories(): Map<string, string> {
+    const out = new Map<string, string>();
+    for (let testId = 0; testId < raw.testRuns.length; testId++) {
+        out.set(
+            raw.tables.testNames[raw.testInfo.testNameIds[testId]!]!,
+            raw.tables.testPaths[raw.testInfo.testPathIds[testId]!]!
+        );
+    }
+    return out;
+}
+
+test('the tree mode groups by directory, with the same counters', () => {
+    const tree = buildComponentRows(file, ALL_FILTERS, '', 'directory');
+    assert.deepEqual(
+        tree.map((row) => row.key).sort(),
+        ['ipc/testshell/tests', 'netwerk/test/unit', 'toolkit/components/extensions/test/xpcshell'],
+        'the keys are the test paths from `tables.testPaths`, not component names'
+    );
+
+    // The directory totals, tallied by hand off `TALLY` and the raw paths, so
+    // the expectation is not `groupIssues`' own output.
+    const directories = handDirectories();
+    const expected = new Map<string, { runCount: number; issueCount: number; tests: number }>();
+    for (const row of TALLY) {
+        const key = directories.get(row.name)!;
+        const group = expected.get(key) ?? { runCount: 0, issueCount: 0, tests: 0 };
+        group.runCount += row.runCount;
+        group.issueCount += issueOf(row, ALL_FILTERS);
+        group.tests += 1;
+        expected.set(key, group);
+    }
+    for (const row of tree) {
+        const want = expected.get(row.key)!;
+        assert.equal(row.stats.runCount, want.runCount, `${row.key} runCount`);
+        assert.equal(row.stats.issueCount, want.issueCount, `${row.key} issueCount`);
+        assert.equal(row.totalTestCount, want.tests, `${row.key} totalTestCount`);
+    }
+});
+
+test('the tree mode keeps a directory whose tests are all clean', () => {
+    // The same `keepClean` rule the components view has, on the other key:
+    // with every filter off nothing has an issue, and all three directories
+    // must still be rows with their whole populations in the denominator. A
+    // `groupBy` that fell back to the component path would produce component
+    // keys here and fail on the first assertion.
+    const none: IssueFilters = { failures: false, timeouts: false, crashes: false, skips: false };
+    const tree = buildComponentRows(file, none, '', 'directory');
+    assert.deepEqual(
+        tree.map((row) => row.key).sort(),
+        ['ipc/testshell/tests', 'netwerk/test/unit', 'toolkit/components/extensions/test/xpcshell']
+    );
+    for (const row of tree) {
+        assert.equal(row.tests.length, 0, `${row.key} has nothing to list`);
+        assert.ok(row.stats.runCount > 0, `${row.key} still counts its runs`);
+        assert.equal(row.stats.issueCount, 0);
+    }
+});
+
+test('a search in the tree mode matches the directory or the test path', () => {
+    // `matchesSearch` compares the *key*, so in this mode that is the
+    // directory — searching `netwerk` keeps a row whose test paths do not
+    // contain the term in their file names.
+    const rows = buildComponentRows(file, ALL_FILTERS, 'netwerk', 'directory');
+    assert.deepEqual(
+        rows.map((row) => row.key),
+        ['netwerk/test/unit']
+    );
+    assert.equal(rows[0]!.matchingTestCount, 2, 'both of its tests are kept by the key match');
+    // And the path half of the same rule, which narrows within a directory.
+    const narrowed = buildComponentRows(file, ALL_FILTERS, 'test_socks', 'directory');
+    assert.deepEqual(
+        narrowed.map((row) => row.key),
+        ['netwerk/test/unit']
+    );
+    assert.equal(narrowed[0]!.matchingTestCount, 1);
+});
+
+test('the default grouping is component, so an existing caller is unchanged', () => {
+    // The parameter is additive: three arguments must still mean what they
+    // meant before the view control existed. A mutation defaulting it to
+    // `directory` would fail here and nowhere else, because every other call
+    // in this file passes three arguments too.
+    assert.deepEqual(
+        buildComponentRows(file, ALL_FILTERS, ''),
+        buildComponentRows(file, ALL_FILTERS, '', 'component')
+    );
+    assert.deepEqual(
+        buildComponentRows(file, ALL_FILTERS, '').map((row) => row.key).sort(),
+        ['Core :: Networking', 'Core :: XPConnect', 'WebExtensions :: General']
+    );
+});
+
+test('the list mode is one row per test with an issue, clean tests dropped', () => {
+    const rows = buildTestRows(file, ALL_FILTERS, '');
+    const withIssues = TALLY.filter((row) => issueOf(row, ALL_FILTERS) > 0);
+    assert.deepEqual(
+        rows.map((row) => row.fullPath.split('/').pop()!).sort(),
+        withIssues.map((row) => row.name).sort()
+    );
+    // The discriminating case, and the difference from both grouped modes:
+    // `test_ext_always_green.js` has 500 runs and no issue. The grouped modes
+    // count it into a denominator; here it is not a row at all, which is
+    // `fx-tests issues --group-by test` (`cli/commands/issues.ts:420-422`).
+    assert.ok(
+        TALLY.some((row) => row.name === 'test_ext_always_green.js' && issueOf(row, ALL_FILTERS) === 0),
+        'the fixture still has the clean test this distinction needs'
+    );
+    assert.equal(
+        rows.filter((row) => row.fullPath.endsWith('test_ext_always_green.js')).length,
+        0
+    );
+
+    // The counters are the per-test ones, unchanged from the child rows the
+    // grouped modes render — checked on the one test whose numbers are the
+    // most distinctive in the fixture.
+    const dnr = rows.find((row) => row.fullPath.endsWith('test_ext_dnr_dynamic_rules.js'))!;
+    const want = TALLY.find((row) => row.name === 'test_ext_dnr_dynamic_rules.js')!;
+    assert.equal(dnr.runCount, want.runCount);
+    assert.equal(dnr.failCount, want.failCount);
+    assert.equal(dnr.timeoutCount, want.timeoutCount);
+    assert.equal(dnr.crashCount, want.crashCount);
+    assert.equal(dnr.skipCount, want.skipCount);
+    assert.equal(dnr.issueCount, issueOf(want, ALL_FILTERS));
+});
+
+test('the list mode follows the filters, in both directions', () => {
+    // The checkboxes change which tests are rows at all, because a test is a
+    // row only when it has an issue of an enabled type. `test_socks.js` has
+    // one timeout and nothing else, so it appears under timeouts and vanishes
+    // without them — a mutation ignoring `filters` here keeps it in both.
+    const timeoutsOnly: IssueFilters = { failures: false, timeouts: true, crashes: false, skips: false };
+    const withTimeouts = buildTestRows(file, timeoutsOnly, '');
+    assert.ok(withTimeouts.some((row) => row.fullPath.endsWith('test_socks.js')));
+
+    const failuresOnly: IssueFilters = { failures: true, timeouts: false, crashes: false, skips: false };
+    const withoutTimeouts = buildTestRows(file, failuresOnly, '');
+    assert.ok(
+        !withoutTimeouts.some((row) => row.fullPath.endsWith('test_socks.js')),
+        'its only issue is a timeout, so it is not a row when timeouts are off'
+    );
+
+    const none: IssueFilters = { failures: false, timeouts: false, crashes: false, skips: false };
+    assert.deepEqual(buildTestRows(file, none, ''), [], 'no enabled type means no row');
+});
+
+test('the list mode searches the test path only, not the component', () => {
+    // The one place the list deliberately differs from the grouped modes'
+    // search. `WebExtensions` matches seven tests through their *component* in
+    // the components view; with no group row to keep, matching on it here
+    // would list tests whose own paths never mention extensions.
+    assert.equal(
+        buildComponentRows(file, ALL_FILTERS, 'webextensions').length,
+        1,
+        'the grouped mode keeps the component by name'
+    );
+    assert.deepEqual(
+        buildTestRows(file, ALL_FILTERS, 'webextensions'),
+        [],
+        'no test path contains it, so the list keeps nothing'
+    );
+    // And the path match itself still works, case-insensitively.
+    assert.equal(buildTestRows(file, ALL_FILTERS, 'TEST_SOCKS').length, 1);
+    assert.equal(buildTestRows(file, ALL_FILTERS, 'netwerk').length, 2);
+});
+
+test('a mode maps to the grouping the CLI uses, and the default is components', () => {
+    assert.equal(DEFAULT_VIEW, 'components');
+    assert.equal(groupingOf('components'), 'component');
+    assert.equal(groupingOf('tree'), 'directory');
+    assert.equal(groupingOf('list'), null, 'the flat list has no grouping key');
+    // The radios, by id and label, as the markup carries them.
+    assert.deepEqual(VIEW_MODES, [
+        ['components', 'view-components', 'bugzilla components'],
+        ['tree', 'view-tree', 'source tree'],
+        ['list', 'view-list', 'list'],
+    ]);
+    assert.equal(VIEW_MODES[0]![0], DEFAULT_VIEW, 'the default is the first radio');
+});
+
+test('component availability decides whether the components mode is usable', () => {
+    // `hasComponentData` on a file that has them, which both fixtures do.
+    assert.equal(hasComponentData(file), true);
+    assert.equal(effectiveView('components', file), 'components');
+    assert.equal(effectiveView('tree', file), 'tree');
+    assert.equal(effectiveView('list', file), 'list');
+
+    // And on one that does not. Built by dropping `tables.components` from a
+    // copy of the fixture, which is exactly what the optional field being
+    // absent means (`lib/formats/tables.ts:105`) — `readTest` then returns
+    // `component: null` for every test, so the components view would collapse
+    // to a single `(no component)` row.
+    const stripped = structuredClone(raw);
+    // `IssuesTables.components` is declared required, so the cast is what lets
+    // the field be removed — which is the state the *format* permits
+    // (`TestInfoTables.components` is optional) and a published file could
+    // arrive in.
+    delete (stripped.tables as { components?: string[] }).components;
+    const noComponents = decodeIssues(stripped);
+    assert.equal(hasComponentData(noComponents), false);
+    assert.equal(
+        effectiveView('components', noComponents),
+        'tree',
+        'the fallback `xpcshell-timings.html:3055-3060` applies'
+    );
+    // The other two are unaffected: neither needs a component.
+    assert.equal(effectiveView('tree', noComponents), 'tree');
+    assert.equal(effectiveView('list', noComponents), 'list');
+    // With no file loaded there is nothing to ask, so the selection stands.
+    assert.equal(effectiveView('components', null), 'components');
+
+    // The collapse this guards against, measured rather than asserted about:
+    // grouping that file by component really does give one row.
+    const collapsed = buildComponentRows(noComponents, ALL_FILTERS, '', 'component');
+    assert.deepEqual(
+        collapsed.map((row) => row.key),
+        [NO_COMPONENT]
+    );
+});
+
+test('isViewMode accepts the three and nothing else', () => {
+    assert.equal(isViewMode('components'), true);
+    assert.equal(isViewMode('tree'), true);
+    assert.equal(isViewMode('list'), true);
+    assert.equal(isViewMode('component'), false, 'the CLI spelling is not a mode');
+    assert.equal(isViewMode('directory'), false);
+    assert.equal(isViewMode(''), false);
+    assert.equal(isViewMode(undefined), false);
+});
+
+// =========================================================================
 // The component header
 // =========================================================================
 
@@ -931,16 +1190,33 @@ test('a named day still selects that day', () => {
     assert.equal(isHistoricalDate('2026-07-14'), false);
 });
 
-test('the hash carries date and q, and nothing else', () => {
-    assert.deepEqual(readUrlState(new URLSearchParams('date=2026-08-04&q=socks')), {
+test('the hash carries date, q and view, and nothing else', () => {
+    assert.deepEqual(readUrlState(new URLSearchParams('date=2026-08-04&q=socks&view=tree')), {
         date: '2026-08-04',
         q: 'socks',
+        view: 'tree',
     });
     assert.deepEqual(readUrlState(new URLSearchParams('')), {});
-    // `view` is never written (`:901` only writes a non-default view, and the
-    // view is hard-coded to `components`), so it is not read back either.
-    assert.deepEqual(readUrlState(new URLSearchParams('view=list')), {});
     // An empty `q` is present-but-empty, which is how a cleared search box
     // round-trips.
     assert.deepEqual(readUrlState(new URLSearchParams('q=')), { q: '' });
+    // An unknown key is not carried, which is what stops a hash from another
+    // page's control silently becoming state here.
+    assert.deepEqual(readUrlState(new URLSearchParams('sort=runCount')), {});
+});
+
+test('a view the page does not have is dropped rather than applied', () => {
+    // The three the radios offer, each read back as itself.
+    for (const view of ['components', 'tree', 'list'] as const) {
+        assert.deepEqual(readUrlState(new URLSearchParams(`view=${view}`)), { view });
+    }
+    // And anything else. Returning `{}` is what leaves the caller on the view
+    // it is already on: `site/issues.ts:loadFromUrlHash` resolves an absent
+    // `view` to `DEFAULT_VIEW`, so a bogus one lands on `components` rather
+    // than on a mode with no renderer.
+    assert.deepEqual(readUrlState(new URLSearchParams('view=bogus')), {});
+    assert.deepEqual(readUrlState(new URLSearchParams('view=')), {});
+    // Case matters: the values are the ones the radios carry, not a
+    // normalization of them.
+    assert.deepEqual(readUrlState(new URLSearchParams('view=Tree')), {});
 });

@@ -284,6 +284,14 @@ export interface IssueGroup {
  *
  * Grouping by *message* is a different operation — it needs the messages, which
  * a row does not carry — and lives in `failures.ts`.
+ *
+ * **Both keys are now a page control as well as a CLI flag.**
+ * `site/issues.html`'s "Show as" radios call this with `component` for
+ * "bugzilla components" and `directory` for "source tree"
+ * (`site/issues-view.ts:groupingOf`), so the two sides group by the same key
+ * through the same function rather than agreeing by coincidence. The `:888`
+ * hard-coding above describes the pre-migration page; `component` is still the
+ * default on both sides.
  */
 export function groupIssues(
     rows: Iterable<IssueRow>,

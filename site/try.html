@@ -211,6 +211,13 @@
 
         .test-info {
             min-width: 0;
+            /*
+             * The 📋 gutter: wide enough for the glyph at `.action-button`'s
+             * 11px, and the one number `.test-path`'s negative margin and
+             * `.inline-message`'s indent are both derived from, so they cannot
+             * drift apart.
+             */
+            --row-action-width: 18px;
         }
         .test-path {
             font-family: monospace;
@@ -444,14 +451,60 @@
             color: #b71c1c;
         }
 
-        .history-link {
-            font-size: 13px;
+        /*
+         * The 📋 and 🔍 buttons `site/test-link.ts` puts on each test path.
+         * Copied from `issues.html:415-443` so the same treatment looks the
+         * same on both pages; the only difference is the hover selector, since
+         * a row here is a `<tr class="clickable-row">` and there a
+         * `<div class="tree-row">`. Invisible until the row is hovered, so a
+         * long list of paths stays a list of paths.
+         */
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 0;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
             text-decoration: none;
-            color: #888;
-            margin-left: 6px;
+            display: inline-block;
         }
-        .history-link:hover {
-            text-decoration: underline;
+        /*
+         * The copy button leads the path, so its own width is what would
+         * indent every path in the column away from the "Test" header above
+         * it. Reserving the width here and taking it back off the left keeps
+         * the glyph in the gutter and the path's first character on the
+         * header's first character, hovered or not — the button only ever
+         * changes its own opacity, never the column's alignment.
+         */
+        .test-path > .action-button:first-child {
+            width: var(--row-action-width);
+            margin-left: calc(-1 * var(--row-action-width));
+            text-align: left;
+        }
+        /*
+         * ...which means the path itself starts one button-width in, and the
+         * message under it has to start there too or it hangs off the left of
+         * the name it belongs to.
+         */
+        .test-path,
+        .inline-message {
+            padding-left: var(--row-action-width);
+        }
+        .clickable-row:hover .action-button {
+            opacity: 1;
+        }
+        .action-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+        .action-button:active {
+            background-color: #007bff;
+            color: white;
         }
         .flakiness-cell {
             text-align: right;

@@ -907,10 +907,11 @@ not be read; they are header presentation and cost no rows. Each failure carries
 ### `fx-tests issues` — what is failing right now, across the tree
 
 The triage view, and **it leads with components rather than tests** — the same
-question `issues.html` answers, which hardcodes the components view
-(`old/issues.html:888`) and ranks it by issue count (`:663`). Triage starts by
-finding the area worth looking at; a flat per-test list makes the reader do
-that aggregation themselves.
+question `issues.html` answers, which defaults to the components view and ranks
+it by issue count (`old/issues.html:888` hard-coded it; `site/issues.html` has a
+"Show as" control whose default is the same). Triage starts by finding the area
+worth looking at; a flat per-test list makes the reader do that aggregation
+themselves.
 
 ```
 $ fx-tests issues --limit 5
@@ -945,6 +946,11 @@ Options: `--component <substring>`, `--path <prefix>` (directory subtree),
 `--group-by message` is the "one bug, many tests" view: a single harness
 change or infra fault often shows up as the same message across dozens of
 tests, and grouping by message makes that one line instead of thirty.
+
+Three of the four are the page's "Show as" radios, through the same functions:
+`component` is "bugzilla components", `directory` is "source tree", `test` is
+"list". `message` has no radio, because a row there is a message and not a
+place in the tree.
 
 `fx-tests intermittent` ranks the bugs sheriffs annotated failing jobs with
 rather than the issues counted here — see §`fx-tests guide`'s

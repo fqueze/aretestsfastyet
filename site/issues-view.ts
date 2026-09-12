@@ -7,9 +7,15 @@
  *
  * | file | contains | tested by |
  * | --- | --- | --- |
- * | `lib/query/issues.ts` | the per-test counters and the component grouping, shared with the CLI | `test/query.test.ts` |
- * | this file | the page's view model — the row set, the sort, the search, the expansion, the URL state | `test/issues-view.test.ts`, no DOM |
+ * | `lib/query/issues.ts` | the per-test counters and **all three** groupings, shared with the CLI | `test/query.test.ts` |
+ * | this file | the page's view model — the view modes, the row set, the sort, the search, the expansion, the URL state | `test/issues-view.test.ts`, no DOM |
  * | `site/issues.ts` | the renderer and the interactions | `test/issues-page.test.ts` + the browser run |
+ *
+ * The three "Show as" modes are three groupings the library already had for
+ * `fx-tests issues`, not three row builders: `ViewMode` maps to
+ * `groupIssues`' `component` and `directory` and to the ungrouped `findIssues`,
+ * and `groupingOf` is the one place that mapping lives. See `ViewMode` below
+ * and divergence 8 in `site/issues.ts`.
  *
  * ## The shared drill-down was considered and **not** used
  *
@@ -20,7 +26,7 @@
  *
  * | | shared drill-down | this page |
  * | --- | --- | --- |
- * | row unit | a group key — a signature or a message string | a **Bugzilla component** |
+ * | row unit | a group key — a signature or a message string | a **Bugzilla component**, or a directory, or a test |
  * | what a row carries | `testCount` and `count` — two numbers | **seven** counters plus a derived rate |
  * | level 2 | directory path, collapsed away when it holds one test | **test**, and only those with `issueCount > 0` |
  * | level 3 | test | **issue message**, grouped by (type, text) |
@@ -170,18 +176,139 @@ export function typesOf(filters: IssueFilters): IssueType[] {
     return types;
 }
 
+// --- the view modes -------------------------------------------------------
+
+/**
+ * What the three "Show as" radios group by.
+ *
+ * `xpcshell-timings.html:357-371` carries the same three with the same labels,
+ * and `getCurrentView` (`:550-561`) is the accessor. `issues.html` had the
+ * control's *effect* hard-coded instead — `getCurrentView()` returns the
+ * constant `'components'` (`old/issues.html:887-890`) — so this adds the
+ * control to the page whose renderer was already the components one.
+ *
+ * The three map onto groupings `lib/query/issues.ts` already has, which is why
+ * no new aggregation is written here:
+ *
+ * | mode | grouping | `fx-tests issues` |
+ * | --- | --- | --- |
+ * | `components` | `groupIssues(rows, 'component')` | `--group-by component`, its default |
+ * | `tree` | `groupIssues(rows, 'directory')` | `--group-by directory` |
+ * | `list` | none — one row per test, from `findIssues` | `--group-by test` |
+ */
+export type ViewMode = 'components' | 'tree' | 'list';
+
+/**
+ * The mode the page opens on.
+ *
+ * `components`, which is both radios' default (`xpcshell-timings.html:358`,
+ * `checked`) and what this page rendered before the control existed. The
+ * owner confirmed it stays.
+ */
+export const DEFAULT_VIEW: ViewMode = 'components';
+
+/**
+ * The radios, in markup order: element id, hash value, label.
+ *
+ * The labels are `xpcshell-timings.html`'s, verbatim, so a reader who knows one
+ * page's control knows this one's.
+ */
+export const VIEW_MODES: readonly (readonly [ViewMode, string, string])[] = [
+    ['components', 'view-components', 'bugzilla components'],
+    ['tree', 'view-tree', 'source tree'],
+    ['list', 'view-list', 'list'],
+];
+
+/** Whether a string names a view mode. */
+export function isViewMode(value: string | undefined): value is ViewMode {
+    return value === 'components' || value === 'tree' || value === 'list';
+}
+
+/**
+ * What a mode groups by, or `null` for the flat list.
+ *
+ * The one place the page's vocabulary is mapped onto `groupIssues`', like
+ * `typesOf` is for the checkboxes — so the page and the CLI cannot drift into
+ * grouping by different things under the same name.
+ */
+export function groupingOf(view: ViewMode): 'component' | 'directory' | null {
+    switch (view) {
+        case 'components':
+            return 'component';
+        case 'tree':
+            return 'directory';
+        case 'list':
+            return null;
+    }
+}
+
+/**
+ * Whether a file can be grouped by Bugzilla component at all.
+ *
+ * `hasComponentData` (`xpcshell-timings.html:545-547`), which that page uses to
+ * hide the components radio and fall back to the tree when a file carries no
+ * `tables.components`/`testInfo.componentIds` — both are optional fields
+ * (`lib/formats/tables.ts:105`, `:113`) and `readTest` returns `component:
+ * null` when they are absent, so without the check the components view would
+ * collapse to one `(no component)` row.
+ *
+ * Asked of the decoded file rather than of the raw one, because that is what
+ * this page holds and because the three families it loads have three different
+ * raw shapes. It is a scan rather than a flag: `DecodedTimingFile` has no
+ * "were there components" field, and the answer the page needs is "is there a
+ * component to group by", which a present-but-all-null table also answers no.
+ * It stops at the first test with one, so on a file that has them it reads one
+ * test.
+ *
+ * Measured on the checked-in fixtures: `xpcshell-issues.json` and
+ * `xpcshell-2026-08-03.json` both carry a 3-entry `tables.components` and a
+ * `componentIds`, so the fallback is not reachable on either — but
+ * `FORMATS.md:174` records individual `componentIds` entries being null (2 of
+ * 4,838 xpcshell tests), which is the `(no component)` bucket and not this.
+ */
+export function hasComponentData(file: DecodedTimingFile): boolean {
+    for (let testId = 0; testId < file.testCount; testId++) {
+        if (file.testAt(testId).component !== null) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * The mode to render, given what the reader picked and what the file supports.
+ *
+ * `getCurrentView`'s two fallbacks (`xpcshell-timings.html:550-561`): a
+ * components selection on a file with no components becomes `tree`, and so does
+ * an absent selection.
+ */
+export function effectiveView(view: ViewMode, file: DecodedTimingFile | null): ViewMode {
+    if (view !== 'components' || file === null) {
+        return view;
+    }
+    return hasComponentData(file) ? 'components' : 'tree';
+}
+
 // --- the rows -------------------------------------------------------------
 
 /**
- * One component row, with the tests under it.
+ * One group row — a component or a directory — with the tests under it.
  *
  * `renderComponentsView` (`old/issues.html:1933`) builds this as two objects — a
  * `componentGroups` entry and a pair of `componentTotalTests` /
  * `componentTotalTestsWithIssues` maps filled by a separate first pass
  * (`:1949-1965`). They are one record here because they describe one row.
+ *
+ * The name is the components view's, which is the only one `issues.html` had.
+ * The `tree` mode's rows are the same record with a directory in `key`: every
+ * field below is a count over the row's tests and means the same thing either
+ * way, which is why the two modes share one type rather than one being a copy.
  */
 export interface ComponentRow {
-    /** `Product :: Component`, or `(no component)`. `old/issues.html:1954`. */
+    /**
+     * `Product :: Component` or `(no component)` (`old/issues.html:1954`) in
+     * the components view; the test's directory in the tree view.
+     */
     key: string;
     /** The group totals, from `lib/query/issues.ts`. */
     stats: IssueGroup;
@@ -191,14 +318,14 @@ export interface ComponentRow {
      */
     tests: IssueRow[];
     /**
-     * Tests in the component that survived the search, issue-free included.
+     * Tests in the group that survived the search, issue-free included.
      *
      * The `out of M` in the header (`:2106`). Under a search that matched on
-     * test path this is the *matching* count rather than the component's whole
+     * test path this is the *matching* count rather than the group's whole
      * population — see `headerCounts`.
      */
     matchingTestCount: number;
-    /** Every test in the component, before any search. `:1959`. */
+    /** Every test in the group, before any search. `:1959`. */
     totalTestCount: number;
     /** Tests with an issue, before any search. `:1963`. */
     totalTestsWithIssues: number;
@@ -393,13 +520,13 @@ function testValue(row: IssueRow, field: SortField): number {
 // --- building the row set -------------------------------------------------
 
 /**
- * Every component row for a file, under one filter setting and one search.
+ * Every group row for a file, under one filter setting and one search.
  *
  * This is `renderComponentsView`'s two passes (`old/issues.html:1946-2029`) with
  * the rendering taken out. The order of operations is the part that matters and
  * it is upstream's:
  *
- * 1. **Every test is counted into its component's totals**, search or no search
+ * 1. **Every test is counted into its group's totals**, search or no search
  *    — `componentTotalTests` and `componentTotalTestsWithIssues` are built in a
  *    first pass over the *whole* file (`:1949-1965`), before the search is
  *    consulted.
@@ -420,23 +547,43 @@ function testValue(row: IssueRow, field: SortField): number {
  * xpcshell file there are exactly 3 — `Firefox :: Sharing` (5 tests),
  * `Core :: Widget: Cocoa` (1) and `Core :: Layout` (1) — out of 136. That is a
  * declared page-vs-CLI divergence, not an old-vs-new one.
+ *
+ * ## `groupBy`, for the source-tree mode
+ *
+ * `component` is the default because it is what `issues.html` did with no
+ * control at all, so an existing caller keeps the behaviour it had.
+ * `directory` is the `tree` radio, and it changes **only the key** — the two
+ * passes, the search, the `keepClean` and the `groupIssues` call are the same
+ * code on the same rows, so the tree view's arithmetic cannot disagree with the
+ * components view's or with `fx-tests issues --group-by directory`.
+ *
+ * The directory is `IssueRow.directory`, the test's own leaf directory, so the
+ * rows are flat: `netwerk/test/unit` is a row and `netwerk` is not one. That is
+ * the grouping `groupIssues` implements and the one the CLI prints, and it is
+ * *not* `xpcshell-timings.html`'s tree, which nests folders and collapses
+ * single-child ones (`:1754-1825`). Naming it "source tree" and ranking one
+ * level of it is the trade this makes: the shared grouping stays shared, and
+ * the reader gets the directory rankings the CLI already has.
  */
 export function buildComponentRows(
     file: DecodedTimingFile,
     filters: IssueFilters,
-    searchTerm: string
+    searchTerm: string,
+    groupBy: 'component' | 'directory' = 'component'
 ): ComponentRow[] {
     const types = typesOf(filters);
     // `keepClean` is what reproduces step 3: every test comes back, including
     // the ones with no issue, so the denominators cover the whole population.
     const all = findIssues(file, { types, keepClean: true });
     const needle = searchTerm.toLowerCase().trim();
+    const keyOf = (row: IssueRow): string =>
+        groupBy === 'component' ? (row.component ?? NO_COMPONENT) : row.directory;
 
-    // Pass 1, over every test: the component's whole population.
+    // Pass 1, over every test: the group's whole population.
     const totalTests = new Map<string, number>();
     const totalWithIssues = new Map<string, number>();
     for (const row of all) {
-        const key = row.component ?? NO_COMPONENT;
+        const key = keyOf(row);
         totalTests.set(key, (totalTests.get(key) ?? 0) + 1);
         if (row.issueCount > 0) {
             totalWithIssues.set(key, (totalWithIssues.get(key) ?? 0) + 1);
@@ -446,7 +593,7 @@ export function buildComponentRows(
     // Pass 2, over the tests the search kept.
     const kept = new Map<string, IssueRow[]>();
     for (const row of all) {
-        const key = row.component ?? NO_COMPONENT;
+        const key = keyOf(row);
         if (needle !== '' && !matchesSearch(key, row.fullPath, needle)) {
             continue;
         }
@@ -463,7 +610,7 @@ export function buildComponentRows(
         // Recomputed from the kept members rather than from `all`, so a search
         // narrows the row's numbers. `groupIssues` is the same function the CLI
         // uses, which is what keeps the two sides' arithmetic identical.
-        const [stats] = groupIssues(members, 'component', types);
+        const [stats] = groupIssues(members, groupBy, types);
         rows.push({
             key,
             // `groupIssues` drops a group whose every test is clean (`:329`).
@@ -477,16 +624,48 @@ export function buildComponentRows(
         });
     }
 
-    // The component filter (`old/issues.html:2024-2029`): with a search, a
-    // component survives if its *name* matched or if it kept a test with an
-    // issue. A component whose only matching tests are clean is dropped —
-    // which is why this is not the same as `kept.size`.
+    // The group filter (`old/issues.html:2024-2029`): with a search, a group
+    // survives if its *name* matched or if it kept a test with an issue. A
+    // group whose only matching tests are clean is dropped — which is why this
+    // is not the same as `kept.size`.
     if (needle === '') {
         return rows;
     }
     return rows.filter(
         (row) => row.key.toLowerCase().includes(needle) || row.tests.length > 0
     );
+}
+
+/**
+ * Every test with an issue, as one flat ranked list — the `list` radio.
+ *
+ * `findIssues` with no `keepClean`, which is `fx-tests issues --group-by test`
+ * exactly: a clean test is not a row anyone wants listed
+ * (`cli/commands/issues.ts:420-422`). So unlike the two grouped modes there is
+ * no whole-population denominator to preserve here, and no group to rebuild
+ * when every member is clean.
+ *
+ * The search is the **test path only**. `matchesSearch` also matches the
+ * component name, which is what makes searching `WebExtensions` keep a
+ * component's whole row set in the grouped modes; with no group row to keep,
+ * matching on a component would list tests whose paths say nothing about the
+ * term — `xpcshell-timings.html:2161` filters its own list view on
+ * `test.testPath` alone for the same reason.
+ *
+ * Unsorted here: `sortTests` ranks it, with the same comparator and the same
+ * eight columns the grouped modes' child rows use.
+ */
+export function buildTestRows(
+    file: DecodedTimingFile,
+    filters: IssueFilters,
+    searchTerm: string
+): IssueRow[] {
+    const rows = findIssues(file, { types: typesOf(filters) });
+    const needle = searchTerm.toLowerCase().trim();
+    if (needle === '') {
+        return rows;
+    }
+    return rows.filter((row) => row.fullPath.toLowerCase().includes(needle));
 }
 
 /** What the page calls a test with no Bugzilla component. `old/issues.html:1954`. */
@@ -1047,8 +1226,9 @@ export function componentDailyOutcomes(
  * (`getIssueRuns`, `:3168-3172`, which explicitly collects **all** `FAIL*`
  * status ids) both use the full set, and only the chart uses one. Reproducing
  * the chart's version would put a bar summing to 48 directly beneath a line
- * reading 51 and a list of 51 rows. Declared as divergence 8 in
- * `site/issues.ts`.
+ * reading 51 and a list of 51 rows. Declared as divergence **6** in
+ * `site/issues.ts` — this pointer said 8 while the list had seven entries, and
+ * 8 is now the view control, so it would have pointed at the wrong one.
  */
 export function messageDailyRates(
     file: DecodedTimingFile,
@@ -1289,6 +1469,8 @@ export const TOOLTIP_HEADING: Record<TooltipType, string> = {
 export interface UrlState {
     date: string;
     q: string;
+    /** Which of the three "Show as" radios is selected. */
+    view: ViewMode;
 }
 
 /** The value that means the 21-day aggregate. `old/issues.html:3755`. */
@@ -1328,13 +1510,19 @@ export function isHistoricalDate(date: string | undefined): boolean {
 }
 
 /**
- * Reads the two keys this page uses out of a parsed hash.
+ * Reads the three keys this page uses out of a parsed hash.
  *
- * `view` is deliberately not read. `getCurrentView()` returns the constant
- * `'components'` (`old/issues.html:887-890`) and `updateUrlHash` writes `view` only
- * when it differs from `'components'` (`:901`) — so the parameter is never
- * written, and nothing reads it back. Omitting it is what makes that checkable
- * by the compiler rather than by a comment.
+ * `view` **is** read now, which is a change: `getCurrentView()` used to return
+ * the constant `'components'` (`old/issues.html:887-890`) so the parameter was
+ * never written and nothing read it back. The radios make it a real control,
+ * and the read follows `xpcshell-timings.html:3146-3147` — that page resolves
+ * an absent `view` to `'components'` and looks the radio up by value.
+ *
+ * Validated rather than trusted, as `site/errors-view.ts:1434-1437` does:
+ * `#view=bogus` leaves the page on the view it is on rather than on a view with
+ * no renderer. That is the difference between `isViewMode` here and the
+ * upstream `querySelector` returning null, which has the same effect by
+ * accident.
  */
 export function readUrlState(params: URLSearchParams): Partial<UrlState> {
     const state: Partial<UrlState> = {};
@@ -1345,6 +1533,10 @@ export function readUrlState(params: URLSearchParams): Partial<UrlState> {
     const q = params.get('q');
     if (q !== null) {
         state.q = q;
+    }
+    const view = params.get('view');
+    if (view !== null && isViewMode(view)) {
+        state.view = view;
     }
     return state;
 }

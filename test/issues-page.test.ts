@@ -430,6 +430,26 @@ function resetFilters(): void {
     }
 }
 
+/**
+ * Clicks one of the three "Show as" radios, as a reader would.
+ *
+ * `checked = true` then `change`, which is what a click on a radio produces —
+ * and *not* `click()`, because jsdom's radio-group behaviour on a synthetic
+ * click is the thing under test's input rather than something to rely on.
+ * Setting `checked` unchecks the group's other members, so the page's
+ * `selectedView()` sees exactly one.
+ */
+function switchView(id: 'view-components' | 'view-tree' | 'view-list'): void {
+    const radio = checkbox(id);
+    radio.checked = true;
+    radio.dispatchEvent(new harness.window.Event('change'));
+}
+
+/** Back to the default mode, so the next test starts where the page loaded. */
+function resetView(): void {
+    switchView('view-components');
+}
+
 // =========================================================================
 // The 21-day default — the migration's deliberate change
 // =========================================================================
@@ -658,6 +678,211 @@ test('the rate column sorts ascending first, unlike the counts', () => {
         '↓',
         'a count column opens descending'
     );
+});
+
+// =========================================================================
+// The "Show as" radios
+// =========================================================================
+
+test('the page opens on bugzilla components, with that radio checked', () => {
+    // The default the owner confirmed stays. Asserted on the DOM rather than
+    // on the module's state, because a page whose markup said `components` and
+    // whose renderer grouped by directory would pass any state-only check.
+    assert.equal(checkbox('view-components').checked, true);
+    assert.equal(checkbox('view-tree').checked, false);
+    assert.equal(checkbox('view-list').checked, false);
+    assert.deepEqual(
+        componentRows().map((row) => row.dataset['path']),
+        EXPECTED_ROWS.map((row) => row.key),
+        'and the rows really are the components'
+    );
+});
+
+test('the source tree radio re-renders one row per directory', () => {
+    collapseAll();
+    switchView('view-tree');
+
+    const keys = componentRows().map((row) => row.dataset['path']);
+    assert.deepEqual(
+        [...keys].sort(),
+        ['ipc/testshell/tests', 'netwerk/test/unit', 'toolkit/components/extensions/test/xpcshell'],
+        'the keys are directories, which no component name in this fixture is'
+    );
+    // The rows are still expandable group rows with the seven stat columns —
+    // the same renderer, so a directory row is not a degraded one.
+    const biggest = componentRows()[0]!;
+    assert.equal(biggest.dataset['path'], 'toolkit/components/extensions/test/xpcshell');
+    assert.equal(statsOf(biggest).size, 7);
+    biggest.click();
+    assert.ok(testRows().length > 0, 'a directory row expands to its tests');
+    assert.ok(
+        testRows().every((row) => row.dataset['path']?.startsWith('toolkit/components/')),
+        'and only to the tests in that directory'
+    );
+    collapseAll();
+    resetView();
+});
+
+test('the list radio renders every test with an issue, with no group row', () => {
+    collapseAll();
+    switchView('view-list');
+
+    assert.equal(componentRows().length, 0, 'no folder rows at all in this mode');
+    const paths = testRows().map((row) => row.dataset['path']);
+    // 8 of the fixture's 10 tests have an issue with all four types on; the
+    // clean test and no other is missing. Counted off `TALLY`, which is
+    // hand-tallied from the raw file.
+    const expected = EXPECTED_ROWS.reduce((sum, group) => sum + group.withIssues, 0);
+    assert.equal(paths.length, expected);
+    assert.ok(
+        !paths.some((path) => path?.endsWith('test_ext_always_green.js')),
+        'the clean test is not a row'
+    );
+    // A list row is top-level, unlike the same test under a group row.
+    for (const row of testRows()) {
+        assert.equal(row.dataset['level'], '0');
+        assert.equal(row.querySelector('.tree-indent'), null, 'and carries no indent');
+    }
+    resetView();
+});
+
+test('a list row still expands to its issues', () => {
+    // The per-test drill-down is the same one the grouped modes have; the only
+    // difference is what the row hangs off. A mode that rendered rows without
+    // their click handler would pass every assertion above.
+    switchView('view-list');
+    const row = testRows().find((test) =>
+        test.dataset['path']?.endsWith('test_ext_dnr_dynamic_rules.js')
+    )!;
+    row.click();
+    assert.equal(harness.document.querySelectorAll('.issue-details-row').length, 1);
+    assert.ok(harness.document.querySelectorAll('.issue-item').length > 0);
+    row.click();
+    assert.equal(harness.document.querySelectorAll('.issue-details-row').length, 0);
+    resetView();
+});
+
+test('the sort survives a view change, and applies to the new rows', () => {
+    // Unlike `site/errors.ts:onViewChange`, which resets it: the eight columns
+    // are the same eight in all three modes here. Ranked ascending by Runs so
+    // the expectation is not the default order.
+    resetView();
+    collapseAll();
+    const sortArrow = (field: string): string =>
+        harness.document.querySelector(`.sort-button[data-field="${field}"] .sort-arrow`)
+            ?.textContent ?? '';
+    const clickSort = (field: string): void => {
+        harness.document.querySelector<HTMLElement>(`.sort-button[data-field="${field}"]`)!.click();
+    };
+
+    // First click on a count column opens descending, second flips it.
+    clickSort('runCount');
+    clickSort('runCount');
+    assert.equal(sortArrow('runCount'), '↑');
+
+    switchView('view-list');
+    assert.equal(
+        sortArrow('runCount'),
+        '↑',
+        'the header still shows the sort the reader chose'
+    );
+    const runs = testRows().map((row) => Number(statsOf(row).get('Runs')!.replace(/\D/g, '')));
+    assert.ok(runs.length > 1, 'several rows, so an order means something');
+    assert.deepEqual(runs, [...runs].sort((a, b) => a - b), 'and the rows obey it');
+
+    // Back to the page's initial sort and mode for the tests below: one more
+    // click on `runCount` would only flip it, so the default column is
+    // selected and then flipped back to descending.
+    resetView();
+    clickSort('issueCount');
+    if (sortArrow('issueCount') !== '↓') {
+        clickSort('issueCount');
+    }
+    assert.equal(sortArrow('issueCount'), '↓', 'restored to INITIAL_SORT');
+});
+
+test('switching views closes whatever was open', () => {
+    // A component key and a directory key name different rows, so carrying the
+    // expansion across would leave keys matching nothing — and on a switch
+    // back would re-open a row the reader had closed.
+    resetView();
+    collapseAll();
+    componentRows()[0]!.click();
+    assert.ok(testRows().length > 0);
+
+    switchView('view-tree');
+    assert.equal(testRows().length, 0, 'nothing is expanded in the new mode');
+    assert.equal(
+        componentRows().filter((row) => row.classList.contains('expanded')).length,
+        0
+    );
+
+    switchView('view-components');
+    assert.equal(testRows().length, 0, 'and nothing re-opens on the way back');
+});
+
+test('the hash carries a non-default view and drops the default one', () => {
+    // `xpcshell-timings.html:572` — `if (view !== 'components')`. The owner's
+    // usual URL is `#date=21days`, so a `view=components` written on every
+    // render would be noise in every link they share.
+    resetView();
+    assert.ok(
+        !harness.window.location.hash.includes('view='),
+        `the default must not be written; hash was ${harness.window.location.hash}`
+    );
+
+    switchView('view-tree');
+    assert.match(harness.window.location.hash, /view=tree/);
+    assert.match(harness.window.location.hash, /date=21days/, 'and the date is still there');
+
+    switchView('view-list');
+    assert.match(harness.window.location.hash, /view=list/);
+
+    resetView();
+    assert.ok(!harness.window.location.hash.includes('view='), 'and it goes away again');
+});
+
+test('#view= in the URL selects the mode on load', async () => {
+    // The read-back half, which `test/issues-view.test.ts` can only assert as
+    // a predicate: only a started page shows the parameter reaching a radio
+    // and the radio reaching the renderer. A fresh module instance each time,
+    // because the shared harness has already been switched around above.
+    const listPage = await freshPage(
+        'viewlist',
+        FILES,
+        'https://tests.firefox.dev/issues.html#date=21days&view=list'
+    );
+    try {
+        assert.equal(
+            (listPage.document.getElementById('view-list') as HTMLInputElement).checked,
+            true
+        );
+        assert.equal(
+            listPage.document.querySelectorAll('.tree-table .folder-row').length,
+            0,
+            'it opened on the flat list, not on components'
+        );
+        assert.ok(listPage.document.querySelectorAll('.tree-table .test-row').length > 0);
+    } finally {
+        listPage.restore();
+    }
+
+    // And a value the page does not have leaves it on the default rather than
+    // on a mode with no renderer.
+    const bogus = await freshPage(
+        'viewbogus',
+        FILES,
+        'https://tests.firefox.dev/issues.html#date=21days&view=bogus'
+    );
+    try {
+        assert.equal(
+            (bogus.document.getElementById('view-components') as HTMLInputElement).checked,
+            true
+        );
+        assert.ok(bogus.document.querySelectorAll('.tree-table .folder-row').length > 0);
+    } finally {
+        bogus.restore();
+    }
 });
 
 // =========================================================================

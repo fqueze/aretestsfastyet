@@ -230,11 +230,59 @@
  *     Skips cell next to it, which is populated, is what tells the reader what
  *     happened.
  *
- * Everything else — the row unit, the hard-coded components view, the sort
- * fields and their per-column default directions, the four checkboxes changing
- * numerator and denominator rather than visibility, the search's two-level
- * match, the `(N tests with issues, out of M)` header, the issue-line ordering
- * and its two synthetic "not recorded" lines, the `?try=` short-circuit and the
+ *  8. **A test row's path is a link to `test.html`.** Upstream renders it as a
+ *     bare `<span>` (`:2168`), so the page that answers "what has this test
+ *     been doing" was reachable from `try.html` and from `flaky.html` but not
+ *     from here.
+ *
+ *     The 📋 and 🔍 buttons beside it are upstream's two, unchanged in
+ *     behaviour, and the component tooltip upstream puts on the span moves onto
+ *     the anchor that replaced it. All three now come from
+ *     `site/test-link.ts`, which `try.html` renders too — including the
+ *     `execCommand` fallback and the ✓ flash, which `site/issues.ts`,
+ *     `site/test.ts` and `xpcshell-timings.html` each held a copy of. The one
+ *     surviving copy colours the ✓ green, as `site/test.ts`'s and the
+ *     unmigrated page's did and this page's did not.
+ *
+ *  9. **Three "Show as" radios, where the page had no view control.**
+ *     `getCurrentView()` returned the constant `'components'`
+ *     (`old/issues.html:887-890`) with a comment reading "Always use components
+ *     view for issues page", so `view` was never written to the hash and never
+ *     read back (`:901`). The radios, their three modes and their three labels
+ *     are `xpcshell-timings.html:355-372`'s, verbatim — that page has had this
+ *     control all along, and this is the same control on the page whose
+ *     renderer was already the components one.
+ *
+ *     **The default does not move**: `components` is `checked` in the markup
+ *     and `DEFAULT_VIEW`, which is what both pages already opened on.
+ *
+ *     **No new aggregation.** The three modes are three groupings
+ *     `lib/query/issues.ts` already had for `fx-tests issues`:
+ *
+ *     | radio | grouping | CLI |
+ *     | --- | --- | --- |
+ *     | bugzilla components | `groupIssues(rows, 'component')` | `--group-by component` |
+ *     | source tree | `groupIssues(rows, 'directory')` | `--group-by directory` |
+ *     | list | `findIssues`, no grouping | `--group-by test` |
+ *
+ *     So the two grouped modes are the *same* renderer and the same two passes
+ *     with a different key (`buildComponentRows`' `groupBy`), and the list is
+ *     `buildTestRows`. See `site/issues-view.ts` for what `directory` is and is
+ *     not: it is the flat one-row-per-leaf-directory ranking the CLI prints,
+ *     **not** `xpcshell-timings.html`'s nested folder tree (`:1754-1825`).
+ *
+ *     `view=` goes in the **hash**, next to `date` and `q`, because that is
+ *     where this page's state lives; `#view=components` is omitted, which is
+ *     `xpcshell-timings.html:572`'s `if (view !== 'components')` and keeps the
+ *     owner's usual `#date=21days` free of a redundant key. The
+ *     components-unavailable fallback (`:3050-3061`) is ported too — see
+ *     `updateViewAvailability`.
+ *
+ * Everything else — the row unit of the default view, the sort fields and their
+ * per-column default directions, the four checkboxes changing numerator and
+ * denominator rather than visibility, the search's two-level match, the
+ * `(N tests with issues, out of M)` header, the issue-line ordering and its two
+ * synthetic "not recorded" lines, the `?try=` short-circuit and the
  * `#date=…&q=…` state — is reproduced, and the reasoning for each lives next to
  * the code that does it in `site/issues-view.ts`.
  */
@@ -256,17 +304,24 @@ import {
     type SortState,
     type TooltipLine,
     type TooltipType,
+    type ViewMode,
     ALL_FILTERS,
+    DEFAULT_VIEW,
     FILTER_IDS,
     HISTORICAL_DATE,
     INITIAL_SORT,
     STAT_COLUMNS,
     TOOLTIP_HEADING,
+    VIEW_MODES,
     buildComponentRows,
+    buildTestRows,
     chartVisibility,
     componentDailyOutcomes,
     dayLabel,
+    effectiveView,
     failureTooltip,
+    groupingOf,
+    hasComponentData,
     headerCounts,
     isHistoricalDate,
     issueEntries,
@@ -290,6 +345,7 @@ import {
     renderChartSlot,
     searchBox,
 } from './drilldown-render.ts';
+import { testRowLinkInIcon } from './test-link.ts';
 
 // Declared here, next to the calls, rather than relied on from another
 // `site/` file. `tsconfig.site.json` compiles all of `site/**` as one program,
@@ -368,12 +424,14 @@ let detailedLoad: Promise<void> | null = null;
 
 let filters: IssueFilters = { ...ALL_FILTERS };
 let currentSort: SortState = { ...INITIAL_SORT };
-/** Which component rows are open. Keyed by component name. `old/issues.html:662`. */
+/** Which group rows are open. Keyed by the row's key. `old/issues.html:662`. */
 const expandedComponents = new Set<string>();
 
-/** The rows of the last render, for the parity seam. */
+/** The group rows of the last render, for the parity seam. Empty in list mode. */
 let renderedRows: ComponentRow[] = [];
-/** The component row elements of the last render, keyed by component name. */
+/** The test rows of the last render in list mode. Empty in the grouped modes. */
+let renderedTests: IssueRow[] = [];
+/** The group row elements of the last render, keyed by the row's key. */
 let rowsByKey = new Map<string, HTMLElement>();
 
 let searchBoxManager: SearchBoxManager;
@@ -387,6 +445,65 @@ const errorBox = (): HTMLElement => document.getElementById('error')!;
 const statusText = (): HTMLElement => document.getElementById('status-text')!;
 const dateSelect = (): HTMLSelectElement =>
     document.getElementById('date-select') as HTMLSelectElement;
+const viewRadio = (id: string): HTMLInputElement =>
+    document.getElementById(id) as HTMLInputElement;
+
+/**
+ * The selected radio's mode.
+ *
+ * `getCurrentView` (`xpcshell-timings.html:550-561`) without its two
+ * components-availability fallbacks: those need the loaded file, so they live
+ * in `effectiveView` and are applied at the one place that branches on a mode.
+ * A page where no radio is checked cannot happen — one is `checked` in the
+ * markup and setting another unchecks it — but the default is returned rather
+ * than asserted, which is upstream's final `return` too (`:560`).
+ */
+function selectedView(): ViewMode {
+    for (const [mode, id] of VIEW_MODES) {
+        if (viewRadio(id).checked) {
+            return mode;
+        }
+    }
+    return DEFAULT_VIEW;
+}
+
+/** The mode actually rendered: `selectedView`, plus the components fallback. */
+function currentView(): ViewMode {
+    return effectiveView(selectedView(), decoded);
+}
+
+/** Checks one radio, which unchecks the other two. `xpcshell-timings.html:3147`. */
+function checkViewRadio(view: ViewMode): void {
+    for (const [mode, id] of VIEW_MODES) {
+        viewRadio(id).checked = mode === view;
+    }
+}
+
+/**
+ * Shows or hides the components radio, according to what the file supports.
+ *
+ * `xpcshell-timings.html:3050-3061`, verbatim in behaviour: the label is hidden
+ * on a file with no component data, and a `components` selection is moved to
+ * `tree` so the reader is not left on a checked radio they cannot see. Called
+ * after every load rather than once, because the three families this page loads
+ * are three different files and the reader switches between them.
+ *
+ * Measured on the checked-in fixtures, both of which carry components: the
+ * label stays visible and nothing is moved. So this is the branch that exists
+ * for a file the page has not been shown yet, which is why it is ported rather
+ * than left out — `tables.components` and `testInfo.componentIds` are optional
+ * fields in the format (`lib/formats/tables.ts:105`, `:113`).
+ */
+function updateViewAvailability(): void {
+    const available = decoded !== null && hasComponentData(decoded);
+    const label = document.getElementById('components-view-label');
+    if (label !== null) {
+        label.style.display = available ? '' : 'none';
+    }
+    if (!available && selectedView() === 'components') {
+        checkViewRadio('tree');
+    }
+}
 
 /** `showError` (`old/issues.html:865`). */
 function showError(message: string, showNoData = false): void {
@@ -701,7 +818,18 @@ function sortHeader(): HTMLElement {
 
 // --- rendering ------------------------------------------------------------
 
-/** `renderComponentsView` (`old/issues.html:1933`). */
+/**
+ * Draws the table in whichever mode the radios are on.
+ *
+ * `changeView` (`xpcshell-timings.html:2941-2954`) dispatches to one of three
+ * renderers; here the two grouped modes are the *same* renderer with a
+ * different grouping key, because they differ only in what a row's key is —
+ * `renderComponentsView` (`old/issues.html:1933`) is what both of them are.
+ * Only the flat list is a second walk, and it is the one that has no group row.
+ *
+ * Both `renderedRows` and `renderedTests` are reset on every render, so the
+ * parity seam cannot report last mode's rows alongside this mode's.
+ */
 function render(): void {
     if (decoded === null) {
         noDataBox().style.display = 'block';
@@ -712,27 +840,36 @@ function render(): void {
     treeContainer().style.display = 'block';
 
     const searchTerm = searchBoxManager.getValue().toLowerCase().trim();
-    const rows = sortComponents(
-        buildComponentRows(decoded, filters, searchTerm),
-        currentSort,
-        filters
-    );
-    renderedRows = rows;
+    const groupBy = groupingOf(currentView());
+    renderedRows = [];
+    renderedTests = [];
     rowsByKey = new Map();
 
     const table = el('div', { class: 'tree-table' });
     table.append(sortHeader());
 
-    for (const row of rows) {
-        const isExpanded = expandedComponents.has(row.key);
-        const hasIssues = row.tests.length > 0;
-        const header = componentHeader(row, searchTerm, isExpanded, hasIssues);
-        rowsByKey.set(row.key, header);
-        table.append(header);
+    if (groupBy === null) {
+        renderedTests = sortTests(buildTestRows(decoded, filters, searchTerm), currentSort);
+        for (const test of renderedTests) {
+            table.append(testRow(test, 0));
+        }
+    } else {
+        renderedRows = sortComponents(
+            buildComponentRows(decoded, filters, searchTerm, groupBy),
+            currentSort,
+            filters
+        );
+        for (const row of renderedRows) {
+            const isExpanded = expandedComponents.has(row.key);
+            const hasIssues = row.tests.length > 0;
+            const header = componentHeader(row, searchTerm, isExpanded, hasIssues);
+            rowsByKey.set(row.key, header);
+            table.append(header);
 
-        if (isExpanded) {
-            for (const element of testRows(row)) {
-                table.append(element);
+            if (isExpanded) {
+                for (const element of testRows(row)) {
+                    table.append(element);
+                }
             }
         }
     }
@@ -742,7 +879,34 @@ function render(): void {
     target.append(table);
 }
 
-/** One component header row. `old/issues.html:2094-2130`. */
+/**
+ * Re-renders after a radio changed, and writes the new mode to the hash.
+ *
+ * `changeView` (`xpcshell-timings.html:2941-2954`), whose first two statements
+ * are exactly these. The expansion state is dropped: a component key and a
+ * directory key name different rows, so carrying `expandedComponents` across a
+ * mode change would leave a set of keys that match nothing — and on a switch
+ * back it would re-open rows the reader closed in between.
+ *
+ * The sort is **kept**, unlike `site/errors.ts:onViewChange`, which resets it.
+ * The eight columns are the same eight in all three modes here, so the sort a
+ * reader chose still names a column that exists; errors.ts resets because its
+ * three views have different column sets.
+ */
+function onViewChange(): void {
+    expandedComponents.clear();
+    updateUrlHash();
+    render();
+}
+
+/**
+ * One group header row — a component or a directory. `old/issues.html:2094-2130`.
+ *
+ * Identical in both grouped modes, including the 🧩 icon — the CSS puts it
+ * there by class (`.folder-icon::before` in `site/issues.html`), so the tree
+ * mode's directory rows carry it too. Left rather than given a 📁 of their own:
+ * the icon marks "this row expands", which is what it means in both modes.
+ */
 function componentHeader(
     row: ComponentRow,
     searchTerm: string,
@@ -789,105 +953,49 @@ function componentHeader(
     return element;
 }
 
-/** The test rows under an expanded component. `old/issues.html:2144-2177`. */
+/** The test rows under an expanded group row. `old/issues.html:2144-2177`. */
 function testRows(row: ComponentRow): HTMLElement[] {
-    return sortTests(row.tests, currentSort).map((test) => testRow(test));
+    return sortTests(row.tests, currentSort).map((test) => testRow(test, 1));
 }
 
-/** One test row. `old/issues.html:2166-2176`. */
-function testRow(test: IssueRow): HTMLElement {
-    const indent = el('span', { class: 'tree-indent' });
-    indent.style.width = '20px';
-
-    const name = el('span', { text: test.fullPath });
-    if (test.component !== null) {
-        name.title = `Component: ${test.component}`;
+/**
+ * One test row, at the given tree level. `old/issues.html:2166-2176`.
+ *
+ * `level` is 1 under a group row, which is upstream's `data-level="1"` and its
+ * 20px indent, and 0 in the flat list, where the row *is* the top level —
+ * `xpcshell-timings.html:2183` writes `data-level="0"` and emits no indent span
+ * for its list rows. The indent is dropped rather than set to `0px` so the
+ * markup says which of the two a row is.
+ */
+function testRow(test: IssueRow, level: 0 | 1): HTMLElement {
+    const label: (Node | string)[] = [];
+    if (level > 0) {
+        const indent = el('span', { class: 'tree-indent' });
+        indent.style.width = `${level * 20}px`;
+        label.push(indent);
     }
+    label.push(
+        // The shared treatment (`site/test-link.ts`): copy, the path as a
+        // `test.html` link, Searchfox. Upstream's 📋 and 🔍 are the same two
+        // buttons; the link is new, and the component tooltip upstream puts on
+        // the path (`old/issues.html:2168`) moves onto the anchor that
+        // replaced it. The `InIcon` variant nests the 📋 in the row's 📄 span,
+        // which the page's CSS cross-fades on hover — see `issues.html`.
+        ...testRowLinkInIcon(test.fullPath, 'test-icon', {
+            ...(test.component === null ? {} : { title: `Component: ${test.component}` }),
+        })
+    );
 
     const element = el('div', {
         class: 'tree-row test-row list-row',
-        attrs: { 'data-path': test.fullPath, 'data-level': '1' },
+        attrs: { 'data-path': test.fullPath, 'data-level': String(level) },
         children: [
-            el('div', {
-                class: 'tree-name',
-                children: [
-                    indent,
-                    el('span', { class: 'test-icon' }),
-                    name,
-                    copyButton(test.fullPath),
-                    searchfoxButton(test.fullPath),
-                ],
-            }),
+            el('div', { class: 'tree-name', children: label }),
             el('div', { class: 'tree-stats', children: statCells(test, test) }),
         ],
     });
     element.addEventListener('click', () => toggleTestDetails(element, test));
     return element;
-}
-
-/** The 📋 copy button. `generateCopyButton` (`old/issues.html:843-845`). */
-function copyButton(testPath: string): HTMLElement {
-    const button = el('button', {
-        class: 'action-button',
-        text: '📋',
-        title: 'Copy test path',
-    });
-    button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        void copyTestPath(testPath, button);
-    });
-    return button;
-}
-
-/** The 🔍 Searchfox link. `generateSearchfoxButton` (`old/issues.html:848-851`). */
-function searchfoxButton(testPath: string): HTMLElement {
-    const link = externalLink(
-        `https://searchfox.org/mozilla-central/source/${testPath}`,
-        '🔍',
-        'action-button'
-    );
-    link.title = 'Open in Searchfox';
-    return link;
-}
-
-/**
- * Copies a test path and flashes the button.
- *
- * `copyTestName` (`old/issues.html:3300-3316`) and `showCopySuccess` (`:3289`).
- * Upstream reaches for the implicit global `event` to find the button; here the
- * listener has it. The `document.execCommand` fallback for non-HTTPS origins
- * (`:3318-3341`) is kept, because the dashboards are opened from `file://` and
- * from plain-HTTP mirrors where `navigator.clipboard` is undefined.
- */
-async function copyTestPath(testPath: string, button: HTMLElement): Promise<void> {
-    const flash = (): void => {
-        const original = button.textContent;
-        button.textContent = '✓';
-        setTimeout(() => {
-            button.textContent = original;
-        }, 1000);
-    };
-    try {
-        if (navigator.clipboard !== undefined) {
-            await navigator.clipboard.writeText(testPath);
-            flash();
-            return;
-        }
-    } catch {
-        // Falls through to the textarea path below.
-    }
-    const textarea = document.createElement('textarea');
-    textarea.value = testPath;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.append(textarea);
-    textarea.select();
-    try {
-        document.execCommand('copy');
-        flash();
-    } finally {
-        textarea.remove();
-    }
 }
 
 // --- expansion ------------------------------------------------------------
@@ -1662,6 +1770,7 @@ async function loadSelectedDate(): Promise<void> {
         decoded = decodeDaily(file);
         startTime = file.metadata.startTime;
         expandedComponents.clear();
+        updateViewAvailability();
         render();
         const jobCount = file.metadata.jobCount ?? 0;
         setStatusText(`${jobCount.toLocaleString()} test jobs`);
@@ -1784,6 +1893,7 @@ async function onHistoricalToggled(isHistorical: boolean, data: unknown): Promis
         startTime = (data as IssuesFile).metadata.startTime;
         expandedComponents.clear();
         hideError();
+        updateViewAvailability();
         render();
         const metadata = (data as IssuesFile).metadata;
         const days = metadata.days ?? 21;
@@ -1822,6 +1932,7 @@ async function loadTryRevision(revision: string): Promise<void> {
         const url = new URL(window.location.href);
         url.searchParams.set('try', revision);
         window.history.replaceState({}, '', url);
+        updateViewAvailability();
         render();
     } catch (error) {
         showError(error instanceof Error ? error.message : String(error));
@@ -1846,6 +1957,12 @@ function updateUrlHash(): void {
  * the box (`:3774`, `search || ''`) — unlike `crashes.html`, which only writes
  * a truthy value and leaves a stale term behind. This page is the one that gets
  * it right, so there is nothing to reproduce-as-a-bug here.
+ *
+ * The `view` handling is `xpcshell-timings.html:3146-3147`: an absent `view`
+ * means `components`, and the radio is checked by value. Written on **every**
+ * hash load rather than only when the parameter is present, for the reason the
+ * four checkboxes above are: a reader who navigates from `#view=list` back to a
+ * hash with no `view` must land on the default and not stay where they were.
  */
 async function loadFromUrlHash(): Promise<void> {
     if (hashManager === undefined) {
@@ -1856,6 +1973,8 @@ async function loadFromUrlHash(): Promise<void> {
     if (document.activeElement !== box) {
         searchBoxManager.setValue(state.q ?? '');
     }
+
+    checkViewRadio(state.view ?? DEFAULT_VIEW);
 
     if (isHistoricalDate(state.date)) {
         if (!isHistoricalMode) {
@@ -1895,6 +2014,19 @@ function initializeUI(): void {
         getState: () => ({
             date: isHistoricalMode ? HISTORICAL_DATE : dateSelect().value,
             q: searchBoxManager.getValue().trim(),
+            // `''` for the default, not `'components'`: `initUrlHashManager`
+            // writes only truthy values (`common-ui.js:306`), so an empty
+            // string keeps `view` out of the hash exactly as
+            // `xpcshell-timings.html:572` does with its
+            // `if (view !== 'components')`. The owner's usual
+            // `#date=21days` therefore stays that and does not grow a
+            // `&view=components`.
+            //
+            // `selectedView()` and not `currentView()`: what the reader picked
+            // is what the URL should say, so a file with no components does not
+            // silently rewrite their `components` selection to `tree` — the
+            // same hash then works as they meant it on a file that has them.
+            view: selectedView() === DEFAULT_VIEW ? '' : selectedView(),
         }),
         onHashChange: async () => {
             searchBoxManager.setNavigating(true);
@@ -1907,6 +2039,17 @@ function initializeUI(): void {
                 } else {
                     render();
                 }
+            } else if (wasHistorical) {
+                // Already in the 21-day view and staying: nothing reloaded, so
+                // nothing has re-rendered. `loadFromUrlHash` has just applied
+                // this hash's `q` and `view` to the controls, and without this
+                // the table would still be showing the previous ones — which is
+                // what the back button produces. Not needed on the branch
+                // above, where `loadSelectedDate` or `render` runs; and not
+                // needed when `wasHistorical` is false, because
+                // `historicalToggleManager.toggle()` has re-rendered as part of
+                // entering the view.
+                render();
             }
             searchBoxManager.setNavigating(false);
         },
@@ -1927,6 +2070,14 @@ function initializeUI(): void {
         updateUrlHash();
         void loadSelectedDate();
     });
+
+    // The radios carry **no** `onchange=` attribute, unlike the six controls
+    // divergence 2 lists: that markup is upstream's and held as it is, while
+    // this control is new here, so copying `xpcshell-timings.html:358`'s
+    // `onchange="changeView()"` would be writing a `ReferenceError` on purpose.
+    for (const [, id] of VIEW_MODES) {
+        viewRadio(id).addEventListener('change', onViewChange);
+    }
 }
 
 /**
@@ -2001,6 +2152,11 @@ window.__view = () => ({
     filters: { ...filters },
     search: searchBoxManager?.getValue() ?? '',
     expanded: [...expandedComponents],
+    // The mode the table was drawn in, which is `currentView()` and not
+    // `selectedView()`: a comparison of what is on screen has to see the
+    // components-to-tree fallback if it fired, or the rows below would look
+    // like the wrong grouping's.
+    view: currentView(),
     rows: renderedRows.map((row) => ({
         key: row.key,
         runCount: row.stats.runCount,
@@ -2012,6 +2168,21 @@ window.__view = () => ({
         crashCount: row.stats.crashCount,
         testsWithIssues: row.tests.length,
         totalTestCount: row.totalTestCount,
+    })),
+    // The flat list's rows, populated only in `list` mode — where `rows` is
+    // empty, because that mode has no group row. Kept as a second key rather
+    // than folded into `rows`: a per-test row has no `testsWithIssues` and a
+    // group row has no path, so one array of both would have half its fields
+    // null on every element.
+    tests: renderedTests.map((test) => ({
+        fullPath: test.fullPath,
+        runCount: test.runCount,
+        issueCount: test.issueCount,
+        issueRate: test.issueRate,
+        skipCount: test.skipCount,
+        failCount: test.failCount,
+        timeoutCount: test.timeoutCount,
+        crashCount: test.crashCount,
     })),
 });
 

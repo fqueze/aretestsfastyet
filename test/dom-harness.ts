@@ -106,6 +106,11 @@ const GLOBAL_NAMES = [
     // names come from that file's rules rather than from a list a test author
     // wrote down.
     'extractPlatform',
+    // `fetch-utils.js`'s, reached through `site/test-link.ts`: every test row
+    // on `issues.html` now links to `test.html`, and the URL carries the page's
+    // `?data-source=` onto it. The real implementation, so an assertion on a
+    // row's `href` compares against that file's rules.
+    'withDevParams',
 ] as const;
 
 /**
@@ -151,6 +156,14 @@ const ISSUES_PAGE_HTML = `<!DOCTYPE html><html><body>
     <span id="status-text" class="status-text">Loading data...</span>
     <button id="historical-button" class="historical-button">Show Last 21 Days</button>
   </div>
+  <div class="view-selector">
+    <label>Show as</label>
+    <label id="components-view-label">
+      <input id="view-components" type="radio" name="view-mode" value="components" checked>
+    </label>
+    <label><input id="view-tree" type="radio" name="view-mode" value="tree"></label>
+    <label><input id="view-list" type="radio" name="view-mode" value="list"></label>
+  </div>
   <div class="search-container">
     <input type="text" class="search-box" id="search-box">
     <button class="search-clear" id="search-clear">×</button>
@@ -172,12 +185,70 @@ const ISSUES_PAGE_HTML = `<!DOCTYPE html><html><body>
 </div>
 </body></html>`;
 
+/**
+ * `site/intermittent.html`'s controls, by the ids that page's controller looks
+ * up.
+ *
+ * A third constant for the same reason there is a second: the ids are that
+ * page's own, and a shared template with substitutions would hide the mismatch
+ * this harness exists to catch. **Copied from `site/intermittent.html`'s own
+ * markup** (`:188-236`), trimmed to the elements the controller reaches for, so
+ * an id renamed on the page and not here fails as a null dereference in
+ * `start()`.
+ *
+ * Two things it deliberately does **not** have. There is no `date-select` and no
+ * `historical-button`: this page reads a live API, so it has no published dates
+ * to fill a `<select>` from and no 21-day artifact to toggle onto — its window
+ * is the `window-select` dropdown. And the `<select>`s are left empty, because
+ * the controller fills the harness one from `HARNESS_OPTIONS` and a
+ * pre-populated copy here would let a page that stopped filling it pass.
+ */
+const INTERMITTENT_PAGE_HTML = `<!DOCTYPE html><html><body>
+<div class="container">
+<h1>Sheriff-Annotated Intermittents</h1>
+<div class="controls">
+  <div class="control-group">
+    <label for="harness-select">Harness:</label>
+    <select id="harness-select"></select>
+  </div>
+  <div class="control-group">
+    <label for="window-select">Window:</label>
+    <select id="window-select">
+      <option value="7days">Last 7 days</option>
+      <option value="14days">Last 14 days</option>
+      <option value="21days">Last 21 days</option>
+    </select>
+  </div>
+  <span id="status-text" class="status-text">Loading annotations...</span>
+</div>
+<div id="error" class="error" style="display: none;"></div>
+<div id="window-note" style="display: none;"></div>
+<div id="charts">
+  <div class="chart-box">
+    <div class="chart-area"><canvas id="volume-chart"></canvas></div>
+    <p class="chart-note" id="volume-note"></p>
+  </div>
+</div>
+<h2 id="ranking-title"></h2>
+<div id="coverage"></div>
+<div id="ranking-table"></div>
+</div>
+</body></html>`;
+
 /** Which page's markup a harness should be built with. */
-export type PageKind = 'crashes' | 'issues';
+export type PageKind = 'crashes' | 'issues' | 'intermittent';
 
 const MARKUP: Record<PageKind, string> = {
     crashes: PAGE_HTML,
     issues: ISSUES_PAGE_HTML,
+    intermittent: INTERMITTENT_PAGE_HTML,
+};
+
+/** Where each page's rendered list goes. */
+const CONTENT_ID: Record<PageKind, string> = {
+    crashes: 'content',
+    issues: 'tree-table',
+    intermittent: 'ranking-table',
 };
 
 /** One recorded `createRateChart` call. */
@@ -220,7 +291,8 @@ export interface Harness {
     document: Document;
     /**
      * Where a render puts its list: `#content` on the crashes page,
-     * `#tree-table` on the issues page.
+     * `#tree-table` on the issues page, `#ranking-table` on the intermittents
+     * page. `CONTENT_ID` is the mapping.
      */
     content: HTMLElement;
     /** Every `createRateChart` call since the harness was built, in order. */
@@ -367,7 +439,7 @@ export function setupPage(
     return {
         window: dom.window,
         document: dom.window.document,
-        content: dom.window.document.getElementById(page === 'issues' ? 'tree-table' : 'content')!,
+        content: dom.window.document.getElementById(CONTENT_ID[page])!,
         charts,
         chartJs,
         files,

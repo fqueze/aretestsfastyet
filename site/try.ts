@@ -181,6 +181,31 @@
  *     intermittents as introduced by the push. `lib/model/test-path.ts` owns the
  *     rule; the worker keeps a pinned copy, as it does for `normalizeMessage`.
  *
+ * 10. **Each failure section's heading carries its row count as ` — N`.**
+ *     Upstream's headings are the bare words (`old/try.html:1774`, `:1779`). The
+ *     number is `permanent.length` / `intermittent.length`, which is what
+ *     `renderTestTable` draws one summary row per — so it is the count under the
+ *     current search rather than the push's total, and it moves as the reader
+ *     types. Requested by the owner. A suffix rather than an inflected count,
+ *     which is why neither heading needs a plural rule; see `countSuffix`.
+ *
+ * 11. **A test path is a `test.html` link with a 📋 copy button, not a Searchfox
+ *     link with a `history` link after it.** The shared treatment in
+ *     `site/test-link.ts`, which `issues.html` renders too.
+ *
+ *     Requested by the owner, and the copy button is the reason: *"copying the
+ *     name of a failed test from try.html is currently difficult because
+ *     clicking it opens the subview and clears the selection"*. A drag across
+ *     the path is a click on the row, the row expands, the re-render replaces
+ *     the element the selection was anchored in.
+ *
+ *     Three destinations before, three after, redistributed: the path now goes
+ *     to `test.html` (where the `history` link went), Searchfox moves onto a 🔍
+ *     button beside it (where `issues.html` already has it), and the copy
+ *     button is new. Nothing this row could reach is unreachable. The
+ *     `history-link` rule in `site/try.html` went with the link; the
+ *     `action-button` rules came in, copied from `issues.html`.
+ *
  * Everything else — the row unit, the three tables and their split rule, the
  * sort keys and their directions, the `UNEXPECTED-PASS` failure status, the
  * `totalJobs` denominator, the headline-rate argmax, the search box's `!`
@@ -193,6 +218,7 @@ import { bucketFileSuffix, bucketIndexForPath } from '../lib/formats/buckets.ts'
 import { detectHarness, otherHarness } from '../lib/model/harness.ts';
 import { stripChunkSuffix } from '../lib/model/job-name.ts';
 import { el } from './drilldown-render.ts';
+import { testPageUrl, testRowLink } from './test-link.ts';
 import {
     type ConsoleFailure,
     type FailingTest,
@@ -264,8 +290,6 @@ declare global {
         updateUrlHash: () => void;
         debounceMs?: number;
     }): unknown;
-    /** `common-links.js:104` — the Searchfox URL for a test path. */
-    function getSearchfoxUrl(testPath: string, message?: string | null): string;
     /** `common-links.js:15` — the Firefox Profiler URL for a profile. */
     function getProfilerUrl(
         instance: {
@@ -287,8 +311,8 @@ declare global {
     function extractPlatform(name: string): string;
     /** `shared.js:3` — recolours the favicon. */
     function setFavicon(color: string): void;
-    /** `fetch-utils.js:41` — carries `?data-source=`/`?profiler=` onto a link. */
-    function withDevParams(url: string): string;
+    // `withDevParams` is no longer named here: the only call this page makes is
+    // inside `site/test-link.ts`, which declares it there.
     /** `fetch-utils.js:169` — fetches a data file, honouring `?data-source=`. */
     function fetchData(filename: string): Promise<Response>;
     /**
@@ -311,6 +335,22 @@ const isLocal =
 /** The mitten glyph's element. `old/try.html:1483` writes it as markup. */
 function mitten(): HTMLElement {
     return el('span', { class: 'mitten' });
+}
+
+/**
+ * A section heading's row count, as ` — N`.
+ *
+ * A suffix rather than a parenthesised or inflected count, so neither heading
+ * needs a plural rule on the word in front of it: "Permanent failures — 1"
+ * reads correctly where "1 permanent failures" would not.
+ *
+ * The number is the length of the list the table beside it is built from, which
+ * is post-search: `renderTable` filters before `splitTables`, and
+ * `renderTestTable` draws one summary row per element of what it is handed. So
+ * typing in the search box moves both headings' numbers.
+ */
+function countSuffix(count: number): string {
+    return ` — ${count}`;
 }
 
 // --- small DOM helpers ----------------------------------------------------
@@ -1295,7 +1335,12 @@ function renderTable(): void {
 
     const parts: Node[] = [];
     if (needsPermanentHeader(intermittent.length, state.unblamedJobs.length)) {
-        parts.push(el('h3', { class: 'section-header', text: 'Permanent failures' }));
+        parts.push(
+            el('h3', {
+                class: 'section-header',
+                text: `Permanent failures${countSuffix(permanent.length)}`,
+            })
+        );
     }
     parts.push(renderTestTable(permanent, false));
     container.replaceChildren(...parts);
@@ -1303,6 +1348,9 @@ function renderTable(): void {
     if (intermittent.length > 0) {
         const heading = el('h3', { class: 'section-header', text: 'Intermittent failures ' });
         heading.append(mitten());
+        // After the mitten, not before it: the glyph belongs to the words it
+        // qualifies, and the count is about the table below.
+        heading.append(countSuffix(intermittent.length));
         intermittentContainer.replaceChildren(heading, renderTestTable(intermittent, true));
     } else {
         intermittentContainer.replaceChildren();
@@ -1465,14 +1513,13 @@ function renderTestRow(test: FailingTest, showJobCount: boolean): HTMLTableRowEl
 
     const info = el('td', { class: 'test-info' });
     const pathSpan = el('span', { class: 'test-path' });
-    pathSpan.append(link(getSearchfoxUrl(test.path), { text: test.path }));
-    info.append(pathSpan, ' ');
-    info.append(
-        link(withDevParams(`test.html?test=${encodeURIComponent(test.path)}`), {
-            class: 'history-link',
-            text: 'history',
-        })
-    );
+    // The shared treatment (`site/test-link.ts`): copy, the path as a
+    // `test.html` link, Searchfox. It replaces the `history` link this cell
+    // used to carry after the path — the path *is* that link now — and moves
+    // the Searchfox destination the path used to carry onto the 🔍 button, so
+    // nothing this row reached before is unreachable.
+    pathSpan.append(...testRowLink(test.path));
+    info.append(pathSpan);
     if (test.commonMessage !== undefined) {
         info.append(
             el('div', {
@@ -2630,8 +2677,10 @@ function updateFlakinessDisplay(testPath: string, data: FlakinessData | null): v
         return;
     }
     cell.className = view.className;
-    const histUrl = withDevParams(`test.html?test=${encodeURIComponent(testPath)}`);
-    const anchor = link(histUrl, { title: view.tooltip });
+    // The same URL the path links to, built by the shared `testPageUrl` — but
+    // not the shared link element: this anchor's text is a percentage and its
+    // title is the per-config breakdown, so only the destination is shared.
+    const anchor = link(testPageUrl(testPath), { title: view.tooltip });
     if (view.hasMitten) {
         anchor.append(mitten());
     }

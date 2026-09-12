@@ -117,6 +117,39 @@
             content: "📄 ";
         }
 
+        /*
+         * On a test row the 📋 button *replaces* the 📄 icon on hover rather
+         * than sitting next to it: the icon is decoration, the button is the
+         * only way to get the path out of a row whose click expands it, and
+         * giving the button a column of its own indented every path in the
+         * tree by a glyph's width for a control that is invisible most of the
+         * time.
+         *
+         * `site/test-link.ts` nests the button *inside* the icon span for this
+         * (`inIcon`), so the two share one 20px box and the swap is a
+         * cross-fade with nothing to reflow — the row's hover changes which of
+         * the two glyphs is painted, not the width of anything.
+         */
+        .test-icon:has(.action-button) {
+            position: relative;
+            display: inline-block;
+            width: 20px;
+            margin-right: 0;
+        }
+        .test-row:hover .test-icon::before {
+            opacity: 0;
+        }
+        .test-icon > .action-button {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            margin-left: 0;
+            padding: 2px 0;
+            width: 20px;
+            text-align: left;
+        }
+
         .tree-indent {
             display: inline-block;
             width: 20px;
@@ -172,6 +205,33 @@
             align-items: center;
             gap: 10px;
             flex-shrink: 0;
+        }
+
+        /*
+         * The "Show as" radios. `xpcshell-timings.html` reuses `.date-selector`
+         * for its copy of this control; a rule of its own here so the radio
+         * labels can sit tighter than the date row's 10px and so each
+         * `<input>` + text pair does not wrap between them.
+         */
+        .view-selector {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .view-selector label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+
+        .view-selector input[type="radio"] {
+            cursor: pointer;
+            margin: 0;
         }
 
         .status-text {
@@ -612,6 +672,21 @@
                 </select>
                 <span id="status-text" class="status-text">Loading data...</span>
                 <button id="historical-button" class="historical-button" onclick="toggleHistoricalData()">Show Last 21 Days</button>
+            </div>
+            <div class="view-selector">
+                <label>Show as</label>
+                <label id="components-view-label">
+                    <input id="view-components" type="radio" name="view-mode" value="components" checked>
+                    bugzilla components
+                </label>
+                <label>
+                    <input id="view-tree" type="radio" name="view-mode" value="tree">
+                    source tree
+                </label>
+                <label>
+                    <input id="view-list" type="radio" name="view-mode" value="list">
+                    list
+                </label>
             </div>
             <div class="search-container">
                 <input type="text" class="search-box" id="search-box" placeholder="Search for test paths or components...">

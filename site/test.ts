@@ -150,6 +150,7 @@ import {
 } from '../lib/query/test-lookup.ts';
 import { computeTestStats } from '../lib/query/test-stats.ts';
 import { el } from './drilldown-render.ts';
+import { copyToClipboard } from './test-link.ts';
 import {
     type CellBadge,
     type DailyRate,
@@ -415,6 +416,11 @@ function renderHeader(
     // The copy button holds its own listener rather than an `onclick` attribute
     // reaching a global, so it also no longer depends on the implicit `event`
     // global that `copyTestPath` reads (`old/test.html:1054`).
+    //
+    // The clipboard write and the ✓ flash come from `site/test-link.ts`, which
+    // holds the one copy of both; only the button is this page's, because this
+    // one sits in the header rather than in a row — there is no row to keep a
+    // click from reaching, and no `test.html` to link to, since this is it.
     const copyButton = el('button', {
         class: 'copy-btn',
         text: '📋 Copy',
@@ -440,47 +446,6 @@ function renderHeader(
         header.append(line);
     }
     return header;
-}
-
-/**
- * Copies the path, then ticks the button for a second.
- *
- * The async-clipboard call is the modern path and `execCommand('copy')` the
- * fallback, matching upstream — the fallback matters because the clipboard API
- * requires a secure context and this page is served over plain HTTP in the
- * local development mode `?data-source=local` selects.
- */
-async function copyToClipboard(text: string, button: HTMLElement): Promise<void> {
-    const succeed = (): void => {
-        const original = button.textContent;
-        button.textContent = '✓';
-        button.style.color = '#28a745';
-        setTimeout(() => {
-            button.textContent = original;
-            button.style.color = '';
-        }, 1000);
-    };
-    try {
-        await navigator.clipboard.writeText(text);
-        succeed();
-        return;
-    } catch {
-        // Falls through to the textarea path below.
-    }
-    const textArea = el('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    document.body.append(textArea);
-    textArea.select();
-    try {
-        if (document.execCommand('copy')) {
-            succeed();
-        }
-    } catch (error) {
-        console.error('Copy failed:', error);
-    }
-    textArea.remove();
 }
 
 /** One figure of the summary bar. */
