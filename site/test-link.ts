@@ -1,16 +1,17 @@
 /**
  * The **test row link treatment**, shared by the pages that list test paths.
  *
- * One row unit, three pages: `try.html`'s two failure tables and
- * `issues.html`'s test rows under an expanded component put a test path in a
- * row that is itself clickable. Each one needs the same two things next to the
- * path — a way to copy it, and a way to reach `test.html` for it — and before
- * this file existed each one answered them differently:
+ * One row unit, three pages: `try.html`'s two failure tables, `issues.html`'s
+ * test rows under an expanded component, and `intermittent.html`'s ranking put
+ * a test path in a row. Each one needs the same two things next to the path — a
+ * way to copy it, and a way to reach `test.html` for it — and before this file
+ * existed each one answered them differently:
  *
  * | page | copy the path | reach `test.html` |
  * | --- | --- | --- |
  * | `try.html` | nothing | a separate `history` link after the path |
  * | `issues.html` | a 📋 button | nothing |
+ * | `intermittent.html` | nothing | the path, in the same tab |
  * | `xpcshell-timings.html` (unmigrated, left alone) | a 📋 button | nothing |
  *
  * `test.html` itself is the fourth caller, and only of `copyToClipboard`: its
@@ -145,41 +146,22 @@ export function searchfoxButton(testPath: string): HTMLAnchorElement {
  * `td.test-info` on `try.html`, a `div.tree-name` on `issues.html` — and
  * wrapping them would add an element neither stylesheet knows about.
  *
- * The copy button comes **before** the path, as the owner asked: it is then in
- * the same place on every row whatever the path's length, and a reader working
- * down a list is aiming at a fixed column rather than at a moving target. The
- * Searchfox button goes after, where `issues.html` already has it.
+ * **Both buttons trail the path**, copy then Searchfox. Leading with the copy
+ * button was tried and reverted: a control that is invisible until the row is
+ * hovered cannot hold a column of its own without either indenting every path
+ * away from the `Test` header or needing a negative margin to pull it back, and
+ * on `issues.html` the alternative — stacking it on the row's 📄 and
+ * cross-fading — read as too magical to the owner. Trailing costs no width in
+ * the gutter, needs no compensating rule, and puts it where `issues.html`
+ * already had its Searchfox button.
  */
 export function testRowLink(
     testPath: string,
     options: { text?: string; title?: string } = {}
-): [HTMLButtonElement, HTMLAnchorElement, HTMLAnchorElement] {
-    return [copyPathButton(testPath), testPageLink(testPath, options), searchfoxButton(testPath)];
+): [HTMLAnchorElement, HTMLButtonElement, HTMLAnchorElement] {
+    return [testPageLink(testPath, options), copyPathButton(testPath), searchfoxButton(testPath)];
 }
 
-/**
- * The same treatment, with the copy button nested inside a leading icon span
- * instead of leading the row itself.
- *
- * `issues.html` puts a 📄 on every test row, and that icon is decoration where
- * the copy button is the row's only way out to the clipboard. Stacking the two
- * in the icon's box — which is what nesting is for; the page's CSS positions
- * the button against the span — means the button costs no width of its own and
- * the row's hover swaps the glyph rather than moving the path. `try.html` has
- * no such icon, so it uses `testRowLink` and reserves a gutter instead.
- *
- * The icon element is returned rather than taken, because the caller's
- * `test-icon` span is the positioning context the button needs to be inside.
- */
-export function testRowLinkInIcon(
-    testPath: string,
-    iconClass: string,
-    options: { text?: string; title?: string } = {}
-): [HTMLElement, HTMLAnchorElement, HTMLAnchorElement] {
-    const icon = el('span', { class: iconClass });
-    icon.append(copyPathButton(testPath));
-    return [icon, testPageLink(testPath, options), searchfoxButton(testPath)];
-}
 
 /**
  * Copies text and flashes the button that asked for it.

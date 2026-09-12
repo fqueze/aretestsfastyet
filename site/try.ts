@@ -201,10 +201,12 @@
  *
  *     Three destinations before, three after, redistributed: the path now goes
  *     to `test.html` (where the `history` link went), Searchfox moves onto a 🔍
- *     button beside it (where `issues.html` already has it), and the copy
- *     button is new. Nothing this row could reach is unreachable. The
+ *     button after it (where `issues.html` already has it), and the copy button
+ *     is new, between the two. Nothing this row could reach is unreachable. The
  *     `history-link` rule in `site/try.html` went with the link; the
- *     `action-button` rules came in, copied from `issues.html`.
+ *     `action-button` rules came in, copied from `issues.html` — including
+ *     their metrics, after a leading copy button that needed a reserved gutter
+ *     and a negative margin to keep the column aligned was tried and reverted.
  *
  * Everything else — the row unit, the three tables and their split rule, the
  * sort keys and their directions, the `UNEXPECTED-PASS` failure status, the
@@ -1513,12 +1515,22 @@ function renderTestRow(test: FailingTest, showJobCount: boolean): HTMLTableRowEl
 
     const info = el('td', { class: 'test-info' });
     const pathSpan = el('span', { class: 'test-path' });
-    // The shared treatment (`site/test-link.ts`): copy, the path as a
-    // `test.html` link, Searchfox. It replaces the `history` link this cell
-    // used to carry after the path — the path *is* that link now — and moves
-    // the Searchfox destination the path used to carry onto the 🔍 button, so
-    // nothing this row reached before is unreachable.
-    pathSpan.append(...testRowLink(test.path));
+    // The shared treatment (`site/test-link.ts`): the path as a `test.html`
+    // link, then the 📋 and 🔍 buttons. It replaces the `history` link this
+    // cell used to carry after the path — the path *is* that link now — and
+    // moves the Searchfox destination the path used to carry onto the 🔍
+    // button, so nothing this row reached before is unreachable.
+    //
+    // The title is the link's own, because the row's `Click to expand` is
+    // inherited by everything in it and became a false promise about the path
+    // the moment the path stopped expanding the row. It names both actions, so
+    // the row's behaviour is still discoverable from the thing that no longer
+    // does it.
+    pathSpan.append(
+        ...testRowLink(test.path, {
+            title: 'See history — or click elsewhere in the row to see details',
+        })
+    );
     info.append(pathSpan);
     if (test.commonMessage !== undefined) {
         info.append(

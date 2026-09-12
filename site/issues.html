@@ -117,39 +117,6 @@
             content: "📄 ";
         }
 
-        /*
-         * On a test row the 📋 button *replaces* the 📄 icon on hover rather
-         * than sitting next to it: the icon is decoration, the button is the
-         * only way to get the path out of a row whose click expands it, and
-         * giving the button a column of its own indented every path in the
-         * tree by a glyph's width for a control that is invisible most of the
-         * time.
-         *
-         * `site/test-link.ts` nests the button *inside* the icon span for this
-         * (`inIcon`), so the two share one 20px box and the swap is a
-         * cross-fade with nothing to reflow — the row's hover changes which of
-         * the two glyphs is painted, not the width of anything.
-         */
-        .test-icon:has(.action-button) {
-            position: relative;
-            display: inline-block;
-            width: 20px;
-            margin-right: 0;
-        }
-        .test-row:hover .test-icon::before {
-            opacity: 0;
-        }
-        .test-icon > .action-button {
-            position: absolute;
-            left: 0;
-            top: 50%;
-            transform: translateY(-50%);
-            margin-left: 0;
-            padding: 2px 0;
-            width: 20px;
-            text-align: left;
-        }
-
         .tree-indent {
             display: inline-block;
             width: 20px;

@@ -345,7 +345,7 @@ import {
     renderChartSlot,
     searchBox,
 } from './drilldown-render.ts';
-import { testRowLinkInIcon } from './test-link.ts';
+import { testRowLink } from './test-link.ts';
 
 // Declared here, next to the calls, rather than relied on from another
 // `site/` file. `tsconfig.site.json` compiles all of `site/**` as one program,
@@ -975,13 +975,13 @@ function testRow(test: IssueRow, level: 0 | 1): HTMLElement {
         label.push(indent);
     }
     label.push(
-        // The shared treatment (`site/test-link.ts`): copy, the path as a
-        // `test.html` link, Searchfox. Upstream's 📋 and 🔍 are the same two
-        // buttons; the link is new, and the component tooltip upstream puts on
-        // the path (`old/issues.html:2168`) moves onto the anchor that
-        // replaced it. The `InIcon` variant nests the 📋 in the row's 📄 span,
-        // which the page's CSS cross-fades on hover — see `issues.html`.
-        ...testRowLinkInIcon(test.fullPath, 'test-icon', {
+        el('span', { class: 'test-icon' }),
+        // The shared treatment (`site/test-link.ts`): the path as a `test.html`
+        // link, then 📋 and 🔍. Upstream's two buttons are the same two, in the
+        // same place; the link is new, and the component tooltip upstream puts
+        // on the path (`old/issues.html:2168`) moves onto the anchor that
+        // replaced it.
+        ...testRowLink(test.fullPath, {
             ...(test.component === null ? {} : { title: `Component: ${test.component}` }),
         })
     );

@@ -211,13 +211,6 @@
 
         .test-info {
             min-width: 0;
-            /*
-             * The 📋 gutter: wide enough for the glyph at `.action-button`'s
-             * 11px, and the one number `.test-path`'s negative margin and
-             * `.inline-message`'s indent are both derived from, so they cannot
-             * drift apart.
-             */
-            --row-action-width: 18px;
         }
         .test-path {
             font-family: monospace;
@@ -463,7 +456,8 @@
             background: none;
             border: none;
             cursor: pointer;
-            padding: 2px 0;
+            padding: 2px 4px;
+            margin-left: 6px;
             font-size: 11px;
             color: #666;
             border-radius: 3px;
@@ -472,28 +466,6 @@
             vertical-align: middle;
             text-decoration: none;
             display: inline-block;
-        }
-        /*
-         * The copy button leads the path, so its own width is what would
-         * indent every path in the column away from the "Test" header above
-         * it. Reserving the width here and taking it back off the left keeps
-         * the glyph in the gutter and the path's first character on the
-         * header's first character, hovered or not — the button only ever
-         * changes its own opacity, never the column's alignment.
-         */
-        .test-path > .action-button:first-child {
-            width: var(--row-action-width);
-            margin-left: calc(-1 * var(--row-action-width));
-            text-align: left;
-        }
-        /*
-         * ...which means the path itself starts one button-width in, and the
-         * message under it has to start there too or it hangs off the left of
-         * the name it belongs to.
-         */
-        .test-path,
-        .inline-message {
-            padding-left: var(--row-action-width);
         }
         .clickable-row:hover .action-button {
             opacity: 1;
