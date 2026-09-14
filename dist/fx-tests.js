@@ -142,6 +142,14 @@ function readJob(row, columns) {
 // lib/sources/intermittents.ts
 var BUGZILLA_ROOT = "https://bugzilla.mozilla.org";
 var UNKNOWN_TASK_ID = "unknown";
+var UNASSIGNED_BUGZILLA_USER = "nobody@mozilla.org";
+function assigneeName(bug) {
+  if (bug.assigned_to === UNASSIGNED_BUGZILLA_USER) {
+    return null;
+  }
+  const name = bug.assigned_to_detail?.real_name;
+  return name === void 0 || name === "" ? null : name;
+}
 var IntermittentsError = class extends Error {
   url;
   status;
@@ -203,6 +211,15 @@ function intermittentsClient(options) {
         lines: row.lines
       }));
     },
+    async failureCountOfBug(tree, range, bug) {
+      const url = `${root}/api/failurecount/?${rangeQuery(tree, range)}&bug=${bug}`;
+      const rows2 = await getJson(url);
+      return rows2.map((row) => ({
+        date: row.date,
+        testRuns: row.test_runs,
+        failureCount: row.failure_count
+      }));
+    },
     async runIdsOfJobs(jobIds) {
       const found = /* @__PURE__ */ new Map();
       for (const batch of chunk([...new Set(jobIds)], JOB_BATCH_SIZE)) {
@@ -233,22 +250,34 @@ function intermittentsClient(options) {
       return found;
     },
     async bugSummaries(bugs) {
+      const batches = chunk(bugs, BUG_BATCH_SIZE).filter((batch) => batch.length > 0);
+      const responses = await inPool(batches, BUG_REQUEST_CONCURRENCY, async (batch) => {
+        const url = `${bugzillaRoot}/rest/bug?id=${batch.join(",")}&include_fields=id,summary,status,resolution,assigned_to,assigned_to_detail`;
+        return getJson(url);
+      });
       const found = /* @__PURE__ */ new Map();
-      for (const batch of chunk(bugs, BUG_BATCH_SIZE)) {
-        if (batch.length === 0) {
-          continue;
-        }
-        const url = `${bugzillaRoot}/rest/bug?id=${batch.join(",")}&include_fields=id,summary`;
-        const data = await getJson(url);
+      for (const data of responses) {
         for (const bug of data.bugs ?? []) {
-          found.set(bug.id, bug.summary);
+          found.set(bug.id, {
+            summary: bug.summary,
+            // Defaulted to `''` rather than required, so a Bugzilla
+            // that stops returning a field — or a recorded fixture
+            // written before this change — reads as "not known to be
+            // resolved" instead of throwing. `isResolvedBug` then
+            // answers false, which is the safe direction: it strikes
+            // nothing through rather than striking a live bug.
+            status: bug.status ?? "",
+            resolution: bug.resolution ?? "",
+            assignee: assigneeName(bug)
+          });
         }
       }
       return found;
     }
   };
 }
-var BUG_BATCH_SIZE = 100;
+var BUG_BATCH_SIZE = 500;
+var BUG_REQUEST_CONCURRENCY = 4;
 var JOB_BATCH_SIZE = 200;
 function rangeQuery(tree, range) {
   return `startday=${encodeURIComponent(range.start)}&endday=${encodeURIComponent(range.end)}&tree=${encodeURIComponent(tree)}`;
@@ -259,6 +288,17 @@ function chunk(items, size) {
     batches.push(items.slice(i, i + size));
   }
   return batches;
+}
+async function inPool(items, limit, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await work(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 function harnessOfOccurrence(testSuite) {
   if (/(^|-)mochitest(-|$)/.test(testSuite)) {
@@ -1036,7 +1076,7 @@ function cachedIntermittents(inner, cache, hooks = {}) {
       return new Map(entries);
     },
     async bugSummaries(bugs) {
-      const key = `bugzilla:summaries:${[...bugs].sort((a, b) => a - b).join(",")}`;
+      const key = `bugzilla:summaries:v2:${[...bugs].sort((a, b) => a - b).join(",")}`;
       const entries = await through(key, async () => [
         ...await inner.bugSummaries(bugs)
       ]);
@@ -7402,8 +7442,12 @@ function scanBugs(options) {
     (row) => row.bugId !== null
   );
   const rows2 = candidates.map((candidate) => {
-    const bugSummary = summaries.get(candidate.bugId) ?? null;
+    const info = summaries.get(candidate.bugId);
+    const bugSummary = info?.summary ?? null;
     const summary = bugSummary ?? "";
+    const resolution = info?.resolution ?? "";
+    const status = info?.status ?? "";
+    const assignee = info?.assignee ?? null;
     const verified = testPathCandidates(summary).map((path) => ({ path, harness: harnessOfPath(path) })).find((entry) => entry.harness !== null);
     return verified === void 0 ? {
       bugId: candidate.bugId,
@@ -7411,14 +7455,20 @@ function scanBugs(options) {
       harness: "unknown",
       test: null,
       failure: summaryRemainder(summary, null),
-      bugSummary
+      bugSummary,
+      resolution,
+      status,
+      assignee
     } : {
       bugId: candidate.bugId,
       count: candidate.count,
       harness: verified.harness,
       test: verified.path,
       failure: summaryRemainder(summary, verified.path),
-      bugSummary
+      bugSummary,
+      resolution,
+      status,
+      assignee
     };
   });
   const ordered = [...rows2].sort((a, b) => b.count - a.count);
@@ -7828,7 +7878,7 @@ async function runDrilldown(context, client, tree, range, bug, args) {
     );
   }
   const summaries = await withUpstreamErrors(() => client.bugSummaries([bug]), tree);
-  const bugSummary = summaries.get(bug) ?? null;
+  const bugSummary = summaries.get(bug)?.summary ?? null;
   const profiles = globals.format === "json" || boolOption(args, "profiles") ? occurrenceProfiles(shownOccurrences) : null;
   const history = occurrenceHistory(shownOccurrences, range);
   if (globals.format === "json") {

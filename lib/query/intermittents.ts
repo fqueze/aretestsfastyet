@@ -21,6 +21,7 @@
 
 import {
     type BugFailureCount,
+    type BugInfo,
     type BugOccurrence,
     UNKNOWN_TASK_ID,
     harnessOfOccurrence,
@@ -152,6 +153,41 @@ export interface RankedIntermittent {
      * returned no summary for the bug, which is distinct from an empty one.
      */
     bugSummary: string | null;
+    /**
+     * Bugzilla's `resolution` for the bug, or `''` when it is open.
+     *
+     * **A bug can be resolved and still be failing**, which is the whole reason
+     * this is on the row rather than left for a caller to fetch: a ranked list
+     * of intermittents regularly holds bugs somebody already closed as `FIXED`,
+     * and the two readings — "nobody has looked at this" and "somebody fixed
+     * this and it is still failing" — call for opposite actions. The count
+     * alone cannot tell them apart.
+     *
+     * `''` also when Bugzilla returned nothing for the bug, so "open" and "not
+     * known" read the same here. They are not distinguished because no caller
+     * has a different action for them, and `bugSummary === null` already marks
+     * the bug Bugzilla did not answer for.
+     *
+     * `isResolvedBug` in `lib/sources/intermittents.ts` is the predicate over
+     * the source shape; on a row, `resolution !== ''` is the same test.
+     */
+    resolution: string;
+    /**
+     * Bugzilla's `status`: `NEW`, `ASSIGNED`, `RESOLVED`, `VERIFIED`, `CLOSED`.
+     *
+     * Carried beside `resolution` so a caller can name the state in full —
+     * "RESOLVED FIXED" — rather than showing a resolution word with no context.
+     * `''` when Bugzilla returned nothing for the bug.
+     */
+    status: string;
+    /**
+     * Who the bug is assigned to, as a human name, or `null` for nobody.
+     *
+     * Carried through from `BugInfo.assignee`, which is where the
+     * `nobody@mozilla.org` sentinel is mapped to `null` and where the choice of
+     * `real_name` over the email address is recorded.
+     */
+    assignee: string | null;
 }
 
 /** A name and how many occurrences carried it. */
@@ -192,8 +228,14 @@ export interface ScanResult {
 export interface ScanOptions {
     /** The tree-wide ranking from `/api/failures/`, count-descending. */
     ranking: readonly BugFailureCount[];
-    /** Every candidate's Bugzilla summary, by bug number. */
-    summaries: ReadonlyMap<number, string>;
+    /**
+     * Every candidate's Bugzilla summary and resolution, by bug number.
+     *
+     * A `BugInfo` rather than a summary string, because the resolution arrives
+     * in the same Bugzilla response and a row that does not carry it cannot say
+     * which of its bugs are already closed.
+     */
+    summaries: ReadonlyMap<number, BugInfo>;
     /** Which harness a path belongs to, from the published test lists. */
     harnessOfPath: HarnessOfPath;
 }
@@ -223,8 +265,15 @@ export function scanBugs(options: ScanOptions): ScanResult {
     );
 
     const rows: RankedIntermittent[] = candidates.map((candidate) => {
-        const bugSummary = summaries.get(candidate.bugId) ?? null;
+        const info = summaries.get(candidate.bugId);
+        const bugSummary = info?.summary ?? null;
         const summary = bugSummary ?? '';
+        // Bugzilla's own two fields, carried through unchanged. A bug it
+        // returned nothing for reads as open, which `RankedIntermittent`'s
+        // `resolution` comment records as deliberate.
+        const resolution = info?.resolution ?? '';
+        const status = info?.status ?? '';
+        const assignee = info?.assignee ?? null;
         // Only the first verified path is used. A summary naming two is rare —
         // one in a live top-80, a reftest comparing a file against its
         // reference — and neither of that pair is a test this tool holds, so
@@ -240,6 +289,9 @@ export function scanBugs(options: ScanOptions): ScanResult {
                   test: null,
                   failure: summaryRemainder(summary, null),
                   bugSummary,
+                  resolution,
+                  status,
+                  assignee,
               }
             : {
                   bugId: candidate.bugId,
@@ -248,6 +300,9 @@ export function scanBugs(options: ScanOptions): ScanResult {
                   test: verified.path,
                   failure: summaryRemainder(summary, verified.path),
                   bugSummary,
+                  resolution,
+                  status,
+                  assignee,
               };
     });
 
@@ -743,6 +798,92 @@ export function failureLineDetail(line: string): string {
     // The message can itself contain `|`, so the tail is rejoined, not indexed.
     const rest = fields.slice(2).join('|').trim();
     return rest.length === 0 ? stripped : normaliseDuration(rest);
+}
+
+/**
+ * One annotated job, as a failure message's expansion lists it.
+ *
+ * A derived shape rather than `BugOccurrence` itself: the two link decisions
+ * below are about what can *honestly* be addressed, and both are properties of
+ * the data rather than of the rendering.
+ */
+export interface OccurrenceJob {
+    /** Stable within one bug's panel: the key expansion state is held by. */
+    key: string;
+    /** `mochitest-browser-chrome-39` — the raw suite, chunk intact. */
+    jobName: string;
+    platform: string;
+    buildType: string;
+    tree: string;
+    /** `YYYY-MM-DD HH:MM:SS`, as the API formats it. */
+    pushTime: string;
+    machineName: string;
+    /** `null` for the `UNKNOWN_TASK_ID` sentinel — nothing to address. */
+    taskId: string | null;
+    /** `null` when `runIdsOfJobs` did not resolve it — never defaulted to 0. */
+    runId: number | null;
+    revision: string;
+}
+
+/**
+ * The jobs behind each distinct failure message.
+ *
+ * ## Why this is a grouping and not a fetch
+ *
+ * A caller already holds every occurrence of the bug — one
+ * `/api/failuresbybug/` call — and `BugDrilldown.lines` is a *tally* over their
+ * lines. So "which jobs produced this message" is a regrouping of data already
+ * in memory, and expanding a message costs **no request**.
+ *
+ * ## Why it lives here and not in the page
+ *
+ * The keys have to be the **same strings** `summariseBug` tallies, and those
+ * are not the raw log lines: they are `failureLineDetail` of the *messages*
+ * half of `partitionOccurrenceLines`, so a `profile uploaded in …` notice is
+ * not counted as a failure and a per-run duration is collapsed. A copy in the
+ * page that keyed on `occurrence.lines` would look right and match nothing —
+ * which is exactly what it did before this moved.
+ *
+ * An occurrence carrying several messages appears under **each** of them,
+ * because one job really did produce all of them; and `new Set` per occurrence,
+ * matching the tally, so a job that logged one message twice is counted once.
+ */
+export function jobsByLine(
+    occurrences: readonly BugOccurrence[]
+): Map<string, OccurrenceJob[]> {
+    const byLine = new Map<string, OccurrenceJob[]>();
+    for (const occurrence of occurrences) {
+        // A task id Treeherder had no Taskcluster metadata for cannot address an
+        // artifact or a job view, so it is dropped to `null` rather than being
+        // built into a URL containing the sentinel.
+        const taskId = occurrence.taskId === UNKNOWN_TASK_ID ? null : occurrence.taskId;
+        const job: OccurrenceJob = {
+            key:
+                taskId === null
+                    ? `job-${occurrence.jobId}`
+                    : `${taskId}.${occurrence.runId ?? 'x'}`,
+            jobName: occurrence.testSuite,
+            platform: occurrence.platform,
+            buildType: occurrence.buildType,
+            tree: occurrence.tree,
+            pushTime: occurrence.pushTime,
+            machineName: occurrence.machineName,
+            taskId,
+            runId: occurrence.runId,
+            revision: occurrence.revision,
+        };
+        for (const line of new Set(
+            partitionOccurrenceLines(occurrence).messages.map(failureLineDetail)
+        )) {
+            const list = byLine.get(line);
+            if (list === undefined) {
+                byLine.set(line, [job]);
+            } else {
+                list.push(job);
+            }
+        }
+    }
+    return byLine;
 }
 
 /**

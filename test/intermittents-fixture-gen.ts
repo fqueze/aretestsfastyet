@@ -97,13 +97,39 @@ for (const { bug, pins } of ALWAYS_RECORD) {
 
 const bugIds = ranking.flatMap((row) => (row.bug_id === null ? [] : [row.bug_id]));
 const summaries: Record<string, string> = {};
+/**
+ * Each bug's Bugzilla `status` and `resolution`, recorded beside its summary.
+ *
+ * A separate map rather than fields on `summaries`, so that adding this did not
+ * rewrite the 14 summary strings every existing expectation in
+ * `test/intermittent.test.ts` is tallied off. It also keeps the two apart when
+ * they disagree with each other over time: bug 1946935's triage prefix changed
+ * upstream (`Perma` to `Intermittent`) after the summaries were recorded, and
+ * the recorded string is the one the classification tests are written against.
+ *
+ * Recorded rather than synthesised because the emptiness of `resolution` is the
+ * thing under test — a hand-written fixture would have agreed with whatever the
+ * predicate happened to do. The live mix as recorded: 6 `RESOLVED`/`FIXED`, and
+ * 8 open across `NEW`, `ASSIGNED` and `REOPENED`. `REOPENED` is the case worth
+ * having: it is a bug that *was* resolved and is not now, and Bugzilla clears
+ * `resolution` back to `''` for it.
+ */
+const bugStates: Record<string, { status: string; resolution: string }> = {};
 for (let i = 0; i < bugIds.length; i += 40) {
     const batch = bugIds.slice(i, i + 40).join(',');
-    const data = await getJson<{ bugs?: { id: number; summary: string }[] }>(
-        `https://bugzilla.mozilla.org/rest/bug?id=${batch}&include_fields=id,summary`
+    const data = await getJson<{
+        bugs?: { id: number; summary: string; status?: string; resolution?: string }[];
+    }>(
+        // The same `include_fields` the client asks for, so the fixture holds
+        // what a real run receives rather than a subset of it.
+        `https://bugzilla.mozilla.org/rest/bug?id=${batch}&include_fields=id,summary,status,resolution`
     );
     for (const bug of data.bugs ?? []) {
         summaries[String(bug.id)] = bug.summary;
+        bugStates[String(bug.id)] = {
+            status: bug.status ?? '',
+            resolution: bug.resolution ?? '',
+        };
     }
 }
 
@@ -189,12 +215,15 @@ await writeFile(
                 'script, a wpt test), and one with no path at all. `knownTestPaths` is the ' +
                 'subset of the published test lists those summaries name, so a test can ' +
                 'classify without reading a 6 MB aggregate. `runIds` is each recorded ' +
-                'job_id\'s Taskcluster run index, which /api/failuresbybug/ does not carry.',
+                'job_id\'s Taskcluster run index, which /api/failuresbybug/ does not carry. ' +
+                '`bugStates` is each bug\'s Bugzilla status and resolution, which decides ' +
+                'whether a row renders struck through.',
             tree: TREE,
             startday: START,
             endday: END,
             failures: ranking,
             summaries,
+            bugStates,
             knownTestPaths,
             failuresbybug,
             runIds,

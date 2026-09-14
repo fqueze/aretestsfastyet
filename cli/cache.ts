@@ -85,6 +85,7 @@ import {
     type DataSource,
     dataFileKey,
 } from '../lib/sources/source.ts';
+import type { BugInfo } from '../lib/sources/intermittents.ts';
 
 /**
  * What kind of thing an entry holds, which decides how it expires.
@@ -765,7 +766,7 @@ export function cachedIntermittents<
             bug: number
         ): Promise<unknown>;
         runIdsOfJobs(jobIds: readonly number[]): Promise<Map<number, number>>;
-        bugSummaries(bugs: readonly number[]): Promise<Map<number, string>>;
+        bugSummaries(bugs: readonly number[]): Promise<Map<number, BugInfo>>;
     },
 >(
     inner: C,
@@ -813,10 +814,19 @@ export function cachedIntermittents<
             const entries = await through(key, async () => [...(await inner.runIdsOfJobs(jobIds))]);
             return new Map(entries);
         },
-        async bugSummaries(bugs: readonly number[]): Promise<Map<number, string>> {
+        async bugSummaries(bugs: readonly number[]): Promise<Map<number, BugInfo>> {
             // A `Map` does not survive `JSON.stringify`, so the entry array is
             // the cached form. Sorted so call order does not split the entry.
-            const key = `bugzilla:summaries:${[...bugs].sort((a, b) => a - b).join(',')}`;
+            //
+            // `:v2` because the cached *value* changed shape: entries written
+            // before `bugSummaries` returned a `BugInfo` hold a bare summary
+            // string, and `new Map(entries)` would hand those to a caller that
+            // reads `.summary` and `.resolution` off them — yielding
+            // `undefined` for every field rather than an error. A new key
+            // sidesteps the old entries instead of validating them, which is
+            // what the one-hour query TTL makes cheap: the stale entries expire
+            // on their own.
+            const key = `bugzilla:summaries:v2:${[...bugs].sort((a, b) => a - b).join(',')}`;
             const entries = await through(key, async () => [
                 ...(await inner.bugSummaries(bugs)),
             ]);

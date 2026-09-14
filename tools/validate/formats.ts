@@ -1716,6 +1716,7 @@ export function checkIntermittents(c: Checker, data: unknown, _ctx: FileContext)
         'endday',
         'failures',
         'summaries',
+        'bugStates',
         'knownTestPaths',
         'failuresbybug',
         'runIds',
@@ -1767,6 +1768,60 @@ export function checkIntermittents(c: Checker, data: unknown, _ctx: FileContext)
         }
         for (const [key, value] of Object.entries(summaries)) {
             c.string(value, `.summaries["${key}"]`);
+        }
+    }
+
+    // The bug's Bugzilla state, which decides whether a row renders struck
+    // through. Joined against `summaries` rather than against `ranked`, because
+    // the generator writes both from the same Bugzilla response: a bug with a
+    // summary and no state would mean that response was split, and the row
+    // would silently read as open.
+    if (c.object(data['bugStates'], '.bugStates')) {
+        const states = data['bugStates'] as Record<string, unknown>;
+        const summaries = c.object(data['summaries'], '.summaries')
+            ? (data['summaries'] as Record<string, unknown>)
+            : {};
+        for (const bug of Object.keys(summaries)) {
+            if (!(bug in states)) {
+                c.error(`bug ${bug} has a summary but no recorded state`, '.bugStates');
+            }
+        }
+        let resolved = 0;
+        for (const [key, value] of Object.entries(states)) {
+            const at = `.bugStates["${key}"]`;
+            if (!c.object(value, at)) {
+                continue;
+            }
+            const state = value as Record<string, unknown>;
+            c.noExtraKeys(state, ['status', 'resolution'], at);
+            c.string(state['status'], `${at}.status`);
+            if (c.string(state['resolution'], `${at}.resolution`)) {
+                if (state['resolution'] !== '') {
+                    resolved++;
+                }
+                // A resolved bug carries a status that is not an open one.
+                // Bugzilla's own invariant, and the one the strike-through
+                // rests on: a recording where the two disagreed would mean the
+                // predicate is reading the wrong field.
+                if (state['resolution'] !== '' && state['status'] === 'NEW') {
+                    c.error(
+                        `resolution "${String(state['resolution'])}" with status NEW; ` +
+                            `Bugzilla clears resolution on an open bug`,
+                        at
+                    );
+                }
+            }
+            c.observe('intermittentBugStatuses', String(state['status']));
+        }
+        // Both cases present, so a renderer that struck through everything — or
+        // nothing — cannot pass against this fixture.
+        const total = Object.keys(states).length;
+        if (total > 0 && (resolved === 0 || resolved === total)) {
+            c.error(
+                `${resolved} of ${total} bugs are resolved; the fixture needs both a resolved ` +
+                    `and an open bug for the strike-through to be testable`,
+                '.bugStates'
+            );
         }
     }
 

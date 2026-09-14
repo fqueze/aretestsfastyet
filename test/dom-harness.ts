@@ -196,40 +196,46 @@ const ISSUES_PAGE_HTML = `<!DOCTYPE html><html><body>
  * an id renamed on the page and not here fails as a null dereference in
  * `start()`.
  *
- * Two things it deliberately does **not** have. There is no `date-select` and no
- * `historical-button`: this page reads a live API, so it has no published dates
- * to fill a `<select>` from and no 21-day artifact to toggle onto — its window
- * is the `window-select` dropdown. And the `<select>`s are left empty, because
- * the controller fills the harness one from `HARNESS_OPTIONS` and a
- * pre-populated copy here would let a page that stopped filling it pass.
+ * Several things it deliberately does **not** have. There is no `date-select`
+ * and no `historical-button`: this page reads a live API, so it has no published
+ * dates to fill a `<select>` from and no 21-day artifact to toggle onto — its
+ * window is the `window-select` dropdown. There is no `volume-chart` canvas and
+ * no `charts` container, because the top chart was removed — `VolumeSeries` in
+ * `site/intermittent-view.ts` carries the measurement that decided it.
+ *
+ * And there is no `.subtitle`, no `volume-note` and no `ranking-title`, because
+ * the page owner's review removed all three: the prose was "blah blah", the
+ * volume figure moved into `status-text` beside the window dropdown, and the
+ * section title had only one section to name. They are absent here rather than
+ * kept as empty elements, so a page that started writing into them again would
+ * fail as a null dereference — which is what this harness is for.
+ *
+ * The `<select>`s are left empty, because the controller fills the harness one
+ * from `HARNESS_OPTIONS` and a pre-populated copy here would let a page that
+ * stopped filling it pass.
+ *
+ * The harness `<select>` sits **inside the `<h1>`** with the shared
+ * `.harness-switcher` class, as it does on the page: the controller writes the
+ * title's suffix into `title-suffix`, so an `<h1>` shaped like the old one would
+ * pass while the real page threw.
  */
 const INTERMITTENT_PAGE_HTML = `<!DOCTYPE html><html><body>
 <div class="container">
-<h1>Sheriff-Annotated Intermittents</h1>
+<h1><select id="harness-select" class="harness-switcher"></select> <span id="title-suffix"></span></h1>
 <div class="controls">
-  <div class="control-group">
-    <label for="harness-select">Harness:</label>
-    <select id="harness-select"></select>
-  </div>
   <div class="control-group">
     <label for="window-select">Window:</label>
     <select id="window-select">
       <option value="7days">Last 7 days</option>
       <option value="14days">Last 14 days</option>
       <option value="21days">Last 21 days</option>
+      <option value="30days">Last 30 days</option>
     </select>
   </div>
   <span id="status-text" class="status-text">Loading annotations...</span>
 </div>
 <div id="error" class="error" style="display: none;"></div>
 <div id="window-note" style="display: none;"></div>
-<div id="charts">
-  <div class="chart-box">
-    <div class="chart-area"><canvas id="volume-chart"></canvas></div>
-    <p class="chart-note" id="volume-note"></p>
-  </div>
-</div>
-<h2 id="ranking-title"></h2>
 <div id="coverage"></div>
 <div id="ranking-table"></div>
 </div>

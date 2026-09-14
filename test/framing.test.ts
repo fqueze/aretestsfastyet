@@ -52,6 +52,7 @@
  * without a framing entry fails the completeness check at the bottom.
  */
 
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,6 +60,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { type DataFileName, type DataSource, DataFileNotFoundError } from '../lib/sources/source.ts';
+import type { BugInfo, IntermittentsClient } from '../lib/sources/intermittents.ts';
 import type { TreeherderClient, TreeherderJob } from '../lib/sources/treeherder.ts';
 import { captureStreams } from '../cli/context.ts';
 import { diskCache } from '../cli/cache.ts';
@@ -156,11 +158,13 @@ const FRAMING: FramingEntry[] = [
         // freeze facts about a file nobody is changing any more.
         pageCitations: {
             rowUnit:
-                'site/issues.ts:render (one row per component), tests only as child rows via ' +
-                'testRows(); old/issues.html:1933 before the migration',
+                'site/issues.ts:render — on the default view, one row per component, tests ' +
+                'only as child rows via testRows(); old/issues.html:1933 before the migration',
             grouping:
-                'site/issues-view.ts:buildComponentRows — component, with no view control; ' +
-                'old/issues.html:887-890 hard-coded the same thing',
+                'site/issues-view.ts:buildComponentRows — component by default; the "Show as" ' +
+                'radios (site/issues.html) also offer source tree and list, which are ' +
+                '--group-by directory and --group-by test. old/issues.html:887-890 hard-coded ' +
+                'the component grouping with no control at all.',
             sortKey: 'site/issues-view.ts:INITIAL_SORT (old/issues.html:663-664 before the migration)',
             window:
                 'site/issues-view.ts:isHistoricalDate — an absent `date` means the 21-day ' +
@@ -435,6 +439,107 @@ const FRAMING: FramingEntry[] = [
                     '`--all-days` and `--day` reach the page\'s two readings explicitly.',
             },
         ],
+    },
+    {
+        command: 'intermittent',
+        pageFile: 'intermittent.html',
+        pageCitations: {
+            rowUnit:
+                'site/intermittent.ts:rowElement — one row is one bug, with its annotation ' +
+                'count, its per-day sparkline and the test its summary names',
+            grouping:
+                'site/intermittent.ts:renderTable — a flat ranked table; there is no grouping ' +
+                'control, because the API ranks bugs tree-wide and a bug spans every ' +
+                'configuration it was annotated on',
+            sortKey:
+                'site/intermittent-view.ts:tableRows — a prefix of `selectHarness`’s output, ' +
+                'which inherits `scanBugs`’s count-descending order',
+            window:
+                'site/intermittent-view.ts:DEFAULT_DAYS = 21 and DEFAULT_WINDOW = \'21days\'; ' +
+                'site/intermittent.ts:initWindowControl offers 7, 14 and 21',
+            filters:
+                'site/intermittent-view.ts:HARNESS_OPTIONS — four states, `all` by default; ' +
+                'site/intermittent-view.ts:coverageLine names the selected group and its ' +
+                'denominator; site/intermittent-view.ts:annotationsTooltip names the excluded ' +
+                'no-bug group',
+            universe:
+                'site/intermittent.ts:load and loadDays — one `/api/failures/` per day of ' +
+                'the window, which is both the ranking and the sparklines, plus `ceil(n/100)` ' +
+                'Bugzilla batches and two published test lists',
+        },
+        page: {
+            rowUnit: 'bug',
+            grouping: 'flat ranked list — tree-wide, no grouping control',
+            sortKey: 'count',
+            sortDirection: 'desc',
+            window: '21 days ending today (UTC)',
+            // Worded without naming the control, because the control is the
+            // only thing that differs — a dropdown against `--harness` — and
+            // the filter it applies is the same `selectHarness` on both sides.
+            // A string that named each side's own widget would make this field
+            // differ forever for no behavioural reason, which is how an
+            // allow-list fills up with entries that are about prose.
+            filters:
+                'every annotated bug by default; one selection of mochitest, xpcshell or ' +
+                'unknown; annotations with no bug attached are excluded and counted',
+            universe:
+                'the window ranking, the candidates’ Bugzilla summaries, the two published ' +
+                'test lists, and one per-day ranking per day of the window for the charts',
+            harness: 'all three classifications at once',
+        },
+        cli: {
+            rowUnit: 'bug',
+            grouping: 'flat ranked list — tree-wide, no grouping control',
+            sortKey: 'count',
+            sortDirection: 'desc',
+            window: '7 days ending today (UTC)',
+            filters:
+                'every annotated bug by default; one selection of mochitest, xpcshell or ' +
+                'unknown; annotations with no bug attached are excluded and counted',
+            universe:
+                'the window ranking, the candidates’ Bugzilla summaries, and the two published ' +
+                'test lists',
+            harness: 'all three classifications at once',
+        },
+        divergences: [
+            {
+                field: 'window',
+                reason:
+                    'The CLI’s 7 is not a case for seven specifically — its stated reason is ' +
+                    'that the window must be a whole number of weeks, because weekend push ' +
+                    'volume drops several-fold and a window like 10 days ranks a different ' +
+                    'weekday mix each run. 21 is three weeks and satisfies that reasoning ' +
+                    'exactly as 7 does. The page takes 21 because it is the window every other ' +
+                    'page on this site publishes and the one the owner reaches for by habit — ' +
+                    '`#date=21days` on issues.html — so a reader comparing the two pages is ' +
+                    'comparing the same span. Both sides reach the other window explicitly: ' +
+                    '`--since 21` and `#date=7days`. The page also states the whole-weeks ' +
+                    'caveat on screen for a window that is not one (`windowNote`), which the ' +
+                    'CLI can only do in --help prose.',
+            },
+            {
+                field: 'universe',
+                reason:
+                    'The page reads one `/api/failures/` per day of the window and the CLI’s ' +
+                    'ranked list reads none, and it is a difference in requests rather than in ' +
+                    'numbers: the per-day rankings are what the top chart and every row’s ' +
+                    'sparkline are built from, and they agree bug-for-bug and day-for-day with ' +
+                    'the `/api/failuresbybug/` tally the CLI’s --history uses. Measured rather ' +
+                    'than assumed, on live trunk over 2026-08-23..09-12: bug 2060167 reads ' +
+                    '17/12/193 on 09-05/09-06/09-02 by both routes. The page takes the per-day ' +
+                    'route because the per-bug one costs 2.2 MB and 5.4 s for a single row — ' +
+                    'each occurrence carries its job’s full log lines — so 21 requests of ' +
+                    '~8 kB replace 50 large ones. `test/intermittent-parity.test.ts` asserts ' +
+                    'the request counts on both sides rather than this prose.',
+            },
+        ],
+        sourceOnly: {
+            window:
+                'The page’s default window cannot be reached through command output, and the ' +
+                'CLI half of this row can: `--since` is asserted against a real invocation ' +
+                'below, while the page’s 21 is read off `DEFAULT_DAYS`. Named here so a ' +
+                'source-read assertion is not mistaken for a behavioural one.',
+        },
     },
     {
         command: 'errors',
@@ -752,12 +857,11 @@ const FRAMING: FramingEntry[] = [
  * not to cover this" from "forgot". Each says why there is nothing to compare.
  */
 const UNCOVERED_COMMANDS: Record<string, string> = {
-    intermittent:
-        'Reads Treeherder’s sheriff-annotation endpoints and Bugzilla, not this repository’s ' +
-        'aggregates, so there is no page here to diverge from. The upstream equivalent is ' +
-        'treeherder.mozilla.org/intermittent-failures/, which is not ours to keep in parity ' +
-        'with — and its framing already differs deliberately: it ranks bugs tree-wide with no ' +
-        'harness notion, while this command ranks a bug on its occurrences in one harness.',
+    // `intermittent` used to be here, with the reason "there is no page here to
+    // diverge from". `intermittent.html` made that false, so the command has a
+    // FRAMING entry above instead. Recorded rather than silently deleted,
+    // because this file's discipline is that an entry moving between the two
+    // lists is a decision someone made.
     guide: 'Prose about what the data can and cannot tell you. No page, and no rows to frame.',
     dates: 'Lists which dates have published data. A provenance query, not a view of test data.',
     cache: 'Inspects the local on-disk cache. Nothing upstream to compare against.',
@@ -1508,6 +1612,197 @@ test('flaky says which of the three windows it used, in text', async () => {
     // The ~84% denominator caveat that used to ride along on every --all-days run.
     const help = await invoke(['flaky', '--help']);
     assert.match(help.stdout, /~84% of/);
+});
+
+// =========================================================================
+// fx-tests intermittent
+// =========================================================================
+
+/**
+ * The recorded intermittents fixture, served through a client.
+ *
+ * This command reads Treeherder and Bugzilla rather than this repository's
+ * aggregates, so `fixtureSource()` cannot answer it — only the two published
+ * test lists, which the source below supplies. `test/intermittent.test.ts` has
+ * the same pair and exercises the command's own behaviour; what is asserted here
+ * is only the framing table's CLI side.
+ */
+function intermittentFixture(): {
+    client: IntermittentsClient;
+    source: DataSource & { requested: string[] };
+} {
+    const raw = JSON.parse(
+        readFileSync(new URL('./fixtures/intermittents-trunk-2026-08-10.json', import.meta.url), 'utf8')
+    ) as {
+        failures: { bug_id: number | null; bug_count: number }[];
+        summaries: Record<string, string>;
+        bugStates?: Record<string, { status: string; resolution: string }>;
+        knownTestPaths: { mochitest: string[]; xpcshell: string[] };
+    };
+    const requested: string[] = [];
+    return {
+        client: {
+            rankBugs: async () =>
+                raw.failures.map((entry) => ({ bugId: entry.bug_id, count: entry.bug_count })),
+            occurrencesOfBug: async () => [],
+            failureCountOfBug: async () => [],
+            runIdsOfJobs: async () => new Map(),
+            bugSummaries: async (bugs) =>
+                new Map(
+                    bugs.flatMap((bug) => {
+                        const summary = raw.summaries[String(bug)];
+                        if (summary === undefined) {
+                            return [];
+                        }
+                        // The recorded state, so the framing table's CLI side is
+                        // built from the same input a real run gets. Defaulted
+                        // to open for a bug the fixture has no state for.
+                        const state = raw.bugStates?.[String(bug)];
+                        return [
+                            [
+                                bug,
+                                {
+                                    summary,
+                                    status: state?.status ?? '',
+                                    resolution: state?.resolution ?? '',
+                                },
+                            ] as [number, BugInfo],
+                        ];
+                    })
+                ),
+        },
+        source: {
+            name: 'fixture-issues',
+            requested,
+            fetch(name: DataFileName): Promise<Uint8Array> {
+                requested.push(name.filename);
+                const harness = name.filename.startsWith('mochitest') ? 'mochitest' : 'xpcshell';
+                const paths = raw.knownTestPaths[harness as 'mochitest' | 'xpcshell'];
+                const dirs: string[] = [];
+                const names: string[] = [];
+                const testPathIds: number[] = [];
+                const testNameIds: number[] = [];
+                for (const full of paths) {
+                    const cut = full.lastIndexOf('/');
+                    const dir = cut === -1 ? '' : full.slice(0, cut);
+                    if (!dirs.includes(dir)) {
+                        dirs.push(dir);
+                    }
+                    names.push(cut === -1 ? full : full.slice(cut + 1));
+                    testPathIds.push(dirs.indexOf(dir));
+                    testNameIds.push(names.length - 1);
+                }
+                return Promise.resolve(
+                    new TextEncoder().encode(
+                        JSON.stringify({
+                            metadata: { generatedAt: '2026-08-17T00:00:00Z' },
+                            tables: { testPaths: dirs, testNames: names },
+                            testInfo: { testPathIds, testNameIds },
+                        })
+                    )
+                );
+            },
+        },
+    };
+}
+
+test('intermittent rows are bugs ranked on annotation count descending', async () => {
+    const { client, source } = intermittentFixture();
+    const result = await invoke(['intermittent', '--json', '--limit', '0'], {
+        intermittents: client,
+        source,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = json(result.stdout);
+    const rows = parsed['rows'] as { bugId: number; count: number }[];
+
+    const entry = entryFor('intermittent');
+    assertFraming('intermittent', 'rowUnit', 'bug', entry.cli.rowUnit);
+    assertFraming('intermittent', 'sortKey', 'count', entry.cli.sortKey);
+    assertFraming('intermittent', 'sortDirection', 'desc', entry.cli.sortDirection);
+
+    // The row unit really is a bug, not merely labelled one.
+    assert.ok(rows.length > 0);
+    for (const row of rows) {
+        assert.equal(typeof row.bugId, 'number');
+    }
+    for (let i = 1; i < rows.length; i++) {
+        assert.ok(rows[i - 1]!.count >= rows[i]!.count, `row ${i} is out of order`);
+    }
+    // And it is a flat list: nothing in the JSON groups the rows.
+    assert.equal(parsed['groupBy'], undefined);
+});
+
+test('intermittent covers 7 days by default, where the page covers 21', async () => {
+    const { client, source } = intermittentFixture();
+    const result = await invoke(['intermittent', '--json', '--limit', '1'], {
+        intermittents: client,
+        source,
+    });
+    const parsed = json(result.stdout);
+    const start = parsed['startday'] as string;
+    const end = parsed['endday'] as string;
+    const days =
+        Math.round(
+            (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) /
+                (24 * 60 * 60 * 1000)
+        ) + 1;
+    // The CLI half of the declared `window` divergence, from real output rather
+    // than from `DEFAULT_DAYS`. The page half is read off the source, which
+    // `sourceOnly` on this entry records.
+    assert.equal(days, 7, 'the CLI default is one week');
+    assert.equal(days % 7, 0, 'and a whole number of weeks, which is the actual constraint');
+    assertFraming('intermittent', 'window', '7 days ending today (UTC)', entryFor('intermittent').cli.window);
+
+    // The page's 21 is also three weeks, so the divergence is a span rather than
+    // a disagreement about the rule.
+    const view = readFileSync(new URL('../site/intermittent-view.ts', import.meta.url), 'utf8');
+    assert.match(view, /export const DEFAULT_DAYS = 21;/);
+});
+
+test('intermittent ranks every classification at once, and excludes the no-bug group', async () => {
+    const { client, source } = intermittentFixture();
+    const result = await invoke(['intermittent', '--json', '--limit', '0'], {
+        intermittents: client,
+        source,
+    });
+    const parsed = json(result.stdout);
+    // `harness: null` is "no selection", which is the honest default for a
+    // ranking whose API has no harness parameter — the same default the page's
+    // dropdown opens on.
+    assert.equal(parsed['harness'], null);
+    const coverage = parsed['coverage'] as {
+        ranked: number;
+        scanned: number;
+        mochitest: number;
+        xpcshell: number;
+        unknown: number;
+        noBugCount: number;
+    };
+    // Every classification is represented, so "ranks all three at once" is a
+    // fact about this output rather than about the flag's absence.
+    assert.ok(coverage.mochitest > 0 && coverage.xpcshell > 0 && coverage.unknown > 0);
+    assert.equal(
+        coverage.mochitest + coverage.xpcshell + coverage.unknown,
+        coverage.scanned,
+        'the three groups partition the candidates'
+    );
+    // And the no-bug group is counted and excluded rather than dropped: it has
+    // no bug, so no summary, so nothing to classify.
+    assert.ok(coverage.noBugCount > 0);
+    assert.equal(coverage.ranked, coverage.scanned + 1, 'one `{"bug_id": null}` row');
+});
+
+test('intermittent reads no repository aggregate but the two test lists', async () => {
+    const { client, source } = intermittentFixture();
+    await invoke(['intermittent', '--json', '--limit', '0'], { intermittents: client, source });
+    // The CLI half of the `universe` row. Two files, however deep the ranking
+    // goes, because `loadHarnessOfPath` reads the aggregates once for the whole
+    // run rather than the per-test bucket files.
+    assert.deepEqual([...source.requested].sort(), [
+        'mochitest-issues.json',
+        'xpcshell-issues.json',
+    ]);
 });
 
 // =========================================================================

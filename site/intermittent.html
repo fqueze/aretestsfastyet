@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sheriff-Annotated Intermittents</title>
+    <script src="fetch-utils.js"></script>
+    <script src="dashboards.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="icon" href="favicon-orange.svg">
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        /* --- controls ---------------------------------------------------- */
+
+        .controls {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-group label {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .control-group select {
+            padding: 6px 8px;
+            font-size: 14px;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* --- the preamble ------------------------------------------------ */
+
+        /* `.subtitle`, `.volume-note`, `.coverage-line` and `#ranking-title`
+           were here. All four were prose above the table, and all four were
+           removed or relocated on the page owner's review: the subtitle was
+           "blah blah", the volume note's extra sentences with it, the coverage
+           line moved next to the window dropdown, and the section title had no
+           section to name. `#coverage` is now only the window caveat. */
+
+        #coverage {
+            margin: 12px 0;
+        }
+
+        /* A window that is not a whole number of weeks is a caveat about the
+           numbers below it, so it is styled as one rather than as body text. */
+        #window-note {
+            font-size: 13px;
+            color: #8a6d3b;
+            background: #fcf8e3;
+            border-left: 3px solid #e8b84a;
+            padding: 8px 12px;
+            margin: 10px 0;
+            line-height: 1.5;
+        }
+
+        /* The annotations figure in the status line carries a tooltip, so it
+           gets the dotted underline this site uses to advertise one. */
+        .annotations-total {
+            border-bottom: 1px dotted #999;
+            cursor: help;
+        }
+
+        /* --- the ranked table -------------------------------------------- */
+
+        table.ranking {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        table.ranking th {
+            text-align: left;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            font-weight: normal;
+            padding: 8px 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        table.ranking td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+            vertical-align: middle;
+        }
+
+        table.ranking tr:hover td { background-color: #f9f9f9; }
+
+        /* The count and, under it, the sparkline's peak. `vertical-align: top`
+           on the cell so the number sits on the chart's first line rather than
+           being centred against a two-line stack. */
+        .col-count {
+            width: 96px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            vertical-align: top;
+        }
+
+        th.col-count { text-align: right; }
+
+        .count-total { font-weight: bold; }
+
+        /* The `peak N/day` label, moved out of the chart cell on the page
+           owner's instruction. Quieter and smaller than the total above it: it
+           qualifies the chart's height rather than being a second headline
+           number.
+
+           Each sparkline is scaled to its **own** peak, so two rows' bar
+           heights are not comparable — see `sparklinePeak`. This label is what
+           makes that honest, and is not optional decoration.
+
+           `#767676` and not a lighter grey: this is small text carrying a
+           number, so it is held to WCAG's 4.5:1 for normal text rather than to
+           the 3:1 a graphical mark needs. Measured with the `dataviz` skill's
+           `contrast()` — 4.54:1 on white and 4.31:1 on the row hover's
+           `#f9f9f9`. The `#999` it started at measured 2.85:1. */
+        .count-peak {
+            font-size: 10px;
+            font-weight: normal;
+            color: #767676;
+            line-height: 1.2;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .col-chart { width: 130px; vertical-align: top; }
+
+        .col-bug { width: 80px; vertical-align: top; }
+
+        /* The bug's assignee. Narrow, and clipped rather than wrapped: a long
+           real name must not be allowed to set this row's height, which is the
+           whole point of the merged column beside it. */
+        .col-assignee {
+            width: 120px;
+            font-size: 12px;
+            color: #444;
+            vertical-align: top;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .col-assignee.unassigned {
+            color: #aaa;
+            text-align: center;
+        }
+
+        /* The merged test-and-failure cell: the path on line 1, the message on
+           line 2. It takes the width the two columns used to split, which is
+           what stopped both of them wrapping. */
+        .col-test {
+            width: auto;
+            vertical-align: top;
+        }
+
+        /* Line 1. `flex` keeps the path and the two icons on one row and lets
+           only the path shrink — so the icons no longer wrap under the path,
+           which was the owner's specific complaint. */
+        .test-path {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            font-family: monospace;
+            font-size: 12px;
+            min-width: 0;
+        }
+
+        /* The basename is the copyable part, so a path too long for the column
+           keeps its end rather than its start — the same choice the CLI's
+           `path: true` truncation makes for the same column.
+
+           `direction: rtl` is what moves the ellipsis to the front, and it has
+           to be on the element that overflows — the anchor — rather than on the
+           cell. `unicode-bidi: plaintext` keeps the path's own characters in
+           logical order, so `/` separators do not reverse.
+
+           `min-width: 0` is what lets it actually shrink inside the flex line:
+           a flex item's default minimum is its content width, which would push
+           the icons out of the cell instead of ellipsising the path. */
+        .col-test a.test-link {
+            direction: rtl;
+            unicode-bidi: plaintext;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+            /* `1 1 auto` was wrong here, and a browser check is what showed it:
+               with `grow: 1` the anchor filled the whole 1,034px column, so the
+               📋/🔍 buttons sat at the far right edge of the row, visually
+               detached from the path they act on. `0 1 auto` lets a path too
+               long for the column shrink and ellipsise — which is the behaviour
+               the `direction: rtl` above exists for — while a short one takes
+               only its own width and keeps the buttons beside it. */
+            flex: 0 1 auto;
+        }
+
+        /* Line 2: the failure message, under the path — the shape
+           `site/try.ts`'s `.inline-message` uses. Clamped to one line, with the
+           full string in the `title`.
+
+           The `margin-left: 46px` here was the width of the failure-rate prefix
+           that used to open line 1 (44px plus the flex gap), so the message
+           started under the path rather than under the percentage. With the rate
+           removed the path starts at the cell's left edge and there is nothing
+           left to indent past, which is `site/try.ts`'s arrangement too. */
+        .col-test .inline-message {
+            color: #555;
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /*
+         * The 📋 button `site/test-link.ts` puts before each test path.
+         *
+         * Page-local, the way `try.html:462` and `issues.html` both keep their
+         * own copy: the rule lives in `common-data-view.css`, which this page
+         * does not link, and its reveal selectors are `.data-row:hover` and
+         * `.test-row:hover` — neither of which is a row here. Observed in a
+         * real browser before this rule existed: with no `.action-button` rule
+         * in scope the button rendered as a default `<button>`, a ~34px grey
+         * box on every row of the Test column, and it was never revealed on
+         * hover because the reveal selector did not match either.
+         *
+         * Invisible until the row is hovered, so a long list of paths stays a
+         * list of paths.
+         */
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 0;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .ranking-row:hover .action-button {
+            opacity: 1;
+        }
+
+        .action-button:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        /*
+         * The button leads the path, so its width would otherwise indent every
+         * path in the column away from the "Test" header. Reserving the width
+         * and taking it back off the left keeps the glyph in a gutter and each
+         * path's first character under the header's — hovered or not, since the
+         * button only ever changes its own opacity. The same trick and the same
+         * 18px as `try.html`'s `--row-action-width`.
+         */
+        .test-cell > .action-button:first-child {
+            width: 18px;
+            margin-left: -18px;
+            text-align: left;
+        }
+
+        .test-cell {
+            padding-left: 18px;
+            display: block;
+            overflow: hidden;
+        }
+
+        /*
+         * The sparkline is a shape in a cell, not a figure: it has no axes, so
+         * it gets no padding and no border either.
+         *
+         * **The wrapper is what bounds the size, not the canvas.** Chart.js with
+         * `responsive: true` resizes its canvas to the canvas's *offset parent*
+         * and overwrites any `width`/`height` set on the canvas itself — so with
+         * the canvas as a direct child of the `<td>`, which a table sizes to its
+         * content, it measured a growing cell and grew to fill it. Observed in a
+         * real browser on the 21-day window: every canvas came out **532px**
+         * tall and each row 557px, for a 28,872px page. A fixed-size block that
+         * is not a table cell gives it something that cannot grow.
+         *
+         * `position: relative` because that is what makes this div the offset
+         * parent Chart.js measures.
+         */
+        .sparkline-box {
+            position: relative;
+            width: 120px;
+            height: 28px;
+        }
+
+        canvas.sparkline {
+            /* Belt and braces: Chart.js writes inline `width`/`height` on the
+               canvas each resize, and these cap what it can write. */
+            max-width: 120px;
+            max-height: 28px;
+        }
+
+        /* `.sparkline-peak` was here, under the canvas. The label now sits in
+           the count cell as `.count-peak` — see that rule, which inherits this
+           one's contrast finding. */
+
+        /* --- the chart's tooltip ----------------------------------------- */
+
+        /*
+         * Chart.js draws its own tooltip *into the canvas*, and this canvas is
+         * 120x28 in a table cell — so the built-in tooltip was clipped by the
+         * chart it described ("only the date is visible in the tooltip, that
+         * covers the entire chart"). `showChartTooltip` replaces it with this
+         * element, appended to `<body>`.
+         *
+         * `position: absolute` in page coordinates, not `fixed`: the handler
+         * computes with `scrollX`/`scrollY`, and absolute placement keeps the
+         * tooltip attached to the chart if the page scrolls under a held
+         * pointer.
+         *
+         * `pointer-events: none` so the tooltip cannot sit between the pointer
+         * and the bar it is describing, which would make it flicker.
+         *
+         * The `z-index` is above the table's own stacking; nothing on this page
+         * floats over it.
+         */
+        .chart-tooltip {
+            position: absolute;
+            display: none;
+            z-index: 100;
+            pointer-events: none;
+            background: #333;
+            color: white;
+            padding: 6px 9px;
+            border-radius: 4px;
+            font-size: 12px;
+            line-height: 1.4;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+
+        .chart-tooltip-date {
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .chart-tooltip-count { color: #e0e0e0; }
+
+        /* --- a resolved bug ---------------------------------------------- */
+
+        /*
+         * A bug with a non-empty Bugzilla `resolution` is struck through, so a
+         * reader scanning the ranking can see at once which of these are
+         * already closed — the row is still there because the test is still
+         * failing, which is exactly the case worth noticing.
+         *
+         * The strike is on the bug link and the failure text, and deliberately
+         * **not** on the count or the sparkline: those are measurements of what
+         * happened, and striking a number through would read as "this count is
+         * wrong" rather than "this bug is closed".
+         *
+         * Colour is not the only channel — the line through the text is a
+         * shape, and the row carries `title` text naming the status — so this
+         * survives a reader who cannot distinguish the grey.
+         */
+        tr.resolved .col-bug a,
+        tr.resolved .col-test .inline-message {
+            text-decoration: line-through;
+            color: #888;
+        }
+
+        /* The resolution word itself, so "resolved" is legible without
+           hovering for the tooltip. */
+        .resolution-tag {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: #7a7a7a;
+            margin-left: 4px;
+            white-space: nowrap;
+            /* Not struck through: it is the label saying *why* the row is,
+               so striking it would make the label unreadable. */
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        /* --- the expanded row's drill-down ------------------------------- */
+
+        /* A row is a control, so it says so on hover. Only the expandable rows:
+           the panel row underneath is not itself clickable. */
+        tr.expandable { cursor: pointer; }
+
+        tr.ranking-row.is-expanded td { background-color: #eef3f8; }
+
+        /* The panel sits under its row and spans the table. The left border is
+           what ties it to the row above rather than to the one below, which is
+           the same device `flaky.html`'s inline chart uses. */
+        tr.drilldown-row > td {
+            padding: 0;
+            background: #fbfcfd;
+            border-bottom: 2px solid #dfe4ea;
+        }
+
+        .drilldown {
+            padding: 12px 16px 14px 16px;
+            border-left: 4px solid #dfe4ea;
+        }
+
+        .drilldown-count {
+            font-size: 12px;
+            color: #555;
+            margin: 0 0 10px 0;
+        }
+
+        .drilldown-status {
+            font-size: 13px;
+            color: #666;
+            margin: 0;
+        }
+
+        /* `#a8352c` rather than the chart red: this is text, so it is held to
+           WCAG's 4.5:1 rather than to a mark's 3:1. */
+        .drilldown-error { color: #a8352c; }
+
+        /* The six sections side by side where there is room, stacked where
+           there is not. `auto-fit` with a `minmax` floor rather than a fixed
+           column count, so the failure-message section — much the widest
+           content — gets a whole row to itself on a narrow window instead of
+           being squeezed into a sixth of it. */
+        /* The four short-valued axes. `auto-fit` over a 200px minimum rather
+           than the 260px this started at: with the two long sections no longer
+           competing for the grid, four narrow columns fit a normal window on one
+           row, which is what the page owner asked for. */
+        .drilldown-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px 20px;
+        }
+
+        /* A full-width section: the failure messages and the test names. These
+           hold `TEST-UNEXPECTED-FAIL` lines and test paths, which at column
+           width wrapped across many lines — the owner's complaint. Given the
+           panel's whole width they are mostly one line each. */
+        .drilldown-section.is-full {
+            margin-top: 14px;
+        }
+
+        /* In a full-width section the value gets the room, so it no longer wraps
+           on any character — it ellipsises on one line and the `title` carries
+           the rest. A wrapped 400-character log line was the unreadable case. */
+        .drilldown-section.is-full .drilldown-item-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow-wrap: normal;
+        }
+
+        /* --- the failure messages' own expansion ------------------------- */
+
+        .drilldown-item.expandable {
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        .drilldown-item.expandable:hover {
+            background: #eef3f8;
+        }
+
+        /* A disclosure marker, so a row that expands looks like one. Rotates
+           when open, which is the state `aria-expanded` carries for a reader
+           who is not looking at it. */
+        .drilldown-item.expandable .drilldown-item-count::before {
+            content: '▸';
+            display: inline-block;
+            margin-right: 4px;
+            color: #888;
+            transition: transform 0.1s;
+        }
+
+        .drilldown-item.expandable[aria-expanded="true"] .drilldown-item-count::before {
+            transform: rotate(90deg);
+        }
+
+        /* The jobs behind one failure message. Indented under it so the nesting
+           is visible, and bordered rather than boxed so a long list does not
+           look like a second panel. */
+        .job-list {
+            margin: 2px 0 8px 42px;
+            border-left: 2px solid #dde3ea;
+            padding-left: 10px;
+        }
+
+        .job-row {
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+            font-size: 11px;
+            line-height: 1.7;
+            white-space: nowrap;
+        }
+
+        .job-date {
+            flex: 0 0 auto;
+            color: #767676;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* The job name is the part that can be long, so it is the part that
+           shrinks and ellipsises. */
+        .job-name {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-family: monospace;
+            color: #333;
+        }
+
+        .job-meta {
+            flex: 0 0 auto;
+            color: #555;
+        }
+
+        .job-links {
+            flex: 0 0 auto;
+            color: #767676;
+        }
+
+        .job-links a {
+            color: #0060df;
+            text-decoration: none;
+        }
+
+        .job-links a:hover { text-decoration: underline; }
+
+        .drilldown-heading {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #767676;
+            font-weight: 600;
+            margin: 0 0 4px 0;
+        }
+
+        .drilldown-item {
+            display: flex;
+            gap: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+            align-items: baseline;
+        }
+
+        .drilldown-item-count {
+            flex: 0 0 auto;
+            min-width: 34px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            color: #555;
+            font-weight: 600;
+        }
+
+        /* Log lines and job names are long and are not prose, so they wrap on
+           any character rather than overflowing the column. Monospace because
+           a failure message's whitespace and punctuation carry meaning. */
+        .drilldown-item-name {
+            font-family: monospace;
+            font-size: 11px;
+            color: #333;
+            overflow-wrap: anywhere;
+        }
+
+        .drilldown-empty {
+            font-size: 11px;
+            color: #767676;
+            font-style: italic;
+            margin: 0;
+        }
+
+        .table-note {
+            font-size: 12px;
+            color: #888;
+            margin: 8px 0 0 2px;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!--
+            The harness control lives **inside the title**, which is the pattern
+            `issues.html`, `flaky.html` and `errors.html` all use through
+            `initHarnessSwitcher` in `common-ui.js` — it replaces the `<h1>` with
+            a `.harness-switcher` select plus a fixed suffix, and the styling
+            comes from `shared.css` so there is nothing page-local here.
+
+            This page builds the same markup itself rather than calling that
+            helper, for three reasons the helper cannot accommodate: it offers
+            only xpcshell and mochitest, where this page's classification has
+            four states including `all` (the default) and `unknown`; it stores
+            the selection in the `?kind=` query and **reloads the page**, where
+            this selection is a pure in-memory re-filter that must cost no
+            request; and it writes `?kind=` where this page's state is in the
+            hash beside `date` and `tree`. So the class and the shape are
+            borrowed and the behaviour is this page's own.
+
+            The option is empty in the markup and filled by
+            `initHarnessControl`, because `HARNESS_OPTIONS` is the one list of
+            what the control offers and a second copy here would drift.
+        -->
+        <h1><select id="harness-select" class="harness-switcher"></select> <span id="title-suffix"></span></h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="window-select">Window:</label>
+                <!-- 30 is not a whole number of weeks, unlike the other three,
+                     so selecting it shows the `windowNote` caveat under the
+                     controls. It is offered anyway because it is the month-ish
+                     window a reader asks for out of habit, and refusing a
+                     window the URL can request anyway would be a control that
+                     is narrower than the page. -->
+                <select id="window-select">
+                    <option value="7days">Last 7 days</option>
+                    <option value="14days">Last 14 days</option>
+                    <option value="21days">Last 21 days</option>
+                    <option value="30days">Last 30 days</option>
+                </select>
+            </div>
+            <span id="status-text" class="status-text">Loading annotations...</span>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <!--
+            A `.subtitle` paragraph was here. It was cut to one sentence last
+            round and removed entirely this one, on the page owner's verdict:
+            "'A row is a sheriff's judgement, not a computed rate: …' = blah
+            blah. Either say something useful, or don't say anything."
+
+            What it was guarding against — a reader assuming these counts are
+            comparable with `issues.html`'s computed rates — is now carried where
+            a reader meets the numbers rather than above them: the annotations
+            figure's tooltip says what the window holds and what it excludes.
+        -->
+
+        <div id="window-note" style="display: none;"></div>
+
+        <!--
+            There was a 200px bar chart of annotations per day here. It was
+            removed after measuring the interaction that was supposed to make it
+            useful — desaturating all but the hovered row's share — against live
+            trunk: on 44 of the 50 drawn rows the highlighted share is under 3px
+            on more than two-thirds of the bars, and the median row's highlight
+            averages about 1px. `VolumeSeries` in `site/intermittent-view.ts`
+            carries the table of measurements.
+
+            What the chart was really carrying is the window's total and the fact
+            that the no-bug group is in it and not in the table. Both are facts
+            that do not vary across the window, so they are a sentence now.
+        -->
+
+        <!--
+            An `<h2 id="ranking-title">` was here, reading "Sheriff-annotated
+            mochitest intermittents on trunk, 2026-08-23 to 2026-09-12".
+            Removed on the page owner's question: "what's the point of this
+            section title when there's only one section in the entire page?"
+
+            The `<h1>` above names the harness and the page; the tree and the
+            date range moved into the line beside the window dropdown, which is
+            beside the control that sets them. See `windowScopeLine`.
+        -->
+        <div id="coverage"></div>
+
+        <div id="ranking-table"></div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script type="module" src="./intermittent-main.ts"></script>
+</body>
+</html>

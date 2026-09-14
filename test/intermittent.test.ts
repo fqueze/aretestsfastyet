@@ -41,11 +41,18 @@ import { DEFAULT_DAYS, resolveRange } from '../cli/commands/intermittent.ts';
 import { run } from '../cli/main.ts';
 import {
     type BugFailureCount,
+    type BugFailureDay,
+    type BugInfo,
     type BugOccurrence,
     type IntermittentsClient,
+    BUG_BATCH_SIZE,
+    BUG_REQUEST_CONCURRENCY,
     IntermittentsError,
+    UNASSIGNED_BUGZILLA_USER,
     UNKNOWN_TASK_ID,
+    inPool,
     intermittentsClient,
+    isResolvedBug,
     summaryRemainder,
     testPathCandidates,
     testPathOfLine,
@@ -71,6 +78,24 @@ interface Fixture {
     endday: string;
     failures: { bug_id: number | null; bug_count: number }[];
     summaries: Record<string, string>;
+    /**
+     * Each bug's recorded Bugzilla `status` and `resolution`.
+     *
+     * Kept apart from `summaries` by the generator, because the recorded
+     * summary and the recorded state were recorded at different times: bug
+     * 1946935's triage prefix moved upstream after the summaries were, and the
+     * summary the classification tests are written against is the recorded one.
+     */
+    bugStates: Record<string, { status: string; resolution: string }>;
+    /**
+     * Assignee names by bug, for the bugs a test needs one for.
+     *
+     * Optional and sparse: the recorded fixture predates the field, and a bug
+     * with no entry reads as unassigned — which is the same answer
+     * `assigneeName` gives for Bugzilla's `nobody@mozilla.org` sentinel, so an
+     * absent entry is a faithful fixture rather than a gap.
+     */
+    bugAssignees?: Record<string, string | null>;
     knownTestPaths: { mochitest: string[]; xpcshell: string[] };
     failuresbybug: Record<
         string,
@@ -93,6 +118,33 @@ interface Fixture {
 }
 
 const fixture: Fixture = JSON.parse(await readFile(FIXTURE, 'utf8')) as Fixture;
+
+/**
+ * The recorded `BugInfo` for a bug, or `undefined` if the fixture has none.
+ *
+ * One place where the fixture's two maps are joined into the shape
+ * `bugSummaries` returns, so a test asserting on a resolution is asserting on
+ * Bugzilla's recorded answer. `bugStates` is missing only for a bug the fixture
+ * has no summary for either, and then the bug is absent from the map entirely —
+ * which is the same thing the real client does for a bug Bugzilla did not
+ * return.
+ */
+function bugInfoOf(bug: number): BugInfo | undefined {
+    const summary = fixture.summaries[String(bug)];
+    if (summary === undefined) {
+        return undefined;
+    }
+    const state = fixture.bugStates[String(bug)];
+    return {
+        summary,
+        status: state?.status ?? '',
+        resolution: state?.resolution ?? '',
+        // The fixtures predate the assignee field and record no assignee, which
+        // reads as unassigned — the same answer `assigneeName` gives for the
+        // `nobody@mozilla.org` sentinel.
+        assignee: fixture.bugAssignees?.[String(bug)] ?? null,
+    };
+}
 
 /** The fixture served through a client, counting the requests it answers. */
 function fixtureClient(): IntermittentsClient & { calls: string[] } {
@@ -120,6 +172,19 @@ function fixtureClient(): IntermittentsClient & { calls: string[] } {
                 lines: row.lines,
             }));
         },
+        async failureCountOfBug(tree, range, bug): Promise<BugFailureDay[]> {
+            calls.push(`failurecount:${bug}:${tree}:${range.start}:${range.end}`);
+            // Derived from the same recorded occurrences the per-day rankings
+            // are, so the two routes agree in the fixture as they do live.
+            const perDay = new Map<string, number>();
+            for (const row of fixture.failuresbybug[String(bug)] ?? []) {
+                const day = row.push_time.slice(0, 10);
+                perDay.set(day, (perDay.get(day) ?? 0) + 1);
+            }
+            return [...perDay.entries()]
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([date, failureCount]) => ({ date, testRuns: 0, failureCount }));
+        },
         async runIdsOfJobs(jobIds): Promise<Map<number, number>> {
             calls.push(`runids:${jobIds.length}`);
             // The **recorded** run indexes, so what a test asserts about
@@ -131,15 +196,16 @@ function fixtureClient(): IntermittentsClient & { calls: string[] } {
                 })
             );
         },
-        async bugSummaries(bugs): Promise<Map<number, string>> {
+        async bugSummaries(bugs): Promise<Map<number, BugInfo>> {
             calls.push(`bugzilla:${[...bugs].join(',')}`);
-            // The **recorded** summaries: classification reads them, so a
+            // The **recorded** summaries and resolutions: classification reads
+            // the first and the strike-through reads the second, so a
             // synthesised one would make every test here about a string this
             // file invented rather than about what Bugzilla says.
             return new Map(
                 bugs.flatMap((bug) => {
-                    const summary = fixture.summaries[String(bug)];
-                    return summary === undefined ? [] : [[bug, summary] as [number, string]];
+                    const info = bugInfoOf(bug);
+                    return info === undefined ? [] : [[bug, info] as [number, BugInfo]];
                 })
             );
         },
@@ -641,7 +707,11 @@ test('a line with no path field yields no path rather than a fragment', () => {
 
 const RANKING = () => fixture.failures.map((row) => ({ bugId: row.bug_id, count: row.bug_count }));
 const SUMMARIES = () =>
-    new Map(Object.entries(fixture.summaries).map(([bug, text]) => [Number(bug), text]));
+    new Map(
+        Object.keys(fixture.summaries).map(
+            (bug) => [Number(bug), bugInfoOf(Number(bug))!] as [number, BugInfo]
+        )
+    );
 
 test('the no-bug group is counted and never classified', () => {
     // `/failures/` returns `{"bug_id": null, "bug_count": N}` for annotations a
@@ -1684,9 +1754,7 @@ test('bugsNamingTest selects on the exact path, and lives in lib', () => {
     // module for another command to import across.
     const scan = scanBugs({
         ranking: fixture.failures.map((row) => ({ bugId: row.bug_id, count: row.bug_count })),
-        summaries: new Map(
-            Object.entries(fixture.summaries).map(([bug, summary]) => [Number(bug), summary])
-        ),
+        summaries: SUMMARIES(),
         harnessOfPath: fixtureHarnessOfPath,
     });
     const path = 'toolkit/profile/test/xpcshell/test_check_backup.js';
@@ -1739,7 +1807,14 @@ test('--test lists every bug naming the test rather than choosing one', async ()
         async bugSummaries(bugs) {
             const found = await inner.bugSummaries(bugs);
             if (bugs.includes(9999999)) {
-                found.set(9999999, `Intermittent ${path} | a second failure of the same test`);
+                found.set(9999999, {
+                    summary: `Intermittent ${path} | a second failure of the same test`,
+                    // Open, so this synthetic second bug is not struck through
+                    // and the test stays about `--test` matching two bugs.
+                    status: 'NEW',
+                    resolution: '',
+                    assignee: null,
+                });
             }
             return found;
         },
@@ -2138,7 +2213,16 @@ test('the client builds the documented query strings and decodes the documented 
         async fetch(url: string) {
             requested.push(url);
             const body = url.includes('/rest/bug')
-                ? JSON.stringify({ bugs: [{ id: 7, summary: 'a summary' }] })
+                ? JSON.stringify({
+                      bugs: [
+                          {
+                              id: 7,
+                              summary: 'a summary',
+                              status: 'RESOLVED',
+                              resolution: 'WONTFIX',
+                          },
+                      ],
+                  })
                 : url.includes('failuresbybug')
                   ? JSON.stringify(fixture.failuresbybug['1980036'])
                   : JSON.stringify(fixture.failures);
@@ -2173,8 +2257,150 @@ test('the client builds the documented query strings and decodes the documented 
     assert.deepEqual(occurrences[0]!.lines, first.lines);
 
     const summaries = await client.bugSummaries([7]);
-    assert.equal(requested[2], 'https://bz.test/rest/bug?id=7&include_fields=id,summary');
-    assert.equal(summaries.get(7), 'a summary');
+    // `status`, `resolution` and the assignee are requested alongside the
+    // summary: they cost no extra request, and the ranked views need them to
+    // say which bugs are already closed and who owns them.
+    assert.equal(
+        requested[2],
+        'https://bz.test/rest/bug?id=7&include_fields=id,summary,status,resolution,' +
+            'assigned_to,assigned_to_detail'
+    );
+    assert.deepEqual(summaries.get(7), {
+        summary: 'a summary',
+        status: 'RESOLVED',
+        resolution: 'WONTFIX',
+        // The fake's bug carries no assignee fields, which reads as unassigned.
+        assignee: null,
+    });
+    // `WONTFIX` counts as resolved, not only `FIXED`: the bug is closed and
+    // nobody is working on it, which is what the reader needs to know.
+    assert.equal(isResolvedBug(summaries.get(7)), true);
+});
+
+test('a bug Bugzilla returns without status or resolution reads as open', async () => {
+    // The safe direction, and the one `bugSummaries` documents: a Bugzilla that
+    // stops returning a field must not make every live bug render as fixed.
+    const client = intermittentsClient({
+        bugzillaRoot: 'https://bz.test',
+        async fetch(url: string) {
+            const body = JSON.stringify({ bugs: [{ id: 7, summary: 'a summary' }] });
+            return {
+                ok: true,
+                status: 200,
+                url,
+                arrayBuffer: async () => new TextEncoder().encode(body).buffer as ArrayBuffer,
+            };
+        },
+    });
+    const summaries = await client.bugSummaries([7]);
+    assert.deepEqual(summaries.get(7), {
+        summary: 'a summary',
+        status: '',
+        resolution: '',
+        assignee: null,
+    });
+    assert.equal(isResolvedBug(summaries.get(7)), false);
+    // And a bug that was never asked about is not resolved either, rather than
+    // throwing on the `undefined`.
+    assert.equal(isResolvedBug(summaries.get(8)), false);
+});
+
+test('the unassigned sentinel is not rendered as a name', async () => {
+    // Bugzilla has no empty assignee: an unowned bug is assigned to
+    // `nobody@mozilla.org`, whose `real_name` is the sentence "Nobody; OK to
+    // take it and work on it". Verified against live Bugzilla on 2026-09-12
+    // (bug 2060167). That string is not a name and must never reach a cell, so
+    // it maps to `null` here rather than every caller learning to spot it.
+    const client = intermittentsClient({
+        bugzillaRoot: 'https://bz.test',
+        async fetch(url: string) {
+            const body = JSON.stringify({
+                bugs: [
+                    {
+                        id: 1,
+                        summary: 'unowned',
+                        assigned_to: UNASSIGNED_BUGZILLA_USER,
+                        assigned_to_detail: { real_name: 'Nobody; OK to take it and work on it' },
+                    },
+                    {
+                        id: 2,
+                        summary: 'owned',
+                        assigned_to: 'someone@mozilla.com',
+                        assigned_to_detail: { real_name: 'Some One [:someone]' },
+                    },
+                    // An account that never set a real name. The email is
+                    // deliberately not the fallback — a page showing who owns a
+                    // bug does not need to publish an address.
+                    {
+                        id: 3,
+                        summary: 'nameless',
+                        assigned_to: 'quiet@mozilla.com',
+                        assigned_to_detail: { real_name: '' },
+                    },
+                ],
+            });
+            return {
+                ok: true,
+                status: 200,
+                url,
+                arrayBuffer: async () => new TextEncoder().encode(body).buffer as ArrayBuffer,
+            };
+        },
+    });
+    const summaries = await client.bugSummaries([1, 2, 3]);
+    assert.equal(summaries.get(1)?.assignee, null, 'the sentinel is unassigned');
+    assert.equal(summaries.get(2)?.assignee, 'Some One [:someone]', 'a real name is the name');
+    assert.equal(summaries.get(3)?.assignee, null, 'an empty real name is not an email');
+});
+
+test('an open bug and a reopened one are both unresolved, from the recorded fixture', () => {
+    // Bugzilla clears `resolution` when a bug is reopened, so `REOPENED` has an
+    // empty resolution and must not be struck through. Recorded rather than
+    // asserted about a synthesised value: bugs 1731869 and 1809667 are
+    // `REOPENED` in the fixture, 1980036 is `NEW`, and 2021221 is
+    // `RESOLVED`/`FIXED`.
+    assert.equal(fixture.bugStates['1731869']?.status, 'REOPENED');
+    assert.equal(isResolvedBug(bugInfoOf(1731869)), false);
+    assert.equal(isResolvedBug(bugInfoOf(1980036)), false);
+    assert.equal(fixture.bugStates['2021221']?.resolution, 'FIXED');
+    assert.equal(isResolvedBug(bugInfoOf(2021221)), true);
+});
+
+test('scanBugs carries each bug’s resolution and status onto its row', () => {
+    // The row is what every renderer reads, so the fields have to survive the
+    // classification rather than being re-fetched per row.
+    const scan = scanBugs({
+        ranking: RANKING(),
+        summaries: SUMMARIES(),
+        harnessOfPath: fixtureHarnessOfPath,
+    });
+    const byId = new Map(scan.rows.map((row) => [row.bugId, row]));
+    assert.equal(byId.get(2021221)?.resolution, 'FIXED');
+    assert.equal(byId.get(2021221)?.status, 'RESOLVED');
+    assert.equal(byId.get(1980036)?.resolution, '');
+    assert.equal(byId.get(1980036)?.status, 'NEW');
+    // Every row carries both fields, and the resolved ones are a real subset
+    // rather than all or none of the fixture — a fixture where every bug were
+    // open would pass a renderer that never struck anything through.
+    const resolved = scan.rows.filter((row) => row.resolution !== '');
+    assert.ok(resolved.length > 0, 'the fixture should hold some resolved bugs');
+    assert.ok(resolved.length < scan.rows.length, 'and some open ones');
+});
+
+test('a bug Bugzilla returned nothing for is not struck through', () => {
+    // `bugSummary === null` is the marker for "Bugzilla did not answer"; the
+    // resolution reads as empty, so the row renders as open rather than as
+    // fixed. Asserted because the opposite default would strike through every
+    // restricted bug.
+    const scan = scanBugs({
+        ranking: [{ bugId: 4242424, count: 9 }],
+        summaries: new Map(),
+        harnessOfPath: fixtureHarnessOfPath,
+    });
+    const row = scan.rows[0]!;
+    assert.equal(row.bugSummary, null);
+    assert.equal(row.resolution, '');
+    assert.equal(row.status, '');
 });
 
 test('a non-200 becomes an IntermittentsError carrying the status and the URL', async () => {
@@ -2266,7 +2492,14 @@ test('a cached bug-summary batch survives the round trip through JSON', async ()
         const warm = await cached.bugSummaries([1980036, 2062444]);
         assert.equal(inner.calls.length, 1);
         assert.deepEqual([...warm], [...cold]);
-        assert.equal(warm.get(1980036), fixture.summaries['1980036']);
+        assert.equal(warm.get(1980036)?.summary, fixture.summaries['1980036']);
+        // The resolution has to survive the round trip too, not only the
+        // summary: a cached entry that dropped it would make every row read as
+        // open on the second run, which is the same class of bug as the `{}`
+        // this test was written for.
+        assert.equal(warm.get(2062444)?.resolution, fixture.bugStates['2062444']?.resolution);
+        assert.equal(warm.get(2062444)?.status, fixture.bugStates['2062444']?.status);
+        assert.equal(isResolvedBug(warm.get(2062444)), true);
     });
 });
 
@@ -2365,4 +2598,122 @@ test('bug summaries are requested in one batch, not one request per bug', async 
     await client.bugSummaries([1, 2, 3, 4, 5]);
     assert.equal(requested.length, 1);
     assert.match(requested[0]!, /id=1,2,3,4,5/);
+});
+
+test('the batch size stays under the URL length that Bugzilla answers with 414', () => {
+    // The bound is URL length, not the id count, and it was measured rather
+    // than assumed: 1,000 seven-digit ids (8,084 characters) returned 200 and
+    // 1,100 (8,884) returned 414 on 2026-09-12. This asserts the constant keeps
+    // real headroom under that, so raising it without re-measuring fails here
+    // rather than in a browser.
+    const url =
+        'https://bugzilla.mozilla.org/rest/bug?id=' +
+        Array.from({ length: BUG_BATCH_SIZE }, () => '1900000').join(',') +
+        '&include_fields=id,summary,status,resolution';
+    assert.ok(
+        url.length < 8_084,
+        `a full batch builds a ${url.length}-character URL, and 8,084 was the longest ` +
+            `measured to return 200`
+    );
+    // And it is a real improvement on the 100 this started at, which is the
+    // point of the change: fewer requests for the same answer.
+    assert.ok(BUG_BATCH_SIZE >= 500, `BUG_BATCH_SIZE is ${BUG_BATCH_SIZE}`);
+});
+
+test('batches are requested concurrently, not one after another', async () => {
+    // The defect this pins: `bugSummaries` awaited inside its loop, so a window
+    // with several batches paid the round trip once per batch in series. The
+    // check is that a second request starts before the first has answered —
+    // which a serial implementation cannot do, whatever its timings.
+    let inFlight = 0;
+    let peak = 0;
+    const release: (() => void)[] = [];
+    const client = intermittentsClient({
+        bugzillaRoot: 'https://bz.test',
+        async fetch(url: string) {
+            inFlight++;
+            peak = Math.max(peak, inFlight);
+            // Held open until every batch has been entered, so "concurrent" is
+            // observed rather than inferred from elapsed time.
+            await new Promise<void>((resolve) => release.push(resolve));
+            inFlight--;
+            return {
+                ok: true,
+                status: 200,
+                url,
+                arrayBuffer: async () =>
+                    new TextEncoder().encode(JSON.stringify({ bugs: [] })).buffer as ArrayBuffer,
+            };
+        },
+    });
+    // Three full batches.
+    const bugs = Array.from({ length: BUG_BATCH_SIZE * 3 }, (_, i) => i + 1);
+    const pending = client.bugSummaries(bugs);
+    // Let the workers reach their `fetch` before releasing any of them.
+    for (let i = 0; i < 10 && release.length < 3; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(peak, 3, `only ${peak} request(s) were in flight at once`);
+    while (release.length > 0) {
+        release.pop()!();
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    await pending;
+});
+
+test('concurrency is capped, so a huge window is not a burst', async () => {
+    // The good-citizen bound. Without it, a 90-day window would fire one
+    // request per batch at somebody else's public API from every open tab.
+    let inFlight = 0;
+    let peak = 0;
+    const client = intermittentsClient({
+        bugzillaRoot: 'https://bz.test',
+        async fetch(url: string) {
+            inFlight++;
+            peak = Math.max(peak, inFlight);
+            await new Promise((resolve) => setImmediate(resolve));
+            inFlight--;
+            return {
+                ok: true,
+                status: 200,
+                url,
+                arrayBuffer: async () =>
+                    new TextEncoder().encode(JSON.stringify({ bugs: [] })).buffer as ArrayBuffer,
+            };
+        },
+    });
+    const batches = BUG_REQUEST_CONCURRENCY + 4;
+    await client.bugSummaries(Array.from({ length: BUG_BATCH_SIZE * batches }, (_, i) => i + 1));
+    assert.ok(
+        peak <= BUG_REQUEST_CONCURRENCY,
+        `${peak} requests were in flight, above the cap of ${BUG_REQUEST_CONCURRENCY}`
+    );
+});
+
+test('inPool keeps results aligned with their inputs and propagates the first rejection', async () => {
+    // Index alignment is the property callers rely on, and completion order is
+    // deliberately not it: this returns results in input order even when the
+    // work finishes backwards.
+    const order = await inPool([3, 1, 2], 3, async (n) => {
+        for (let i = 0; i < n * 3; i++) {
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        return n * 10;
+    });
+    assert.deepEqual(order, [30, 10, 20]);
+
+    // A pool smaller than the work still covers all of it.
+    assert.deepEqual(await inPool([1, 2, 3, 4, 5], 2, async (n) => n), [1, 2, 3, 4, 5]);
+    // And an empty input needs no worker at all.
+    assert.deepEqual(await inPool([], 4, async (n) => n), []);
+
+    await assert.rejects(
+        () => inPool([1, 2, 3], 2, async (n) => {
+            if (n === 2) {
+                throw new Error('batch 2 failed');
+            }
+            return n;
+        }),
+        /batch 2 failed/
+    );
 });

@@ -40,6 +40,7 @@ import assert from 'node:assert/strict';
 
 import { type DataFileName, type DataSource, DataFetchError, DataFileNotFoundError } from '../lib/sources/source.ts';
 import type { TreeherderClient, TreeherderJob } from '../lib/sources/treeherder.ts';
+import type { BugInfo } from '../lib/sources/intermittents.ts';
 import type { LandingJob, LandoClient } from '../lib/sources/lando.ts';
 import { CANDIDATE_LIMIT } from '../lib/query/test-lookup.ts';
 import { ExitCode } from '../cli/errors.ts';
@@ -147,6 +148,7 @@ function silentIntermittents(): NonNullable<Parameters<typeof run>[0]['intermitt
     return {
         rankBugs: refuse('rankBugs'),
         occurrencesOfBug: refuse('occurrencesOfBug'),
+        failureCountOfBug: refuse('failureCountOfBug'),
         runIdsOfJobs: refuse('runIdsOfJobs'),
         bugSummaries: refuse('bugSummaries'),
     };
@@ -1920,6 +1922,21 @@ test('a test with no failures at all is neither flat nor not flat', async () => 
     assert.doesNotMatch(text, /Daily counts are not flat/);
 });
 
+/**
+ * A `bugSummaries` map from bug number to summary, as open bugs.
+ *
+ * `bugSummaries` returns a `BugInfo` — summary, status and resolution — and
+ * every fake in this file is exercising a path that reads only the summary. So
+ * the state is filled in once here as `NEW`/open rather than spelled out at
+ * each site: an open bug is the case these tests are about, and a fake that
+ * returned a resolved one would change what `fx-tests test --bugs` renders.
+ */
+function openBugs(entries: readonly [number, string][]): Map<number, BugInfo> {
+    return new Map(
+        entries.map(([bug, summary]) => [bug, { summary, status: 'NEW', resolution: '', assignee: null }])
+    );
+}
+
 /** A ranking in which two of three bugs name `TEST_PATH`. */
 function bugNamingClient(): NonNullable<Parameters<typeof run>[0]['intermittents']> {
     return {
@@ -1930,10 +1947,11 @@ function bugNamingClient(): NonNullable<Parameters<typeof run>[0]['intermittents
                 { bugId: 1, count: 999 },
             ]),
         occurrencesOfBug: () => Promise.resolve([]),
+            failureCountOfBug: () => Promise.resolve([]),
         runIdsOfJobs: () => Promise.resolve(new Map()),
         bugSummaries: () =>
             Promise.resolve(
-                new Map([
+                openBugs([
                     [2063582, `Intermittent ${TEST_PATH} | single tracking bug`],
                     [2059110, `Intermittent ${TEST_PATH} | application terminated`],
                     [1, 'Intermittent some/other/test.js | unrelated'],
@@ -2024,9 +2042,9 @@ test('a long bug summary is truncated, not wrapped', async () => {
     const client = () => ({
         rankBugs: () => Promise.resolve([{ bugId: 42, count: 7 }]),
         occurrencesOfBug: () => Promise.resolve([]),
+            failureCountOfBug: () => Promise.resolve([]),
         runIdsOfJobs: () => Promise.resolve(new Map<number, number>()),
-        bugSummaries: () =>
-            Promise.resolve(new Map([[42, `Intermittent ${TEST_PATH} | ${long}`]])),
+        bugSummaries: () => Promise.resolve(openBugs([[42, `Intermittent ${TEST_PATH} | ${long}`]])),
     });
     const summaryOf = (stdout: string): string | undefined =>
         stdout.split('\n').find((line) => line.includes('xxx'));
@@ -2059,9 +2077,10 @@ test('no block is printed when no annotated bug names the test', async () => {
         intermittents: {
             rankBugs: () => Promise.resolve([{ bugId: 1, count: 999 }]),
             occurrencesOfBug: () => Promise.resolve([]),
+            failureCountOfBug: () => Promise.resolve([]),
             runIdsOfJobs: () => Promise.resolve(new Map()),
             bugSummaries: () =>
-                Promise.resolve(new Map([[1, 'Intermittent some/other/test.js | unrelated']])),
+                Promise.resolve(openBugs([[1, 'Intermittent some/other/test.js | unrelated']])),
         },
     });
     assert.doesNotMatch(stdout, /Bugs naming this test/);
@@ -2074,6 +2093,7 @@ test('a Treeherder outage costs the bug block, not the whole answer', async () =
         intermittents: {
             rankBugs: () => Promise.reject(new Error('treeherder is down')),
             occurrencesOfBug: () => Promise.resolve([]),
+            failureCountOfBug: () => Promise.resolve([]),
             runIdsOfJobs: () => Promise.resolve(new Map()),
             bugSummaries: () => Promise.resolve(new Map()),
         },

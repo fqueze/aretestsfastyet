@@ -464,3 +464,71 @@ export function assertSameOrder(
     }
     assert.equal(actual.length, expected.length, `${context}: different lengths`);
 }
+
+/**
+ * A recorded window ranking split across that window's days, tiling it exactly.
+ *
+ * ## Why a fake needs this
+ *
+ * `intermittent.html` derives its window ranking by summing its per-day
+ * `/api/failures/` responses — `rankingFromDays` in `site/intermittent-view.ts`
+ * carries the measurement against live Treeherder that says the two are equal.
+ * So a fixture client whose per-day answers do **not** sum to its window
+ * ranking is a fake the real API contradicts, and a page under it would be
+ * tested against a relationship Treeherder does not have.
+ *
+ * The page-side fakes used to build a day from the fixture's recorded
+ * `failuresbybug` occurrences. Those are truncated by the recorder (`PER_BUG`
+ * is 8) and span only 4 of the fixture's 7 days, so they summed to 108 where
+ * the recorded ranking sums to 4,829 — fine while the ranking came from its own
+ * request, and wrong the moment the ranking became the days' sum.
+ *
+ * ## What this does instead
+ *
+ * Each entry's recorded `count` is spread over a **contiguous run** of the
+ * window's days, chosen from the bug number so the run's length and offset
+ * vary between bugs, with the remainder on the run's first days. That gives:
+ *
+ * - **the days sum to the window exactly**, per bug and overall, which is the
+ *   property measured against live Treeherder and the only one asserted;
+ * - **zero days at both ends of some rows** — leading zeros before a bug's
+ *   first annotation, trailing zeros after its last — which is what the three
+ *   sparkline zero-classification tests need to be non-vacuous. A split that
+ *   touched every day for every bug would make every row zero-free and pass
+ *   those tests without exercising them;
+ * - **series that are not flat**, so a sparkline plotting a constant fails;
+ * - **determinism**, so a per-day cache assertion sees the same numbers on a
+ *   refetch, and a failure is reproducible.
+ *
+ * It is not a claim about how annotations really distribute over a week; it is
+ * a shape that exercises the code paths a real week's data would.
+ */
+export function rankingByDay(
+    ranking: readonly { bugId: number | null; count: number }[],
+    dates: readonly string[]
+): Map<string, { bugId: number | null; count: number }[]> {
+    const byDay = new Map<string, { bugId: number | null; count: number }[]>(
+        dates.map((date) => [date, []])
+    );
+    for (const entry of ranking) {
+        // The no-bug group spans the whole window; a bug gets a run derived
+        // from its number. `% 3` and `% 2` keep a short window from collapsing
+        // every run to its full length.
+        const id = entry.bugId ?? 0;
+        const span =
+            entry.bugId === null ? dates.length : Math.max(1, dates.length - (id % 3) - 1);
+        const from = entry.bugId === null ? 0 : Math.min(id % 2, dates.length - span);
+        const base = Math.floor(entry.count / span);
+        const extra = entry.count % span;
+        for (let offset = 0; offset < span; offset++) {
+            const count = base + (offset < extra ? 1 : 0);
+            if (count > 0) {
+                byDay.get(dates[from + offset]!)!.push({ bugId: entry.bugId, count });
+            }
+        }
+    }
+    for (const rows of byDay.values()) {
+        rows.sort((a, b) => b.count - a.count);
+    }
+    return byDay;
+}

@@ -548,7 +548,13 @@ async function runDrilldown(
         );
     }
     const summaries = await withUpstreamErrors(() => client.bugSummaries([bug]), tree);
-    const bugSummary = summaries.get(bug) ?? null;
+    // The summary only. `bugSummaries` now also returns the bug's Bugzilla
+    // status and resolution, which the *ranked list* renders (a resolved bug is
+    // struck through on `intermittent.html` and marked in the table here), but
+    // this drill-down's output is unchanged: `bugSummary` is one string in the
+    // `--json` contract and in both renderers, and widening it would change
+    // output nobody asked to change.
+    const bugSummary = summaries.get(bug)?.summary ?? null;
     // Always in `--json`, which is the escape hatch, and behind the flag in the
     // rendered views, where it is thirty lines nobody asked for.
     const profiles =
