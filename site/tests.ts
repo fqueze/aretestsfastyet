@@ -102,6 +102,8 @@ import {
     scopeLine,
     testContribution,
     timeline,
+    WINDOW_DAYS,
+    backfillPushdates,
     parseBackfillDays,
     urlStateOf,
     windowDates,
@@ -324,14 +326,6 @@ let currentList: Worklist | null = null;
  * wrong.
  */
 const windowsByHarness = new Map<Harness, StitchWindow[]>();
-/**
- * The days one published aggregate covers.
- *
- * Only used to decide whether the chart is showing more than a single window,
- * so a reader is told "41 days loaded" rather than being told the obvious. The
- * real day count always comes from the data.
- */
-const WINDOW_DAYS = 21;
 /** The pushdate of the oldest window fetched, or `null` before the first load. */
 let oldestPushdate: string | null = null;
 /** Guards the backfill against a second click while a fetch is in flight. */
@@ -783,9 +777,8 @@ function drawTimeline(series: Timeline | null): void {
     // so the tooltip goes on the plot that legend labels — replacing the title
     // row that used to sit above it.
     box.title =
-        'One test counts once on a day however many times it failed that day. Flaky means ' +
-        'it failed at least once; skipped means it did not fail and was disabled on at ' +
-        'least one configuration.';
+        'Counts tests, once a day each however often they failed. Flaky: failed at ' +
+        'least once. Skipped: disabled somewhere, and did not fail.';
 
     const Chart = chartJs();
     const canvas = byId<HTMLCanvasElement>('timeline-canvas');
@@ -864,9 +857,9 @@ function drawTimeline(series: Timeline | null): void {
                                 return '';
                             }
                             if (day.thin) {
-                                return 'the tree barely ran this day';
+                                return 'the tree barely ran';
                             }
-                            return `${day.total} tests ran`;
+                            return `of ${day.total.toLocaleString()} tests run`;
                         },
                     },
                 },
@@ -988,10 +981,16 @@ function drawIssueChart(series: IssueTimeline | null): void {
     // `title` of its own; the tooltip goes on the plot that legend labels,
     // which is the smallest element a reader can hover to ask "what is this
     // counting".
+    // Says which way round the two charts count, because that is the one thing
+    // a reader can get wrong here. An earlier version had it backwards — it
+    // claimed the two scenarios looked alike *below* and different here, which
+    // is exactly inverted: this chart sums occurrences, so 400 failures is 400
+    // whether it was one test or four hundred, and the chart below counts each
+    // test once a day, so the same two days read 1 and 400.
     box.title =
-        'Occurrences, not tests — one test failing 400 times and 400 tests failing once ' +
-        'look alike on the chart below and nothing alike here. Hover a test in the list ' +
-        'to see how much of each day is that one test.';
+        'Counts every failure, so one test failing 400 times reads the same as 400 ' +
+        'tests failing once. The chart below tells those apart. Hover a row to see ' +
+        'that test’s share.';
     const Chart = chartJs();
     const canvas = byId<HTMLCanvasElement>('issue-chart-canvas');
     if (Chart === undefined) {
@@ -1120,7 +1119,13 @@ function drawIssueChart(series: IssueTimeline | null): void {
                                 // line — `issues.html`'s rule for the same chart.
                                 return null;
                             }
-                            return `${label}: ${value.toLocaleString()}`;
+                            // The unit, on the line itself: `Failures: 400` is
+                            // the number a reader mistakes for a test count,
+                            // and the plot's own tooltip is not on screen while
+                            // a bar is hovered.
+                            return `${label}: ${value.toLocaleString()} ${
+                                value === 1 ? 'time' : 'times'
+                            }`;
                         },
                     },
                 },
@@ -1846,6 +1851,15 @@ async function loadWindow(): Promise<void> {
         }
         present = harnessesWithTests(loaded, folder);
         openTest = null;
+        if (pendingDays !== null && pendingDays > dates.length) {
+            // A link asked for a longer span, so this window is not what the
+            // reader is here to see. Drawing it first made the charts settle
+            // through 21 → 41 → 61 days, each step a full repaint of a chart
+            // nobody asked for. `restoreBackfill` renders once, with the whole
+            // span; the status line says what is happening meanwhile.
+            setStatusText(`Loading ${pendingDays} days…`);
+            return;
+        }
         render();
         setStatusText(windowStatus());
     } catch (error) {
@@ -1873,8 +1887,104 @@ function nextBackfillPushdate(oldest: string): string {
     return oldest;
 }
 
+
 /**
  * Fetches the previous window per harness and re-stitches the timeline.
+ *
+ * A failure is not an error banner: "nothing older" is an ordinary answer, so
+ * the button retires itself rather than complaining. Measured 2026-09-15: the
+ * oldest pushdate that answers is 2026-01-31 and 2026-01-30 is a 404 — the day
+ * this data started being produced, not an expiry, so the floor stays put.
+ */
+/**
+ * Fetches one harness's aggregate for a pushdate.
+ *
+ * `null` when nothing is published there, `'too-old'` when the file exists but
+ * predates the format this codebase decodes. The two are distinguished because
+ * they mean different things to the reader — one is the end of the record, the
+ * other a limit of this page.
+ */
+async function fetchBackfillWindow(
+    harness: Harness,
+    pushdate: string
+): Promise<StitchWindow | null | 'too-old'> {
+    if (exhaustedHarnesses.has(harness)) {
+        return 'too-old';
+    }
+    const response = await fetchData(`${harness}-issues.json`, pushdate);
+    if (!response.ok) {
+        return null;
+    }
+    const raw = (await response.json()) as unknown;
+    // Runs older than about 2026-02-16 key their per-day arrays `hours`
+    // instead of `days`, a shape no decoder here knows. Checked before
+    // decoding: the decoder only inspects a group when it iterates one, so
+    // such a file loads without complaint and then throws inside the render.
+    if (!isDecodableAggregate(raw)) {
+        return 'too-old';
+    }
+    const file = decodeIssues(raw as IssuesFile);
+    return { file, dates: windowDates(file) };
+}
+
+/**
+ * Files a fetched window under its harness, reporting whether it was new.
+ *
+ * A window already held is dropped rather than appended: re-stitching is
+ * idempotent, but a duplicate would be counted as a seam on every one of its
+ * days.
+ */
+function addWindow(harness: Harness, window: StitchWindow): boolean {
+    const windows = windowsByHarness.get(harness);
+    if (windows === undefined) {
+        return false;
+    }
+    if (windows.some((held) => held.dates[0] === window.dates[0])) {
+        return false;
+    }
+    windows.push(window);
+    return true;
+}
+
+/**
+ * Rebuilds every harness's timeline from the windows held, and the merged span.
+ *
+ * Always from the full list, never incrementally: joining an already-joined
+ * file to another window would have to reason about which of its days were
+ * seam-resolved, and re-stitching from scratch cannot get that wrong.
+ */
+function restitch(): void {
+    const missing = new Set<string>();
+    for (const entry of loaded) {
+        const windows = windowsByHarness.get(entry.harness);
+        if (windows === undefined || windows.length === 0) {
+            continue;
+        }
+        const stitched = stitchWindows(windows);
+        entry.file = stitched.file;
+        entry.dates = stitched.dates;
+        for (const date of stitched.missing) {
+            missing.add(date);
+        }
+        // The detailed file describes the newest window only, so a stitched
+        // timeline no longer matches it. Drop the flag so a reopened row
+        // re-fetches rather than resolving task indices against a file that
+        // covers a fraction of the days.
+        detailedLoaded.delete(entry.harness);
+    }
+    const merged = mergedWindow(loaded);
+    dates = merged.dates;
+    oldestPushdate = merged.dates[0] ?? oldestPushdate;
+    missingDates = [...missing].sort();
+}
+
+/**
+ * Fetches the previous window per harness and re-stitches the timeline.
+ *
+ * One step, because the button asks for one more window and cannot know
+ * whether another exists without seeing this one's result. `restoreBackfill`
+ * takes the parallel path instead: a shared link names its whole span up
+ * front, so the pushdates are known without fetching.
  *
  * A failure is not an error banner: "nothing older" is an ordinary answer, so
  * the button retires itself rather than complaining. Measured 2026-09-15: the
@@ -1890,93 +2000,43 @@ async function backfillOlderWindow(): Promise<void> {
     renderBackfillControl(`loading ${pushdate}…`);
 
     try {
+        const before = dates.length;
         const fetched = await Promise.all(
-            loaded.map(async ({ harness }) => {
-                if (exhaustedHarnesses.has(harness)) {
-                    return 'too-old';
-                }
-                const response = await fetchData(`${harness}-issues.json`, pushdate);
-                if (!response.ok) {
-                    return null;
-                }
-                const raw = (await response.json()) as unknown;
-                // Runs older than about 2026-02-16 key their per-day arrays
-                // `hours` instead of `days`, a shape no decoder here knows.
-                // Checked before decoding: the decoder only inspects a group
-                // when it iterates one, so such a file loads without
-                // complaint and then throws inside the chart render.
-                if (!isDecodableAggregate(raw)) {
-                    return 'too-old';
-                }
-                const file = decodeIssues(raw as IssuesFile);
-                return { harness, window: { file, dates: windowDates(file) } };
-            })
+            loaded.map(async ({ harness }) => ({
+                harness,
+                window: await fetchBackfillWindow(harness, pushdate),
+            }))
         );
-        const added = fetched.filter(
-            (entry): entry is Exclude<NonNullable<typeof entry>, 'too-old'> =>
-                entry !== null && entry !== 'too-old'
-        );
-        if (added.length === 0) {
+
+        let added = 0;
+        for (const { harness, window } of fetched) {
+            if (window === null) {
+                continue;
+            }
+            // A harness whose next window predates the format change will
+            // never yield another one, so stop fetching it. Without this,
+            // every later click re-downloads the same unusable file.
+            if (window === 'too-old') {
+                exhaustedHarnesses.add(harness);
+                continue;
+            }
+            if (addWindow(harness, window)) {
+                added++;
+            }
+        }
+        if (added === 0) {
             // Nothing usable at that pushdate: the start of the published
             // record, a day the job did not run, or — going back far enough —
             // the older published format. All three mean the history stops.
             backfillExhausted = true;
-            backfillLimit = fetched.includes('too-old') ? 'format' : 'start-of-data';
+            backfillLimit = fetched.some(({ window }) => window === 'too-old')
+                ? 'format'
+                : 'start-of-data';
             return;
         }
 
-        // A harness whose next window predates the format change will never
-        // yield another one, so stop fetching it. Without this, every later
-        // click re-downloads the same unusable file for it.
-        for (const [index, entry] of fetched.entries()) {
-            if (entry === 'too-old') {
-                const harness = loaded[index]?.harness;
-                if (harness !== undefined) {
-                    exhaustedHarnesses.add(harness);
-                }
-            }
-        }
-
-        for (const { harness, window } of added) {
-            const windows = windowsByHarness.get(harness);
-            if (windows === undefined) {
-                continue;
-            }
-            // Guard against a re-fetch of a window already held: re-stitching
-            // is idempotent, but a duplicate would be counted as a seam on
-            // every one of its days.
-            if (windows.some((held) => held.dates[0] === window.dates[0])) {
-                continue;
-            }
-            windows.push(window);
-        }
-
-        // Re-stitch every harness from its full list of windows.
-        const missing = new Set<string>();
-        for (const entry of loaded) {
-            const windows = windowsByHarness.get(entry.harness);
-            if (windows === undefined || windows.length === 0) {
-                continue;
-            }
-            const stitched = stitchWindows(windows);
-            entry.file = stitched.file;
-            entry.dates = stitched.dates;
-            for (const date of stitched.missing) {
-                missing.add(date);
-            }
-            // The detailed file describes the newest window only, so a
-            // stitched timeline no longer matches it. Drop the flag so a
-            // reopened row re-fetches rather than resolving task indices
-            // against a file that covers a fifth of the days.
-            detailedLoaded.delete(entry.harness);
-        }
-
-        const merged = mergedWindow(loaded);
-        const grew = merged.dates.length > dates.length;
-        dates = merged.dates;
-        oldestPushdate = merged.dates[0] ?? oldestPushdate;
-        missingDates = [...missing].sort();
-        if (!grew) {
+        restitch();
+        if (dates.length <= before) {
             // The window did not get longer, so asking again with the same
             // anchor would fetch the same thing. Stop rather than loop.
             backfillExhausted = true;
@@ -2204,16 +2264,84 @@ let pendingDays: number | null = null;
 async function restoreBackfill(): Promise<void> {
     const wanted = pendingDays;
     pendingDays = null;
-    if (wanted === null || dates.length === 0) {
+    const oldest = dates[0];
+    if (wanted === null || oldest === undefined || wanted <= dates.length) {
+        // Nothing to fetch. `loadWindow` skipped its render when a longer span
+        // was pending, so draw it here rather than leaving a blank page — this
+        // is the path a `#days=21` link or a too-short one takes.
+        if (wanted !== null && dates.length > 0) {
+            render();
+            setStatusText(windowStatus());
+        }
         return;
     }
-    while (dates.length < wanted && !backfillExhausted) {
-        const before = dates.length;
-        await backfillOlderWindow();
-        if (dates.length <= before) {
-            break;
+
+    // Every pushdate at once, rather than a window at a time. The sequence is
+    // arithmetic (see `backfillPushdates`), so nothing here depends on an
+    // earlier fetch — and fetching one at a time made the page *show* each
+    // intermediate span, so a `#days=61` link visibly settled through 21 then
+    // 41 then 61. A reader following a shared link should see the span it
+    // named, once.
+    backfilling = true;
+    renderBackfillControl('loading history…');
+    try {
+        const pushdates = backfillPushdates(oldest, dates.length, wanted);
+
+        const fetched = await Promise.all(
+            pushdates.flatMap((pushdate) =>
+                loaded.map(async ({ harness }) => ({
+                    harness,
+                    window: await fetchBackfillWindow(harness, pushdate),
+                }))
+            )
+        );
+
+        let added = 0;
+        let tooOld = false;
+        for (const { harness, window } of fetched) {
+            if (window === null) {
+                continue;
+            }
+            if (window === 'too-old') {
+                // Not `exhaustedHarnesses` here. These fetches are parallel, so
+                // a `too-old` may be the *deepest* pushdate asked for while
+                // nearer ones are fine — retiring the harness on it would also
+                // retire the windows that did arrive. `restitch` establishes
+                // the real span, and the limit below is read from that.
+                tooOld = true;
+                continue;
+            }
+            if (addWindow(harness, window)) {
+                added++;
+            }
         }
+        if (added > 0) {
+            restitch();
+        }
+        // Short of what the link asked for — possibly nothing at all arrived.
+        // Everything older than this either is not published or predates the
+        // decodable format, so the button has nothing left to offer either.
+        // Not a `return`: the render below is the only one this load gets.
+        if (dates.length < wanted) {
+            backfillExhausted = true;
+            backfillLimit = tooOld ? 'format' : 'start-of-data';
+        }
+    } catch (error) {
+        // `loadWindow` skipped its render because a longer span was pending,
+        // so swallowing this would leave the reader on a blank page. Draw what
+        // did arrive — which is at least the published window — and say so.
+        console.warn('Loading the shared history failed:', error);
+        backfillExhausted = true;
+    } finally {
+        backfilling = false;
     }
+    // One render, with the whole span in hand.
+    range = range === null ? null : clampRange(range, dates.length);
+    anchorDay = null;
+    present = harnessesWithTests(loaded, folder);
+    render();
+    setStatusText(windowStatus());
+    updateUrlHash();
 }
 
 /**

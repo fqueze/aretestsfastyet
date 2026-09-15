@@ -44,6 +44,8 @@ import {
     rangeLength,
     rangeOf,
     MAX_BACKFILL_DAYS,
+    WINDOW_DAYS,
+    backfillPushdates,
     parseBackfillDays,
     readUrlState,
     scopeLine,
@@ -663,6 +665,61 @@ test('#days= is bounded, so a hand-edited URL cannot fetch forever', () => {
     assert.equal(parseBackfillDays({ days: 'lots' }), null);
     assert.equal(parseBackfillDays({ days: '0' }), null);
     assert.equal(parseBackfillDays({ days: '-40' }), null);
+});
+
+test('the pushdates for a span are arithmetic, so they can be fetched at once', () => {
+    // The point of computing these up front: a shared `#days=` link knows its
+    // whole span, so every window can be fetched in parallel. Deriving each
+    // pushdate from the previous *fetch* is what made such a link visibly
+    // settle through 21 → 41 → 61 days.
+    //
+    // Consecutive runs overlap by one day, so the step is 20, not 21.
+    assert.deepEqual(backfillPushdates('2026-08-25', 21, 41), ['2026-08-25']);
+    assert.deepEqual(backfillPushdates('2026-08-25', 21, 61), [
+        '2026-08-25',
+        '2026-08-05',
+    ]);
+    assert.deepEqual(backfillPushdates('2026-08-25', 21, 101), [
+        '2026-08-25',
+        '2026-08-05',
+        '2026-07-16',
+        '2026-06-26',
+    ]);
+    // The first pushdate is the span's own oldest date, not the day before it:
+    // that puts the seam on a date the loaded window already holds, so the
+    // unreliable `endDate` day of the older run is never the joint. See
+    // `lib/formats/stitch.ts`.
+    assert.equal(backfillPushdates('2026-08-25', 21, 41)[0], '2026-08-25');
+
+    // A span already covered needs nothing.
+    assert.deepEqual(backfillPushdates('2026-08-25', 21, 21), []);
+    assert.deepEqual(backfillPushdates('2026-08-25', 41, 21), []);
+
+    // One day past a window boundary still costs a whole window, because that
+    // is the unit that gets published.
+    assert.equal(backfillPushdates('2026-08-25', 21, 42).length, 2);
+    assert.equal(backfillPushdates('2026-08-25', 21, 41).length, 1);
+});
+
+test('a pushdate walk lands exactly on the span it was asked for', () => {
+    // The arithmetic and the day count have to agree: each run adds
+    // `WINDOW_DAYS - 1` days, so n runs from a 21-day window span
+    // `21 + 20n`. Asserted rather than reasoned about, because an off-by-one
+    // here means either a gap in the chart or a wasted multi-megabyte fetch.
+    for (const [wanted, runs] of [
+        [41, 1],
+        [61, 2],
+        [101, 4],
+        [221, 10],
+    ] as const) {
+        const pushdates = backfillPushdates('2026-09-14', 21, wanted);
+        assert.equal(pushdates.length, runs, `${wanted} days needs ${runs} runs`);
+        assert.equal(
+            21 + runs * (WINDOW_DAYS - 1),
+            wanted,
+            `${runs} runs span exactly ${wanted} days`
+        );
+    }
 });
 
 test('the filter vocabulary maps to the library’s', () => {

@@ -1145,6 +1145,49 @@ export function parseBackfillDays(state: UrlState): number | null {
     return Math.min(days, MAX_BACKFILL_DAYS);
 }
 
+/**
+ * The days one published aggregate covers.
+ *
+ * Load-bearing in `backfillPushdates`: consecutive runs overlap by one day, so
+ * the step between pushdates is `WINDOW_DAYS - 1`. Getting it wrong by one
+ * leaves a gap or a redundant fetch at every seam.
+ */
+export const WINDOW_DAYS = 21;
+
+/** `date` shifted by `days`, as `YYYY-MM-DD`. */
+export function shiftDate(date: string, days: number): string {
+    const time = Date.parse(`${date}T00:00:00Z`);
+    if (Number.isNaN(time)) {
+        return date;
+    }
+    return new Date(time + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Every pushdate needed to reach `wanted` days, computed without fetching.
+ *
+ * Each published run's window ends on its pushdate and overlaps its newer
+ * neighbour by one day, so a run adds exactly `WINDOW_DAYS - 1` days and the
+ * pushdates are the current span's oldest date stepping back by that much at a
+ * time. Being pure arithmetic is the point: it is what lets a page fetch the
+ * whole set **in parallel** instead of discovering each pushdate from the
+ * previous fetch, which is what made a shared link visibly settle through 21
+ * then 41 then 61 days.
+ *
+ * The button's own path stays sequential, because it asks for one more window
+ * and has to see the result to know whether another exists. A shared link
+ * names its span up front, so it does not.
+ */
+export function backfillPushdates(oldest: string, have: number, wanted: number): string[] {
+    const step = WINDOW_DAYS - 1;
+    const steps = Math.ceil((wanted - have) / step);
+    const dates: string[] = [];
+    for (let index = 0; index < steps; index++) {
+        dates.push(shiftDate(oldest, -index * step));
+    }
+    return dates;
+}
+
 /** The ceiling on `#days=`. Past the whole published archive. */
 export const MAX_BACKFILL_DAYS = 400;
 
