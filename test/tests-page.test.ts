@@ -1195,3 +1195,89 @@ test('a filter state in the URL is applied on load, over the checkboxes', async 
         page.restore();
     }
 });
+
+// --- the shared filter shortcut ------------------------------------------
+
+test('f focuses the filter box, and typing is never interrupted', async () => {
+    // Wired in `site/drilldown-render.ts`'s `searchBox`, which every page with
+    // a filter box goes through — so this covers the family, not just this
+    // page.
+    const page = await freshPage('shortcut');
+    try {
+        const box = page.document.getElementById('search-box') as HTMLInputElement;
+        assert.notEqual(page.document.activeElement, box, 'not focused to begin with');
+
+        const press = (key: string, target: Element, modifiers: Record<string, boolean> = {}) => {
+            const event = new page.window.KeyboardEvent('keydown', {
+                key,
+                bubbles: true,
+                cancelable: true,
+                ...modifiers,
+            });
+            target.dispatchEvent(event);
+            return event;
+        };
+
+        const bare = press('f', page.document.body);
+        assert.equal(page.document.activeElement, box, 'f focuses the filter box');
+        assert.equal(bare.defaultPrevented, true, 'and the f does not land in it');
+
+        // Escape leaves, without clearing: the value is URL state on most of
+        // these pages, so clearing it would throw away what a reader arrived
+        // with.
+        box.value = 'socks';
+        press('Escape', box);
+        assert.notEqual(page.document.activeElement, box, 'Escape blurs');
+        assert.equal(box.value, 'socks', 'and keeps the filter');
+
+        // An `f` typed into any field is an `f`. This page has two text inputs,
+        // so "already typing" is the common case rather than an edge one.
+        const path = page.document.getElementById('folder-path-input')!;
+        const inField = press('f', path);
+        assert.equal(inField.defaultPrevented, false, 'not stolen from another input');
+
+        // And the browser keeps its own find-in-page.
+        const withCtrl = press('f', page.document.body, { ctrlKey: true });
+        assert.equal(withCtrl.defaultPrevented, false, 'Ctrl+F is the browser’s');
+        const withMeta = press('f', page.document.body, { metaKey: true });
+        assert.equal(withMeta.defaultPrevented, false, 'Cmd+F is the browser’s');
+    } finally {
+        page.restore();
+    }
+});
+
+test('f does nothing while the filter box is hidden', async () => {
+    // `try.html` keeps its filter hidden until a revision is loaded, and
+    // focusing an invisible field loses the reader's keystrokes with nothing
+    // to show why. Checked by walking `display` rather than reading
+    // `offsetParent`: jsdom does no layout, so `offsetParent` is always null
+    // there and this guard would be dead in every test while live in a
+    // browser.
+    const page = await freshPage('hiddenbox');
+    try {
+        const box = page.document.getElementById('search-box') as HTMLInputElement;
+        const controls = page.document.querySelector<HTMLElement>('.controls')!;
+        controls.style.display = 'none';
+
+        const event = new page.window.KeyboardEvent('keydown', {
+            key: 'f',
+            bubbles: true,
+            cancelable: true,
+        });
+        page.document.body.dispatchEvent(event);
+        assert.equal(event.defaultPrevented, false, 'the key is left alone');
+        assert.notEqual(page.document.activeElement, box, 'and nothing is focused');
+
+        // Shown again, it works.
+        controls.style.display = '';
+        const second = new page.window.KeyboardEvent('keydown', {
+            key: 'f',
+            bubbles: true,
+            cancelable: true,
+        });
+        page.document.body.dispatchEvent(second);
+        assert.equal(page.document.activeElement, box);
+    } finally {
+        page.restore();
+    }
+});
