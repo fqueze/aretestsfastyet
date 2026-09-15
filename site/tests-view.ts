@@ -68,6 +68,91 @@ export interface DayRange {
 }
 
 /**
+ * A range as the URL carries it: two **dates**, not two indices.
+ *
+ * Indices are meaningless without the span they were measured in, and this page
+ * has two ways for that span to change under a saved index. Both were bugs:
+ *
+ * - **Backfill prepends days.** Loading 20 more turned the reader's day 35 into
+ *   day 15, so the selection slid left across the chart even though they had
+ *   picked a fixed pair of dates.
+ * - **The window slides daily.** A link shared today meant one day earlier
+ *   tomorrow, so `#from=15&to=19` silently named different dates every day —
+ *   and after enough days, days that were no longer in the window at all.
+ *
+ * Dates are absolute, so neither can happen. The conversion to indices happens
+ * once, against the loaded span, in `rangeOfDates`.
+ */
+export interface DateRange {
+    from: string;
+    to: string;
+}
+
+/**
+ * The dates a range names, for the URL.
+ *
+ * `null` when the range cannot be named — an index outside the loaded span,
+ * which a caller should treat as "no range" rather than guess at.
+ */
+export function datesOfRange(
+    range: DayRange | null,
+    dates: readonly string[]
+): DateRange | null {
+    if (range === null) {
+        return null;
+    }
+    const from = dates[range.from];
+    const to = dates[range.to];
+    return from === undefined || to === undefined ? null : { from, to };
+}
+
+/**
+ * The indices a pair of dates names in the loaded span.
+ *
+ * Tolerant by design, because a URL outlives the window it was written
+ * against: a date older than the span clamps to its first day and a newer one
+ * to its last, so a link shared last week still selects the overlap rather than
+ * collapsing to nothing. `null` only when the range misses the span entirely,
+ * where there is no honest answer and the whole window is the better one.
+ *
+ * Dates need not be in the span's own list — a weekend the tree did not run is
+ * an ordinary thing for a reader to have dragged across — so the bounds are
+ * found by comparison rather than by lookup.
+ */
+export function rangeOfDates(
+    range: DateRange | null,
+    dates: readonly string[]
+): DayRange | null {
+    if (range === null || dates.length === 0) {
+        return null;
+    }
+    const first = dates[0]!;
+    const last = dates[dates.length - 1]!;
+    const from = range.from <= range.to ? range.from : range.to;
+    const to = range.from <= range.to ? range.to : range.from;
+    if (to < first || from > last) {
+        // Entirely before or after the loaded span: not an overlap to clamp to.
+        return null;
+    }
+    // The first day at or after `from`, and the last at or before `to`.
+    let fromDay = dates.findIndex((date) => date >= from);
+    let toDay = -1;
+    for (let day = dates.length - 1; day >= 0; day--) {
+        if (dates[day]! <= to) {
+            toDay = day;
+            break;
+        }
+    }
+    if (fromDay === -1) {
+        fromDay = 0;
+    }
+    if (toDay === -1) {
+        toDay = dates.length - 1;
+    }
+    return fromDay <= toDay ? { from: fromDay, to: toDay } : null;
+}
+
+/**
  * The range as `lib/query` wants it, or `undefined` for the whole window.
  *
  * `exactOptionalPropertyTypes` is on, so `{ dayRange: undefined }` and `{}` are
@@ -91,32 +176,6 @@ export function rangeOf(anchor: number, other: number): DayRange {
     return { from: Math.min(anchor, other), to: Math.max(anchor, other) };
 }
 
-/**
- * The range clamped to the days a file actually has, or `null` if it cannot be.
- *
- * A hash is user input and outlives the data it was written against: `#from=40`
- * on a 21-day file, or a URL shared last month, are both ordinary rather than
- * exceptional. Clamping matches `flakinessByFolder`'s treatment of `fromDay`
- * (`lib/query/flakiness.ts:735`, "clamped rather than refused") — asking for
- * days that are not there is a reasonable thing to type and the answer is the
- * days that exist.
- *
- * `null` when the range misses the file entirely, so the caller falls back to
- * the whole window instead of showing an empty list that looks like a clean
- * folder.
- */
-export function clampRange(range: DayRange, days: number): DayRange | null {
-    if (days <= 0) {
-        return null;
-    }
-    const last = days - 1;
-    const from = Math.max(0, Math.min(range.from, last));
-    const to = Math.max(0, Math.min(range.to, last));
-    if (range.to < 0 || range.from > last) {
-        return null;
-    }
-    return { from: Math.min(from, to), to: Math.max(from, to) };
-}
 
 /** How many days a range covers. */
 export function rangeLength(range: DayRange): number {
@@ -1069,31 +1128,35 @@ export function readUrlState(hash: URLSearchParams, search?: URLSearchParams): U
 /**
  * The range a hash names, or `null` for the whole window.
  *
- * Both ends must parse, because half a range is not a range: `#from=3` alone
- * would otherwise silently mean "day 3 to the end", which is a window the
- * reader never selected and cannot see is different from what they meant.
+ * Both ends must parse, because half a range is not a range: a lone
+ * `#from=2026-09-01` would otherwise silently mean "that date to the end",
+ * which is a window the reader never selected and cannot see is different
+ * from what they meant.
  */
-export function parseRange(state: UrlState): DayRange | null {
-    const from = Number(state.from);
-    const to = Number(state.to);
-    if (
-        state.from === undefined ||
-        state.to === undefined ||
-        !Number.isInteger(from) ||
-        !Number.isInteger(to)
-    ) {
+export function parseRange(state: UrlState): DateRange | null {
+    const { from, to } = state;
+    if (from === undefined || to === undefined) {
         return null;
     }
-    return rangeOf(from, to);
+    if (isDateString(from) && isDateString(to)) {
+        return from <= to ? { from, to } : { from: to, to: from };
+    }
+    return null;
 }
+
+/** Whether a hash value is a `YYYY-MM-DD` date rather than an old index. */
+function isDateString(value: string): boolean {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 
 /**
  * The hash for the current state, with defaults left out.
  *
  * `initUrlHashManager` drops falsy values, so every default has to serialize to
  * `''` rather than to its value — that is what keeps a reader who changed
- * nothing on `?path=dom/base` instead of growing an `&from=0&to=20`
- * that pins today's window into a URL they might share next month.
+ * nothing on `?path=dom/base` instead of growing a `&from=…&to=…`
+ * that pins the range they happen to be looking at into a URL they share.
  */
 export function urlStateOf(options: {
     search: string;
@@ -1107,13 +1170,22 @@ export function urlStateOf(options: {
      * which is what keeps an ordinary URL clean.
      */
     windowDays?: number | undefined;
+    /**
+     * The loaded span's dates, so the range can be written as dates rather
+     * than as indices. Without it the range is omitted: an index is
+     * meaningless in a URL, so writing one is worse than writing nothing.
+     */
+    dates?: readonly string[] | undefined;
 }): Record<string, string> {
     const whole = isWholeWindow(options.range, options.days);
     const window = options.windowDays;
+    // As dates, so neither a backfill nor tomorrow's window can move the
+    // selection — see `DateRange`.
+    const selected = whole ? null : datesOfRange(options.range, options.dates ?? []);
     return {
         q: options.search.trim(),
-        from: whole || options.range === null ? '' : String(options.range.from),
-        to: whole || options.range === null ? '' : String(options.range.to),
+        from: selected?.from ?? '',
+        to: selected?.to ?? '',
         open: options.open ?? '',
         issues: encodeFilters(options.filters),
         // Only once it is more than one window's worth: the default needs no

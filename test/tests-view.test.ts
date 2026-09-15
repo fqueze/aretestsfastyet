@@ -31,7 +31,6 @@ import {
     INITIAL_SORT,
     axisLabels,
     breadcrumb,
-    clampRange,
     folderPageUrl,
     isHistoricalDate,
     isWholeWindow,
@@ -46,7 +45,9 @@ import {
     MAX_BACKFILL_DAYS,
     WINDOW_DAYS,
     backfillPushdates,
+    datesOfRange,
     parseBackfillDays,
+    rangeOfDates,
     readUrlState,
     scopeLine,
     sortTests,
@@ -115,21 +116,6 @@ test('a range covers both its ends', () => {
     assert.equal(rangeLength({ from: 0, to: 0 }), 1);
     assert.equal(rangeLength({ from: 0, to: 20 }), 21);
     assert.equal(rangeLength({ from: 10, to: 12 }), 3);
-});
-
-test('a hash range is clamped to the days the file has, not refused', () => {
-    // A URL shared last month, against a window that has moved on.
-    assert.deepEqual(clampRange({ from: 5, to: 40 }, 21), { from: 5, to: 20 });
-    assert.deepEqual(clampRange({ from: -3, to: 4 }, 21), { from: 0, to: 4 });
-    assert.deepEqual(clampRange({ from: 0, to: 20 }, 21), { from: 0, to: 20 });
-});
-
-test('a range that misses the file entirely is null, not an empty list', () => {
-    // The caller falls back to the whole window: an empty worklist would read
-    // as a folder with nothing left to fix, which is the opposite of the truth.
-    assert.equal(clampRange({ from: 40, to: 60 }, 21), null);
-    assert.equal(clampRange({ from: -9, to: -2 }, 21), null);
-    assert.equal(clampRange({ from: 0, to: 0 }, 0), null);
 });
 
 test('the whole window is recognized so the hash can omit it', () => {
@@ -567,14 +553,94 @@ test('a stray #path= does not override ?path=', () => {
     assert.equal(state.folder, 'new/path');
 });
 
+/** A 21-day span, as the published window is, for the URL tests. */
+const DATES_21 = Array.from({ length: 21 }, (_, day) =>
+    new Date(Date.parse('2026-08-25T00:00:00Z') + day * 86_400_000).toISOString().slice(0, 10)
+);
+
 test('half a range is not a range', () => {
-    // `#from=3` alone would otherwise silently mean "day 3 to the end", a
-    // window the reader never selected.
-    assert.equal(parseRange({ from: '3' }), null);
-    assert.equal(parseRange({ to: '9' }), null);
+    // `#from=2026-09-01` alone would otherwise silently mean "that date to the
+    // end", a window the reader never selected.
+    assert.equal(parseRange({ from: '2026-09-01' }), null);
+    assert.equal(parseRange({ to: '2026-09-09' }), null);
     assert.equal(parseRange({}), null);
-    assert.equal(parseRange({ from: 'x', to: '9' }), null);
-    assert.deepEqual(parseRange({ from: '9', to: '3' }), { from: 3, to: 9 });
+    assert.equal(parseRange({ from: 'x', to: '2026-09-09' }), null);
+    // Either order means the same range.
+    assert.deepEqual(parseRange({ from: '2026-09-09', to: '2026-09-01' }), {
+        from: '2026-09-01',
+        to: '2026-09-09',
+    });
+});
+
+test('a range is carried as dates, so nothing can move it', () => {
+    // The bug this replaces: indices are meaningless without the span they
+    // were measured in, and this page has two ways for that span to change
+    // under a saved index — backfill prepends days, and the published window
+    // slides forward daily. Both moved the reader's selection.
+    const dates = [
+        '2026-09-01',
+        '2026-09-02',
+        '2026-09-03',
+        '2026-09-04',
+        '2026-09-05',
+    ];
+    assert.deepEqual(datesOfRange({ from: 1, to: 3 }, dates), {
+        from: '2026-09-02',
+        to: '2026-09-04',
+    });
+    // And back, unchanged.
+    assert.deepEqual(rangeOfDates({ from: '2026-09-02', to: '2026-09-04' }, dates), {
+        from: 1,
+        to: 3,
+    });
+
+    // The same dates in a span with 20 older days prepended resolve 20 later —
+    // which is the whole point: the *dates* did not move, so the selection
+    // does not either.
+    const longer = [
+        ...Array.from({ length: 20 }, (_, i) =>
+            new Date(Date.parse('2026-08-12T00:00:00Z') + i * 86_400_000)
+                .toISOString()
+                .slice(0, 10)
+        ),
+        ...dates,
+    ];
+    assert.equal(longer.length, 25);
+    assert.deepEqual(rangeOfDates({ from: '2026-09-02', to: '2026-09-04' }, longer), {
+        from: 21,
+        to: 23,
+    });
+    assert.deepEqual(datesOfRange({ from: 21, to: 23 }, longer), {
+        from: '2026-09-02',
+        to: '2026-09-04',
+    });
+});
+
+test('a range from an older window clamps to the overlap', () => {
+    // A shared link outlives the window it was written against — the published
+    // span slides forward daily — so a date that has fallen off the start
+    // clamps rather than collapsing the selection to nothing.
+    const dates = ['2026-09-03', '2026-09-04', '2026-09-05'];
+    assert.deepEqual(rangeOfDates({ from: '2026-08-20', to: '2026-09-04' }, dates), {
+        from: 0,
+        to: 1,
+    });
+    assert.deepEqual(rangeOfDates({ from: '2026-09-04', to: '2026-12-01' }, dates), {
+        from: 1,
+        to: 2,
+    });
+    // A weekend the tree did not run is an ordinary thing to have dragged
+    // across, so the bounds are found by comparison rather than by lookup.
+    assert.deepEqual(rangeOfDates({ from: '2026-09-03', to: '2026-09-04' }, ['2026-09-03', '2026-09-05']), {
+        from: 0,
+        to: 0,
+    });
+    // Missing the span entirely has no honest answer, and the whole window is
+    // a better one than a wrong range.
+    assert.equal(rangeOfDates({ from: '2026-01-01', to: '2026-01-05' }, dates), null);
+    assert.equal(rangeOfDates({ from: '2027-01-01', to: '2027-01-05' }, dates), null);
+    assert.equal(rangeOfDates(null, dates), null);
+    assert.equal(rangeOfDates({ from: '2026-09-03', to: '2026-09-04' }, []), null);
 });
 
 test('the default state serializes to nothing, so a shared URL stays clean', () => {
@@ -599,10 +665,11 @@ test('the default state serializes to nothing, so a shared URL stays clean', () 
             days: 21,
             open: null,
             filters: ALL_FILTERS,
+            dates: DATES_21,
         }).from,
         ''
     );
-    // A real selection is written out.
+    // A real selection is written out, as dates.
     assert.deepEqual(
         urlStateOf({
             search: ' foo ',
@@ -610,8 +677,28 @@ test('the default state serializes to nothing, so a shared URL stays clean', () 
             days: 21,
             open: 'x.js',
             filters: ALL_FILTERS,
+            dates: DATES_21,
         }),
-        { q: 'foo', from: '10', to: '20', open: 'x.js', issues: '', days: '' }
+        {
+            q: 'foo',
+            from: DATES_21[10]!,
+            to: DATES_21[20]!,
+            open: 'x.js',
+            issues: '',
+            days: '',
+        }
+    );
+    // With no dates to name it against, a range is omitted rather than
+    // written as an index — an index in a URL is what this replaced.
+    assert.equal(
+        urlStateOf({
+            search: '',
+            range: { from: 10, to: 20 },
+            days: 21,
+            open: null,
+            filters: ALL_FILTERS,
+        }).from,
+        ''
     );
 });
 
@@ -635,6 +722,11 @@ test('a backfilled span is written to the URL, a default one is not', () => {
 test('a range written against a backfilled window round-trips with its span', () => {
     // The pair is the point: the indices only mean anything alongside the day
     // count they were picked in.
+    const dates = Array.from({ length: 221 }, (_, day) =>
+        new Date(Date.parse('2026-02-06T00:00:00Z') + day * 86_400_000)
+            .toISOString()
+            .slice(0, 10)
+    );
     const state = urlStateOf({
         search: '',
         range: { from: 100, to: 140 },
@@ -642,16 +734,29 @@ test('a range written against a backfilled window round-trips with its span', ()
         open: null,
         filters: ALL_FILTERS,
         windowDays: 21,
+        dates,
     });
     assert.deepEqual(
         { from: state.from, to: state.to, days: state.days },
-        { from: '100', to: '140', days: '221' }
+        { from: dates[100]!, to: dates[140]!, days: '221' }
     );
     const read = readUrlState(
         new URLSearchParams(`from=${state.from}&to=${state.to}&days=${state.days}`)
     );
-    assert.deepEqual(parseRange(read), { from: 100, to: 140 });
+    // The dates resolve back to the same days, given the same span.
+    assert.deepEqual(rangeOfDates(parseRange(read), dates), { from: 100, to: 140 });
     assert.equal(parseBackfillDays(read), 221);
+
+    // And `#days=` is still what makes that span reachable: those dates are
+    // months older than the published window, so without the backfill the
+    // link resolves to no range at all rather than to the wrong days. That is
+    // the honest answer — and it is why `days` travels with `from`/`to`.
+    assert.equal(rangeOfDates(parseRange(read), dates.slice(-21)), null);
+    // A range that *does* overlap the published window clamps to the overlap.
+    assert.deepEqual(
+        rangeOfDates({ from: dates[210]!, to: dates[240] ?? '2027-01-01' }, dates.slice(-21)),
+        { from: 10, to: 20 }
+    );
 });
 
 test('#days= is bounded, so a hand-edited URL cannot fetch forever', () => {
@@ -954,9 +1059,10 @@ test('the filters ride in the hash next to the range', () => {
         days: 21,
         open: null,
         filters: { ...ALL_FILTERS, skips: false },
+        dates: DATES_21,
     });
     assert.equal(state['issues'], 'ftc');
-    assert.equal(state['from'], '3');
+    assert.equal(state['from'], DATES_21[3]);
     // And read back from the same place.
     assert.deepEqual(
         decodeFilters(readUrlState(new URLSearchParams('issues=ftc')).issues),

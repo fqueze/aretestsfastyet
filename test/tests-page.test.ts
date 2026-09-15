@@ -495,8 +495,14 @@ test('the range goes into the hash, and the whole window does not', async () => 
         clickDay(page, 4);
         clickDay(page, 9, true);
         const hash = new URLSearchParams(page.window.location.hash.slice(1));
-        assert.equal(hash.get('from'), '4');
-        assert.equal(hash.get('to'), '9');
+        // **Dates, not indices.** An index is meaningless without the span it
+        // was measured in, and this page has two ways for that span to change
+        // under a saved one: a backfill prepends days, and the published
+        // window slides forward daily. Both used to move the selection.
+        const dates = view(page).dates;
+        assert.equal(hash.get('from'), dates[4]);
+        assert.equal(hash.get('to'), dates[9]);
+        assert.match(hash.get('from') ?? '', /^\d{4}-\d{2}-\d{2}$/);
         assert.equal(hash.get('date'), null, 'one window, so no date key');
         // The folder is *not* in the hash — it is what the page is, and it
         // lives in the query string.
@@ -519,7 +525,15 @@ test('the range goes into the hash, and the whole window does not', async () => 
 });
 
 test('a range in the hash is applied on load, and clamped to the window', async () => {
-    const page = await freshPage('fromhash', `?path=${FOLDER}#from=10&to=20`);
+    // The dates the fixture's window covers, to build hashes against.
+    const spanned = await freshPage('fromhash-dates', `?path=${FOLDER}`);
+    const dates = view(spanned).dates;
+    spanned.restore();
+
+    const page = await freshPage(
+        'fromhash',
+        `?path=${FOLDER}#from=${dates[10]}&to=${dates[20]}`
+    );
     try {
         assert.deepEqual(view(page).range, { from: 10, to: 20 });
         assert.ok(
@@ -530,17 +544,36 @@ test('a range in the hash is applied on load, and clamped to the window', async 
         page.restore();
     }
 
-    // Past the end of the file: clamped rather than showing nothing.
-    const far = await freshPage('clamp', `?path=${FOLDER}#from=5&to=99`);
+    // Past the end of the window: clamped to the overlap rather than showing
+    // nothing. A link outlives the span it was written against — the published
+    // window slides forward daily — so this is the ordinary case, not an edge.
+    const far = await freshPage('clamp', `?path=${FOLDER}#from=${dates[5]}&to=2027-01-01`);
     try {
         assert.deepEqual(view(far).range, { from: 5, to: 20 });
     } finally {
         far.restore();
     }
 
-    // Missing the file entirely: the whole window, not an empty list that
-    // would read as a folder with nothing left to fix.
-    const off = await freshPage('off', `?path=${FOLDER}#from=90&to=99`);
+    // Dates the window cannot express at all — a link shared long enough ago
+    // that its days have slid off the start. The whole window is the honest
+    // answer, and the hash's own `from`/`to` go with it: keeping the previous
+    // selection made the URL say one thing while the page showed another.
+    const gone = await freshPage(
+        'stale-range',
+        `?path=${FOLDER}#from=2020-01-05&to=2020-01-09`
+    );
+    try {
+        assert.equal(view(gone).range, null, 'no range rather than the wrong one');
+        const hash = new URLSearchParams(gone.window.location.hash.slice(1));
+        assert.equal(hash.get('from'), null);
+        assert.equal(hash.get('to'), null);
+    } finally {
+        gone.restore();
+    }
+
+    // Dates after the window, rather than before it: the whole window again,
+    // not an empty list that would read as a folder with nothing left to fix.
+    const off = await freshPage('off', `?path=${FOLDER}#from=2099-01-01&to=2099-01-09`);
     try {
         assert.equal(view(off).range, null);
         assert.equal(rowPaths(off).length, 2);
@@ -780,7 +813,14 @@ test('the issue lines say "fixed in this range" rather than "no issues"', async 
     // The distinction a burndown lives on. `test_socks.js` has an issue in the
     // window but none in days 10-20, and the page must not say the test is
     // clean outright — nor list a line it did not count.
-    const page = await freshPage('fixed', `?path=${FOLDER}#from=10&to=20`);
+    const spanned = await freshPage('fixed-dates', `?path=${FOLDER}`);
+    const dates = view(spanned).dates;
+    spanned.restore();
+
+    const page = await freshPage(
+        'fixed',
+        `?path=${FOLDER}#from=${dates[10]}&to=${dates[20]}`
+    );
     try {
         // It is not in the worklist at all in this range, which is the primary
         // signal; assert that rather than an empty details row.

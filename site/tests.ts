@@ -68,6 +68,7 @@ import {
 import { parseTaskId } from '../lib/formats/tables.ts';
 import { type FlakyDay, flakinessOfPath, thinDays } from '../lib/query/flakiness.ts';
 import {
+    type DateRange,
     type DayRange,
     type Harness,
     type IssueFilters,
@@ -88,7 +89,6 @@ import {
     SCOPE_LABEL,
     STAT_COLUMNS,
     breadcrumb,
-    clampRange,
     folderPageUrl,
     harnessesWithTests,
     issueLines,
@@ -104,7 +104,9 @@ import {
     timeline,
     WINDOW_DAYS,
     backfillPushdates,
+    datesOfRange,
     parseBackfillDays,
+    rangeOfDates,
     urlStateOf,
     windowDates,
     worklist,
@@ -1947,6 +1949,30 @@ function addWindow(harness: Harness, window: StitchWindow): boolean {
 }
 
 /**
+ * Swaps a fetched window in for the newest one already held.
+ *
+ * The `-with-taskids` aggregate describes the same days as `latest`'s plain
+ * one, with task attribution added, so it replaces that window rather than
+ * extending the timeline. Matched on the window's first date rather than on
+ * position, because `windowsByHarness` is appended to in fetch order and a
+ * parallel restore does not guarantee which arrived first.
+ */
+function replaceNewestWindow(harness: Harness, window: StitchWindow): void {
+    const windows = windowsByHarness.get(harness);
+    if (windows === undefined) {
+        return;
+    }
+    const newest = windows.reduce(
+        (best, held) => ((held.dates.at(-1) ?? '') > (best.dates.at(-1) ?? '') ? held : best),
+        windows[0]!
+    );
+    const at = windows.indexOf(newest);
+    if (at >= 0) {
+        windows[at] = window;
+    }
+}
+
+/**
  * Rebuilds every harness's timeline from the windows held, and the merged span.
  *
  * Always from the full list, never incrementally: joining an already-joined
@@ -1966,11 +1992,12 @@ function restitch(): void {
         for (const date of stitched.missing) {
             missing.add(date);
         }
-        // The detailed file describes the newest window only, so a stitched
-        // timeline no longer matches it. Drop the flag so a reopened row
-        // re-fetches rather than resolving task indices against a file that
-        // covers a fraction of the days.
-        detailedLoaded.delete(entry.harness);
+        // `detailedLoaded` is deliberately *not* cleared here. It used to be,
+        // because the detailed file replaced the whole timeline and a stitch
+        // invalidated it. It is now swapped in as the newest window
+        // (`replaceNewestWindow`), so it survives a re-stitch — and clearing
+        // the flag after `loadDetailedData` set it re-fetched 15 MB per
+        // harness on every expansion.
     }
     const merged = mergedWindow(loaded);
     dates = merged.dates;
@@ -2001,6 +2028,9 @@ async function backfillOlderWindow(): Promise<void> {
 
     try {
         const before = dates.length;
+        // Read before anything is stitched: after `restitch` the indices mean
+        // different days, so the selection has to be remembered as dates.
+        const selected = datesOfRange(range, dates);
         const fetched = await Promise.all(
             loaded.map(async ({ harness }) => ({
                 harness,
@@ -2042,11 +2072,12 @@ async function backfillOlderWindow(): Promise<void> {
             backfillExhausted = true;
         }
 
-        // A range picked against the old numbering means different dates now:
-        // the stitch prepends days, so every index shifted. Clamping keeps it
-        // inside the file; the dates it names are the reader's to re-pick.
-        range = range === null ? null : clampRange(range, dates.length);
-        anchorDay = null;
+        // The dates the reader selected, re-resolved against the longer span.
+        // Clamping the *indices* instead is what made the selection slide left
+        // across the chart: prepending 20 days turned their day 35 into day
+        // 15, so a fixed pair of dates appeared to move.
+        range = rangeOfDates(selected, dates);
+        anchorDay = range?.from ?? null;
         present = harnessesWithTests(loaded, folder);
         render();
         setStatusText(windowStatus());
@@ -2128,6 +2159,9 @@ async function loadDetailedData(): Promise<void> {
         return;
     }
     loadingDetailed = true;
+    // Whether any harness holds more than one window, i.e. whether the
+    // timelines are stitched and need rebuilding after the swap.
+    const stitched = [...windowsByHarness.values()].some((windows) => windows.length > 1);
     const load = (async (): Promise<void> => {
         try {
             await Promise.all(
@@ -2143,10 +2177,39 @@ async function loadDetailedData(): Promise<void> {
                         return;
                     }
                     rawByHarness.set(harness, raw);
-                    entry.file = decodeIssuesWithTaskIds(raw);
+                    // Swapped in as *one window of the stitched timeline*, not
+                    // over the top of it. Assigning `entry.file` directly threw
+                    // away every backfilled window — the file went back to the
+                    // published 21 days while `dates` still described 41 or 61,
+                    // so a range in the recent days pointed outside the file
+                    // and an expanded row reported "No issues for this test in
+                    // the selected range".
+                    const detailed = decodeIssuesWithTaskIds(raw);
+                    const windows = windowsByHarness.get(harness);
+                    if (windows === undefined || windows.length <= 1) {
+                        entry.file = detailed;
+                    } else {
+                        // Replace the window it describes — the newest, which
+                        // is the one `latest` publishes — and re-stitch.
+                        replaceNewestWindow(harness, {
+                            file: detailed,
+                            dates: windowDates(detailed),
+                        });
+                    }
                     detailedLoaded.add(harness);
                 })
             );
+            // Rebuild the timelines from the windows, now that one of them
+            // carries task attribution. The span does not change — the
+            // detailed file describes the same days — so the selection is
+            // re-resolved from its dates and comes back identical; doing it by
+            // date rather than trusting the indices is what keeps that true if
+            // the two files ever disagree about the window.
+            if (stitched) {
+                const selected = datesOfRange(range, dates);
+                restitch();
+                range = rangeOfDates(selected, dates);
+            }
         } catch (error) {
             console.warn('Error loading detailed data:', error);
         } finally {
@@ -2181,6 +2244,7 @@ function updateUrlHash(): void {
         open: openTest,
         filters,
         windowDays: WINDOW_DAYS,
+        dates,
     });
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(state)) {
@@ -2201,11 +2265,12 @@ function updateUrlHash(): void {
 /**
  * Applies the hash to the page.
  *
- * The range is clamped to the loaded window rather than trusted: a hash
- * outlives the data it was written against, and `#from=40` on a 21-day file is
- * ordinary rather than exceptional. `clampRange` returning `null` means the
- * range missed the file entirely, and the whole window is a better answer than
- * an empty list that reads as a clean folder.
+ * The range's dates are resolved against the loaded window rather than
+ * trusted: a hash outlives the data it was written against, and a link naming
+ * days that have since slid out of the window is ordinary rather than
+ * exceptional. `rangeOfDates` returning `null` means the range missed the
+ * window entirely, and the whole window is a better answer than an empty list
+ * that reads as a clean folder.
  */
 function loadFromUrl(): void {
     if (hashManager === null) {
@@ -2243,12 +2308,11 @@ function loadFromUrl(): void {
 /**
  * The history a shared link asks for, held until the first window is loaded.
  *
- * Like `pendingRange`, and for the same reason plus a stronger one: backfilling
- * needs a loaded window to count back from, and the range in the same hash is
- * expressed in *absolute day indices*, so it can only be applied once the
- * timeline is as long as the sender's was.
+ * Like `pendingRange`: backfilling needs a loaded window to count back from,
+ * so the span can only be honoured once there is something to count from.
  */
 let pendingDays: number | null = null;
+
 
 /**
  * Backfills until the timeline covers the days a shared link asked for.
@@ -2284,6 +2348,7 @@ async function restoreBackfill(): Promise<void> {
     // named, once.
     backfilling = true;
     renderBackfillControl('loading history…');
+    const selectedBefore = datesOfRange(range, dates);
     try {
         const pushdates = backfillPushdates(oldest, dates.length, wanted);
 
@@ -2335,9 +2400,11 @@ async function restoreBackfill(): Promise<void> {
     } finally {
         backfilling = false;
     }
-    // One render, with the whole span in hand.
-    range = range === null ? null : clampRange(range, dates.length);
-    anchorDay = null;
+    // One render, with the whole span in hand. The hash's own range is applied
+    // by `applyPendingRange` after this, from dates; anything already selected
+    // is re-resolved the same way.
+    range = rangeOfDates(selectedBefore, dates);
+    anchorDay = range?.from ?? null;
     present = harnessesWithTests(loaded, folder);
     render();
     setStatusText(windowStatus());
@@ -2345,26 +2412,37 @@ async function restoreBackfill(): Promise<void> {
 }
 
 /**
- * The range from the hash, held until a file is loaded.
+ * The range from the hash, as **dates**, held until a file is loaded.
  *
- * The hash is read before the data arrives, and a range cannot be clamped
- * against a window that is not there yet. So it is parked here and applied by
- * `applyPendingRange` once `dates` is known.
+ * The hash is read before the data arrives, and dates cannot be resolved to
+ * day indices against a window that is not there yet. So it is parked here and
+ * applied by `applyPendingRange` once `dates` is known.
  */
-let pendingRange: DayRange | null = null;
+let pendingRange: DateRange | null = null;
 
 /** Applies a hash range to the loaded window. */
 function applyPendingRange(): void {
     if (pendingRange === null) {
         return;
     }
-    const clamped = loaded.length === 0 ? null : clampRange(pendingRange, dates.length);
+    const resolved = loaded.length === 0 ? null : rangeOfDates(pendingRange, dates);
     pendingRange = null;
-    if (clamped === null) {
+    if (resolved === null) {
+        // The hash named a range this window cannot express — dates entirely
+        // outside it, which a link shared long enough ago will name. Clear
+        // rather than keep whatever was selected before: leaving it made the
+        // URL say one thing and the page show another, and on a hash
+        // navigation that meant the *previous* view's range silently
+        // persisting. The whole window is the honest answer.
+        if (range !== null) {
+            range = null;
+            anchorDay = null;
+            render();
+        }
         return;
     }
-    range = clamped;
-    anchorDay = clamped.from;
+    range = resolved;
+    anchorDay = resolved.from;
     render();
 }
 
@@ -2454,6 +2532,7 @@ function initializeUI(): void {
                 open: openTest,
                 filters,
                 windowDays: WINDOW_DAYS,
+                dates,
             }),
         onHashChange: async () => {
             searchBoxManager?.setNavigating(true);
