@@ -1258,6 +1258,23 @@ function totalRow(list: Worklist): HTMLElement {
     });
 }
 
+/**
+ * The count of tests under this path with nothing wrong with them.
+ *
+ * Not a row: it is the folder's remainder, not a thing to sort or click, so it
+ * carries no stat cells and no hover chart.
+ *
+ * Counted before the search narrowed the list, like the "N tests with issues"
+ * on the scope line, so filtering the table does not make the folder look as
+ * though it grew a clean test.
+ */
+function cleanTestsNote(clean: number): HTMLElement {
+    return el('div', {
+        class: 'clean-note',
+        text: `+ ${clean.toLocaleString()} test${clean === 1 ? '' : 's'} without issue.`,
+    });
+}
+
 /** One test row. */
 function testRow(test: WorklistRow, showHarness: boolean): HTMLElement {
     const label: (Node | string)[] = [
@@ -1656,6 +1673,15 @@ function render(): void {
     const showHarness = new Set(list.tests.map((test) => test.harness)).size > 1;
     for (const test of list.tests) {
         table.append(testRow(test, showHarness));
+    }
+
+    // A table where every row has an issue reads as "everything here is
+    // broken". The clean tests are the rest of the folder and the reason the
+    // rate above is what it is, so the count says so — `flaky.html` closes its
+    // folders the same way.
+    const clean = list.totalTestCount - list.testsWithIssues;
+    if (clean > 0) {
+        table.append(cleanTestsNote(clean));
     }
 
     // Reopen whatever was open, so a re-sort or a filter change does not

@@ -763,6 +763,55 @@ test('the issue lines say "fixed in this range" rather than "no issues"', async 
     }
 });
 
+test('the table closes with the count of tests that have nothing wrong', async () => {
+    // A worklist where every row has an issue reads as "everything under here
+    // is broken". The remainder is the rest of the folder, so the table says
+    // how big it is.
+    const page = await freshPage('clean-note', `?path=${SHARED}`);
+    try {
+        const note = page.document.querySelector('.clean-note');
+        assert.ok(note !== null, 'the note is there');
+        assert.match(note.textContent ?? '', /^\+ 1 test without issue\.$/);
+
+        // Last, after the rows it accounts for — not above them.
+        const rows = [...page.document.querySelectorAll('#worklist-table > *')];
+        assert.equal(rows.at(-1), note);
+    } finally {
+        page.restore();
+    }
+});
+
+test('the clean count ignores the search, like the count above the table', async () => {
+    // Filtering the table narrows which broken tests are listed. It does not
+    // change how many tests under the path are clean, and a note that moved
+    // with the filter would read as though the folder had grown one.
+    const page = await freshPage('clean-note-search', `?path=${SHARED}`);
+    try {
+        const before = page.document.querySelector('.clean-note')!.textContent;
+
+        const box = page.document.getElementById('folder-search') as HTMLInputElement;
+        box.value = 'socks';
+        box.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+
+        assert.equal(page.document.querySelector('.clean-note')!.textContent, before);
+    } finally {
+        page.restore();
+    }
+});
+
+test('a folder where every test has an issue gets no note', async () => {
+    // Nothing to say: "+ 0 tests without issue" is a line that only tells the
+    // reader the code can count. `netwerk/test/unit` is two tests and both have
+    // an issue over the whole window.
+    const page = await freshPage('clean-note-none');
+    try {
+        assert.equal(view(page).list!.totalTestCount, rowPaths(page).length);
+        assert.equal(page.document.querySelector('.clean-note'), null);
+    } finally {
+        page.restore();
+    }
+});
+
 test('the detail file is fetched on expansion, once, and never blocks a render', async () => {
     const page = await freshPage('detail');
     try {

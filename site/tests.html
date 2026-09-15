@@ -416,6 +416,19 @@
             align-items: center;
         }
 
+        /* The folder's remainder, under the last row. Indented past the
+           test-icon column so it lines up with the filenames rather than with
+           their icons, and quiet — it is context for the rows above, not a
+           row. */
+        .clean-note {
+            font-size: 11px;
+            color: #999;
+            font-style: italic;
+            font-family: monospace;
+            padding: 5px 10px 5px 26px;
+            background: #fcfcfc;
+        }
+
         .tree-stats {
             display: flex;
             gap: 30px;
