@@ -39,6 +39,16 @@ const DASHBOARDS = [
             'percentages that drills down to individual test files, plus a flat folder ' +
             'ranking for picking a burndown target. A noise filter discards tests that ' +
             'failed only once in the whole window.' },
+    { file: 'tests.html', tier: 1, title: 'Tests by Path', featured: true,
+      desc: 'Every test under one path, worst first, over a day range you pick.',
+      long: 'Opened via ?path=some/directory, this lists every test under that path that ' +
+            'still has an issue, ranked worst first, and lets you pick a range of days off ' +
+            'the timeline — so you can ask what is left after a round of fixes landed, ' +
+            'which neither the issues page (no day range) nor the test page (one test) can ' +
+            'answer. Two charts share the range: issue counts per day, and how many tests ' +
+            'had an issue each day. Hovering a row shows that one test’s share of the ' +
+            'counts. XPCShell and Mochitest are merged, since a directory often holds ' +
+            'both, and the path is an editable field with completion.' },
     { file: 'test.html', tier: 1, title: 'Test Info', featured: true,
       desc: 'Everything about a single test: issues, run times and pass/fail by job.',
       long: 'A deep dive on one test (opened via ?test=path/to/test) that brings 21 days ' +
