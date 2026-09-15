@@ -247,17 +247,15 @@
             white-space: nowrap;
         }
 
-        h1 .heading-harness,
-        h1 .harness-switcher {
-            font-size: 13px;
-            font-weight: normal;
-            color: #666;
-            vertical-align: middle;
-        }
+        /* The heading's harness badges. The wrapper only holds them — the
+           badge rule below carries the size and colour, so a badge in the
+           heading and a badge on a row are the same object.
 
-        h1 .harness-switcher {
-            font-family: inherit;
-            padding: 2px 4px;
+           The `.harness-switcher` rules that sat here went with the dropdown:
+           a path is not a harness's unit, so this page merges both and states
+           which contributed rather than offering a choice. */
+        h1 .heading-harness {
+            vertical-align: middle;
         }
 
         /* The harness badge on a row, when a folder holds both harnesses.

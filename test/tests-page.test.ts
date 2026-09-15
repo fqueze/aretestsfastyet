@@ -1005,10 +1005,12 @@ test('a folder in both harnesses merges them and badges every row', async () => 
         assert.ok(harnesses.includes('xpcshell'), 'xpcshell rows');
         assert.ok(harnesses.includes('mochitest'), 'mochitest rows');
 
-        // The badge is shown, because it distinguishes the rows.
-        const badges = [...page.document.querySelectorAll('.harness-badge')].map(
-            (badge) => badge.textContent
-        );
+        // The badge is shown, because it distinguishes the rows. Scoped to the
+        // table: the heading carries badges of its own, so an unscoped count
+        // would pass whatever the rows did.
+        const badges = [
+            ...page.document.querySelectorAll('.tree-row.test-row .harness-badge'),
+        ].map((badge) => badge.textContent);
         assert.equal(badges.length, harnesses.length, 'one badge per row');
         assert.deepEqual(new Set(badges), new Set(['xpcshell', 'mochitest']));
 
@@ -1016,9 +1018,19 @@ test('a folder in both harnesses merges them and badges every row', async () => 
         // control. A `?kind=` selector was removed: once two harnesses show as
         // one ranked list, picking one is only a way to see less, and choosing
         // it made the dropdown vanish with no way back.
-        assert.equal(
-            page.document.getElementById('heading-harness')!.textContent,
-            'XPCShell + Mochitest'
+        //
+        // As the same badges the rows use, so the heading and a row name a
+        // harness identically.
+        const headingBadges = [
+            ...page.document.querySelectorAll('#heading-harness .harness-badge'),
+        ];
+        assert.deepEqual(
+            headingBadges.map((badge) => badge.textContent),
+            ['xpcshell', 'mochitest']
+        );
+        assert.deepEqual(
+            headingBadges.map((badge) => badge.className),
+            ['harness-badge harness-xpcshell', 'harness-badge harness-mochitest']
         );
         assert.equal(page.document.querySelector('.harness-switcher'), null);
     } finally {
@@ -1031,12 +1043,18 @@ test('a single-harness folder shows no badge and no switcher options', async () 
     try {
         // `netwerk/test/unit` is xpcshell-only, so the badge would be the same
         // word on every row.
-        assert.equal(page.document.querySelectorAll('.harness-badge').length, 0);
-        // And the heading names the one harness that has tests here, which is
-        // worth knowing and costs no control.
         assert.equal(
-            page.document.getElementById('heading-harness')!.textContent,
-            'XPCShell'
+            page.document.querySelectorAll('.tree-row.test-row .harness-badge').length,
+            0
+        );
+        // And the heading names the one harness that has tests here, which is
+        // worth knowing and costs no control — as one badge, not as a word.
+        const headingBadges = [
+            ...page.document.querySelectorAll('#heading-harness .harness-badge'),
+        ];
+        assert.deepEqual(
+            headingBadges.map((badge) => badge.textContent),
+            ['xpcshell']
         );
     } finally {
         page.restore();

@@ -573,7 +573,21 @@ async function loadFolderList(): Promise<string[]> {
     return [...folders].sort();
 }
 
-// --- the harness switcher -------------------------------------------------
+// --- the heading line -----------------------------------------------------
+
+/**
+ * One harness named as the table names it.
+ *
+ * Shared by the heading and the row badge so the two cannot drift: the
+ * heading's `SCOPE_LABEL` text and the row's raw `harness` were two spellings
+ * of one fact.
+ */
+function harnessBadge(harness: Harness): HTMLElement {
+    return el('span', {
+        class: `harness-badge harness-${harness}`,
+        text: harness,
+    });
+}
 
 /**
  * Fills the heading's values, leaving its shape alone.
@@ -594,15 +608,20 @@ function renderHeading(): void {
     // Which harnesses contributed, stated rather than chosen. A path with both
     // says so; one with a single harness says which, because "these are
     // xpcshell tests" is worth knowing and costs no control.
+    //
+    // As the same badges the rows use, not as words: the heading and the
+    // per-row badge name the same thing, so they should look like the same
+    // thing. A reader who sees `mochitest` on a row and `mochitest` in the
+    // heading should not have to check whether the two mean the same.
     const harnesses = document.getElementById('heading-harness');
     if (harnesses !== null) {
-        harnesses.textContent = present.map((harness) => SCOPE_LABEL[harness]).join(' + ');
+        harnesses.replaceChildren(...present.map(harnessBadge));
     }
 
     document.title = folder === '' ? 'Tests by path' : `Tests in ${folder}`;
 }
 
-// --- the header ----------------------------------------------------------
+// --- the breadcrumb -------------------------------------------------------
 
 /**
  * The breadcrumb, each segment a link to that folder.
@@ -1285,12 +1304,7 @@ function testRow(test: WorklistRow, showHarness: boolean): HTMLElement {
         // Only when both harnesses contributed rows. On a single-harness
         // folder the badge would be the same word on every row, which says
         // nothing and costs the filename its space.
-        label.push(
-            el('span', {
-                class: `harness-badge harness-${test.harness}`,
-                text: test.harness,
-            })
-        );
+        label.push(harnessBadge(test.harness));
     }
 
     const element = el('div', {
