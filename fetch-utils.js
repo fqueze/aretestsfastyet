@@ -64,11 +64,14 @@ function withDevParams(url) {
 //
 //   gecko.v2.mozilla-central.pushdate.2026.09.14.latest.source.test-info-…
 //
-// Those artifacts outlive the window they describe — measured 2026-09-15, the
-// oldest surviving pushdate was 2026-01-31 and 2026-01-30 was already a 404,
-// so roughly seven months, sliding forward daily. That is what lets a page
-// backfill: each older run published its own 21-day aggregate, so walking back
-// a run at a time reconstructs an arbitrarily long history.
+// Those artifacts outlive the window they describe, so a page can read a run
+// generated months ago: each one published its own 21-day aggregate, and
+// walking back a run at a time reconstructs a long history.
+//
+// Measured 2026-09-15: the oldest pushdate that answers is 2026-01-31, and
+// 2026-01-30 is a 404. That is not expiry — it is when this data started being
+// produced, so the floor is fixed rather than sliding, and it will only get
+// further away.
 //
 // `date` is a YYYY-MM-DD string; anything falsy means 'latest'.
 function indexRevision(date) {

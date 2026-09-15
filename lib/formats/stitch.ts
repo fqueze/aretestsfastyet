@@ -63,7 +63,9 @@ import type { TestIdentity } from './tables.ts';
  * per-day arrays `hours` rather than `days`, and no decoder here knows that
  * shape — `statusGroupShape` throws `UnknownStatusGroupShapeError` on it.
  * Measured 2026-09-15: pushdate 2026-02-10 carries `hours`, 2026-02-16 carries
- * `days`, and every run after it carries `days`.
+ * `days`, and every run after it carries `days`. The published record itself
+ * starts 2026-01-31, so the `hours` files are the job's first two weeks and
+ * this is the practical floor on how far back a page can read.
  *
  * Checked on the raw file *before* decoding, because the throw would otherwise
  * happen deep inside a render — the shape is only inspected when a group is

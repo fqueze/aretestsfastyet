@@ -43,6 +43,8 @@ import {
     rangeLabel,
     rangeLength,
     rangeOf,
+    MAX_BACKFILL_DAYS,
+    parseBackfillDays,
     readUrlState,
     scopeLine,
     sortTests,
@@ -535,6 +537,7 @@ test('the URL is read from both halves, with empty values absent', () => {
         to: '9',
         open: 'x.js',
         issues: undefined,
+        days: undefined,
     });
     assert.deepEqual(
         readUrlState(new URLSearchParams('q='), new URLSearchParams('path=')),
@@ -547,6 +550,7 @@ test('the URL is read from both halves, with empty values absent', () => {
             to: undefined,
             open: undefined,
             issues: undefined,
+            days: undefined,
         }
     );
 });
@@ -583,7 +587,7 @@ test('the default state serializes to nothing, so a shared URL stays clean', () 
             open: null,
             filters: ALL_FILTERS,
         }),
-        { q: '', from: '', to: '', open: '', issues: '' }
+        { q: '', from: '', to: '', open: '', issues: '', days: '' }
     );
     // A range covering every day is the whole window, so it is omitted too.
     assert.deepEqual(
@@ -605,8 +609,60 @@ test('the default state serializes to nothing, so a shared URL stays clean', () 
             open: 'x.js',
             filters: ALL_FILTERS,
         }),
-        { q: 'foo', from: '10', to: '20', open: 'x.js', issues: '' }
+        { q: 'foo', from: '10', to: '20', open: 'x.js', issues: '', days: '' }
     );
+});
+
+test('a backfilled span is written to the URL, a default one is not', () => {
+    // `#days=` is what makes a shared link show the same history the sender
+    // was looking at. Without it, `from`/`to` — absolute day indices — would
+    // land on entirely different dates for the recipient.
+    const base = { search: '', range: null, open: null, filters: ALL_FILTERS } as const;
+
+    // One published window is the default, so it says nothing.
+    assert.equal(urlStateOf({ ...base, days: 21, windowDays: 21 }).days, '');
+    // Fewer than a window — a short file — is not a backfill either.
+    assert.equal(urlStateOf({ ...base, days: 5, windowDays: 21 }).days, '');
+    // A stitched timeline is written out.
+    assert.equal(urlStateOf({ ...base, days: 41, windowDays: 21 }).days, '41');
+    assert.equal(urlStateOf({ ...base, days: 221, windowDays: 21 }).days, '221');
+    // With no window length to compare against, nothing is claimed.
+    assert.equal(urlStateOf({ ...base, days: 41 }).days, '');
+});
+
+test('a range written against a backfilled window round-trips with its span', () => {
+    // The pair is the point: the indices only mean anything alongside the day
+    // count they were picked in.
+    const state = urlStateOf({
+        search: '',
+        range: { from: 100, to: 140 },
+        days: 221,
+        open: null,
+        filters: ALL_FILTERS,
+        windowDays: 21,
+    });
+    assert.deepEqual(
+        { from: state.from, to: state.to, days: state.days },
+        { from: '100', to: '140', days: '221' }
+    );
+    const read = readUrlState(
+        new URLSearchParams(`from=${state.from}&to=${state.to}&days=${state.days}`)
+    );
+    assert.deepEqual(parseRange(read), { from: 100, to: 140 });
+    assert.equal(parseBackfillDays(read), 221);
+});
+
+test('#days= is bounded, so a hand-edited URL cannot fetch forever', () => {
+    // The value drives a loop that fetches an aggregate per 20 days, so an
+    // unbounded one would download until the archive ran out.
+    assert.equal(parseBackfillDays({ days: '41' }), 41);
+    assert.equal(parseBackfillDays({ days: '99999' }), MAX_BACKFILL_DAYS);
+    // Absent, empty and nonsense all mean "the default window".
+    assert.equal(parseBackfillDays({}), null);
+    assert.equal(parseBackfillDays({ days: '' }), null);
+    assert.equal(parseBackfillDays({ days: 'lots' }), null);
+    assert.equal(parseBackfillDays({ days: '0' }), null);
+    assert.equal(parseBackfillDays({ days: '-40' }), null);
 });
 
 test('the filter vocabulary maps to the library’s', () => {

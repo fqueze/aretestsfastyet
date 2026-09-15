@@ -102,6 +102,7 @@ import {
     scopeLine,
     testContribution,
     timeline,
+    parseBackfillDays,
     urlStateOf,
     windowDates,
     worklist,
@@ -340,11 +341,11 @@ let backfillExhausted = false;
 /**
  * Why the history stops, for the label.
  *
- * Worth distinguishing: "no older data" is the archive's retention edge, while
- * the older publishing format is a limit of this page's decoders and not of
- * what Taskcluster still holds.
+ * Worth distinguishing: "no older data" is the start of the published record,
+ * while the older publishing format is a limit of this page's decoders and not
+ * of what Taskcluster still holds.
  */
-let backfillLimit: 'retention' | 'format' | null = null;
+let backfillLimit: 'start-of-data' | 'format' | null = null;
 /**
  * Harnesses whose history has run out, so they are no longer fetched.
  *
@@ -1875,10 +1876,10 @@ function nextBackfillPushdate(oldest: string): string {
 /**
  * Fetches the previous window per harness and re-stitches the timeline.
  *
- * A failure is not an error banner: the archive keeps roughly seven months and
- * the edge slides forward daily, so "nothing older" is an ordinary answer and
+ * A failure is not an error banner: "nothing older" is an ordinary answer, so
  * the button retires itself rather than complaining. Measured 2026-09-15: the
- * oldest surviving pushdate was 2026-01-31, with 2026-01-30 already a 404.
+ * oldest pushdate that answers is 2026-01-31 and 2026-01-30 is a 404 — the day
+ * this data started being produced, not an expiry, so the floor stays put.
  */
 async function backfillOlderWindow(): Promise<void> {
     if (backfilling || backfillExhausted || oldestPushdate === null || loaded.length === 0) {
@@ -1916,11 +1917,11 @@ async function backfillOlderWindow(): Promise<void> {
                 entry !== null && entry !== 'too-old'
         );
         if (added.length === 0) {
-            // Nothing usable at that pushdate: the far edge of retention, a
-            // day the job did not run, or — going back far enough — the older
-            // published format. All three mean the history stops here.
+            // Nothing usable at that pushdate: the start of the published
+            // record, a day the job did not run, or — going back far enough —
+            // the older published format. All three mean the history stops.
             backfillExhausted = true;
-            backfillLimit = fetched.includes('too-old') ? 'format' : 'retention';
+            backfillLimit = fetched.includes('too-old') ? 'format' : 'start-of-data';
             return;
         }
 
@@ -2119,6 +2120,7 @@ function updateUrlHash(): void {
         days: dates.length,
         open: openTest,
         filters,
+        windowDays: WINDOW_DAYS,
     });
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(state)) {
@@ -2173,8 +2175,45 @@ function loadFromUrl(): void {
             box.checked = filters[key];
         }
     }
+    pendingDays = parseBackfillDays(state);
     // `date` is read and ignored: the page has one window, so an old
     // `#date=2026-08-03` link lands on the 21 days rather than on an error.
+}
+
+/**
+ * The history a shared link asks for, held until the first window is loaded.
+ *
+ * Like `pendingRange`, and for the same reason plus a stronger one: backfilling
+ * needs a loaded window to count back from, and the range in the same hash is
+ * expressed in *absolute day indices*, so it can only be applied once the
+ * timeline is as long as the sender's was.
+ */
+let pendingDays: number | null = null;
+
+/**
+ * Backfills until the timeline covers the days a shared link asked for.
+ *
+ * Sequential rather than parallel: each step's pushdate is derived from the
+ * oldest date currently held, so the fetches genuinely depend on one another.
+ *
+ * Stops on the first step that does not grow the window — the archive's far
+ * end, or the older publishing format — rather than looping. `backfillExhausted`
+ * is the same flag the button reads, so a link asking for more history than
+ * exists lands on everything there is and says so.
+ */
+async function restoreBackfill(): Promise<void> {
+    const wanted = pendingDays;
+    pendingDays = null;
+    if (wanted === null || dates.length === 0) {
+        return;
+    }
+    while (dates.length < wanted && !backfillExhausted) {
+        const before = dates.length;
+        await backfillOlderWindow();
+        if (dates.length <= before) {
+            break;
+        }
+    }
 }
 
 /**
@@ -2286,21 +2325,27 @@ function initializeUI(): void {
                 days: dates.length,
                 open: openTest,
                 filters,
+                windowDays: WINDOW_DAYS,
             }),
-        onHashChange: () => {
+        onHashChange: async () => {
             searchBoxManager?.setNavigating(true);
             const previousFolder = folder;
             loadFromUrl();
-            // Nothing to reload: the hash carries a range, a search and an
-            // expanded row, all computed from the file already in hand. The
-            // folder is in the search string, so changing it is a navigation.
+            // Mostly nothing to reload: the hash's range, search and expanded
+            // row are all computed from the file already in hand, and the
+            // folder is in the search string so changing it is a navigation.
             if (folder !== previousFolder) {
                 present = harnessesWithTests(loaded, folder);
             }
+            // `#days=` is the exception — it asks for data the page does not
+            // have. Only ever *more*: going back to a shorter span keeps the
+            // days already fetched rather than throwing them away, since the
+            // range in the same hash still refers to absolute indices in the
+            // longer timeline.
+            await restoreBackfill();
             render();
             applyPendingRange();
             searchBoxManager?.setNavigating(false);
-            return Promise.resolve();
         },
     });
 
@@ -2343,6 +2388,11 @@ export async function start(): Promise<void> {
     // them into one ranked list is what this page does. `present` then says
     // which of the two actually had tests here, for the heading.
     await loadWindow();
+
+    // Before the range: a shared `#from=`/`#to=` is in absolute day indices,
+    // and backfilling prepends days, so applying the range first would put it
+    // on entirely different dates than the sender saw.
+    await restoreBackfill();
 
     applyPendingRange();
     updateUrlHash();

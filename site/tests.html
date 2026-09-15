@@ -319,19 +319,24 @@
             margin: 4px 0 0 0;
         }
 
-        /* The backfill control, inline in the chart's note. Sized to the note
-           rather than to a form control: it is a quiet affordance next to the
-           sentence explaining the chart, not a primary action, and a 14px
-           button here would out-shout the chart. */
+        /* The backfill control, inline in the heading beside the window it
+           extends. Sized to `.heading-window` next to it rather than to the
+           `<h1>`: it is context, not a title. Bordered rather than a bare
+           link, because it is the one thing in the heading that *acts* — the
+           path input aside — and a plain blue word there reads as a
+           breadcrumb. */
         .backfill-button {
-            font-size: 11px;
+            font-size: 12px;
             font-family: inherit;
+            font-weight: normal;
             color: #0066cc;
             background: none;
             border: 1px solid #d6e4f0;
             border-radius: 3px;
             padding: 1px 6px;
             margin-left: 8px;
+            vertical-align: middle;
+            white-space: nowrap;
             cursor: pointer;
         }
 
@@ -350,7 +355,11 @@
 
         .backfill-note {
             margin-left: 6px;
+            font-size: 12px;
+            font-weight: normal;
             font-style: italic;
+            color: #888;
+            white-space: nowrap;
         }
 
         /* --- the filters, in the controls box ----------------------------- */
@@ -736,7 +745,20 @@
                 <div id="folder-path-dropdown" class="ac-dropdown"></div>
             </span>
             <span class="heading-harness" id="heading-harness"></span>
+            <!--
+              The window, then the control that changes it. It sat under the
+              chart at first, on the reasoning that it only moves the x axis —
+              which was wrong about where a reader looks: "21 days (… to …)" is
+              the statement of how much history is loaded, so the way to load
+              more belongs next to it, not two boxes further down where it took
+              a long time to find.
+            -->
             <span class="heading-window" id="status-text"></span>
+            <button type="button" id="backfill-button" class="backfill-button"
+                    title="Fetch the previous run's aggregate and join it to this window">
+                ← load 20 more days
+            </button>
+            <span class="backfill-note" id="backfill-note"></span>
         </h1>
 
         <!--
@@ -797,17 +819,6 @@
             <p class="chart-note">
                 Click a day to look at it alone, <strong>shift-click</strong> another for the
                 range between them; click the selected day again for the whole window.
-                <!--
-                  Backfill sits under the chart it extends, not up with the
-                  path controls: it changes the x axis and nothing else, and a
-                  reader reaches for it after looking at the shape and wanting
-                  more of it.
-                -->
-                <button type="button" id="backfill-button" class="backfill-button"
-                        title="Fetch the previous run's 21-day aggregate and join it to this window">
-                    ← load 20 more days
-                </button>
-                <span class="backfill-note" id="backfill-note"></span>
             </p>
         </div>
 

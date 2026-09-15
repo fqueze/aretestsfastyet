@@ -1012,6 +1012,16 @@ export interface UrlState {
     open?: string | undefined;
     /** Which issue types are counted, as `encodeFilters` writes them. */
     issues?: string | undefined;
+    /**
+     * How many days of history to load, from `#days=`.
+     *
+     * Absent means the one published window, which is the default. A larger
+     * number means backfill older aggregates until the timeline is at least
+     * this long, so a shared link shows the same span the sender was looking
+     * at — and `from`/`to` are *absolute day indices*, so without this a
+     * shared range would land on entirely different dates.
+     */
+    days?: string | undefined;
 }
 
 /** The value `date` takes for the 21-day window, matching `issues.html`. */
@@ -1052,6 +1062,7 @@ export function readUrlState(hash: URLSearchParams, search?: URLSearchParams): U
         to: read(hash, 'to'),
         open: read(hash, 'open'),
         issues: read(hash, 'issues'),
+        days: read(hash, 'days'),
     };
 }
 
@@ -1090,15 +1101,51 @@ export function urlStateOf(options: {
     days: number;
     open: string | null;
     filters: IssueFilters;
+    /**
+     * The days one published aggregate covers, so a timeline that has not been
+     * backfilled writes no `days=` at all. Omitted means "do not mention it",
+     * which is what keeps an ordinary URL clean.
+     */
+    windowDays?: number | undefined;
 }): Record<string, string> {
     const whole = isWholeWindow(options.range, options.days);
+    const window = options.windowDays;
     return {
         q: options.search.trim(),
         from: whole || options.range === null ? '' : String(options.range.from),
         to: whole || options.range === null ? '' : String(options.range.to),
         open: options.open ?? '',
         issues: encodeFilters(options.filters),
+        // Only once it is more than one window's worth: the default needs no
+        // saying, and a `days=21` on every link would be noise.
+        days:
+            window === undefined || options.days <= window ? '' : String(options.days),
     };
 }
+
+/**
+ * How many days a shared link asks for, or `null` for the default window.
+ *
+ * Clamped to something a page can actually fetch: the value goes into a loop
+ * that fetches an aggregate per 20 days, so a hand-edited `#days=99999` would
+ * otherwise sit there downloading until it ran out of published runs. The
+ * ceiling is past the whole published record — which starts 2026-01-31 — so it
+ * bounds the loop without bounding anything a reader could legitimately ask
+ * for. Worth raising as the record grows.
+ */
+export function parseBackfillDays(state: UrlState): number | null {
+    const raw = state.days;
+    if (raw === undefined || raw === '') {
+        return null;
+    }
+    const days = Number.parseInt(raw, 10);
+    if (!Number.isFinite(days) || days <= 0) {
+        return null;
+    }
+    return Math.min(days, MAX_BACKFILL_DAYS);
+}
+
+/** The ceiling on `#days=`. Past the whole published archive. */
+export const MAX_BACKFILL_DAYS = 400;
 
 export type { IssueRow, TestIssue };
