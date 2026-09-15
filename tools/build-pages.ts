@@ -36,7 +36,7 @@
  * that file for the bug that forced the second half of that.
  */
 
-import { build } from 'esbuild';
+import { build, transformSync } from 'esbuild';
 import { access, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -214,10 +214,23 @@ async function buildPage(name: string): Promise<BuiltPage> {
         // both dead code and — when the round-trip guard below undid it — a
         // build failure on any page whose source contains the literal. What is
         // left is the check that this holds, in `checkSafe`.
-        output = output.replace(
-            match[0],
-            `<script type="module">\n${workerPrelude}${bundles[index]!.code}\n</script>`
-        );
+        //
+        // **The replacement is a function, and that is load-bearing.** Passing
+        // the bundle as a *string* makes `String.replace` read `$&`, `` $` ``,
+        // `$'` and `$1` in it as replacement patterns: a page whose code
+        // contained `'\\$&'` — an ordinary thing to write, since it is how a
+        // regex replacement refers to the whole match — had the `<script>` tag
+        // itself substituted into that string literal, and the built page threw
+        // `SyntaxError: missing ) after argument list` at load. A function
+        // replacement is inserted verbatim, with no pattern expansion.
+        //
+        // `checkSafe` did not catch it: it wraps the bundle in an *async*
+        // arrow before parsing, and the corruption happened to leave something
+        // that parsed in that position while failing as a module. It now
+        // parses the emitted script as written, below.
+        const replacement =
+            `<script type="module">\n${workerPrelude}${bundles[index]!.code}\n</script>`;
+        output = output.replace(match[0], () => replacement);
         inlined++;
     }
 
@@ -242,6 +255,8 @@ async function buildPage(name: string): Promise<BuiltPage> {
     // to the sibling check too: a page whose data file is missing is broken,
     // and must not overwrite the working copy of itself.
     checkSafe(name, [...bundles, ...workerSources].map((bundle) => bundle.code));
+    // And again on the spliced result, which is what actually gets served.
+    checkSpliced(name, output);
     const assets = await resolveAssets(name, output, sources);
     await writeFile(join(outDir, name), output);
     await copyAssets(assets);
@@ -346,6 +361,50 @@ async function copyAssets(assets: readonly SiblingAsset[]): Promise<void> {
  *    page whose source contained the literal string.
  * 2. **The bundle parses.** Catches a corrupt splice from any other cause.
  */
+function checkSpliced(name: string, html: string): void {
+    // Every inline module script in the built page, checked **as it will be
+    // served**. `checkSafe` runs on the bundles before they are spliced in, so
+    // by construction it cannot see a splice that corrupted one — which is
+    // exactly the bug that shipped: a `'\\$&'` in a page's own source made
+    // `String.replace` substitute the matched `<script>` tag into a string
+    // literal, and the page threw `SyntaxError` at load with every test and the
+    // build itself green.
+    const scripts = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)];
+    if (scripts.length === 0) {
+        throw new Error(`${name}: no inline module script in the built page`);
+    }
+    for (const [index, script] of scripts.entries()) {
+        const code = script[1]!;
+        try {
+            // Parsed the way the browser will treat it: as a module, not as a
+            // function body. That distinction is the point — `new Function`
+            // wraps its argument, which both changes what is legal (`import` is
+            // a syntax error in a function body and fine in a module) and is
+            // what let the corrupted script through.
+            parseAsModule(code);
+        } catch (error) {
+            throw new Error(
+                `${name}: inline script ${index + 1} of ${scripts.length} does not parse as ` +
+                    `served: ${String(error)}`
+            );
+        }
+    }
+}
+
+/**
+ * Parses source as an ES module, throwing on a syntax error.
+ *
+ * Done with esbuild rather than with `new Function`, which builds a *function
+ * body* and so asks the wrong question: `import` is illegal there and legal in
+ * a module, and a corruption can leave something that parses as a function body
+ * while failing as a module — which is precisely what happened. esbuild is
+ * already a dependency and is the thing that produced the code, and it parses
+ * without executing.
+ */
+function parseAsModule(code: string): void {
+    transformSync(code, { loader: 'js', format: 'esm' });
+}
+
 function checkSafe(name: string, bundles: readonly string[]): void {
     for (const bundle of bundles) {
         // Deliberately assembled so this source file does not itself contain

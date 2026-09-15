@@ -29,7 +29,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,85 @@ test('the copied data file is the committed one, byte for byte', () => {
         readFileSync(join(ROOT, BACKFILL)),
         'the build copied something other than the committed backfill'
     );
+});
+
+// =========================================================================
+// The splice
+// =========================================================================
+
+/**
+ * Every built page's inline script must parse **as a module**.
+ *
+ * ## The bug this exists for
+ *
+ * The build splices the bundle into the page with `String.replace(match, code)`,
+ * and a *string* replacement is scanned for replacement patterns: `$&`, `` $` ``,
+ * `$'` and `$1`. `site/tests.ts` contained `value.replace(/["\\]/g, '\\$&')` —
+ * an ordinary thing to write, since `$&` is how a regex replacement refers to
+ * the whole match — so the build substituted the matched `<script>` **tag**
+ * into that string literal. The deployed page threw
+ * `SyntaxError: missing ) after argument list` and rendered nothing.
+ *
+ * Nothing caught it. `npm run pages` reported success, `npm test` was green,
+ * and the page tests import the `.ts` sources directly and so never see the
+ * built artefact at all. It was found by loading the page in a browser.
+ *
+ * `checkSafe` could not have caught it either, for two reasons worth keeping in
+ * mind: it runs on the bundles *before* they are spliced, and it parses them
+ * wrapped in an async arrow — a function body, where the corrupted text
+ * happened to be legal.
+ *
+ * So this asserts the property that actually matters, on the real output: what
+ * is between `<script type="module">` and `</script>` in each built page is a
+ * parseable module. A replacement-pattern corruption, a truncation at an
+ * unescaped closing tag, or anything else that mangles the splice fails here.
+ */
+test('every built page inlines a script that parses as a module', async () => {
+    const { transformSync } = await import('esbuild');
+    const dir = builtPages();
+    const pages = readdirSync(dir).filter((name) => name.endsWith('.html'));
+    assert.ok(pages.length > 0, 'the build produced pages to check');
+
+    for (const name of pages) {
+        const html = readFileSync(join(dir, name), 'utf8');
+        const scripts = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)];
+        assert.ok(scripts.length > 0, `${name} has no inline module script`);
+        for (const script of scripts) {
+            // esbuild, not `new Function`: the latter builds a function body,
+            // which is a different grammar and is what let the corruption
+            // through. Parsing as `esm` is the goal the browser uses.
+            transformSync(script[1]!, { loader: 'js', format: 'esm' });
+        }
+    }
+});
+
+/**
+ * And the specific corruption, reproduced in isolation.
+ *
+ * The test above would catch a regression only while some page happens to
+ * contain a `$`-pattern. This one pins the mechanism directly, so the guard
+ * survives the day `folder.ts`'s `cssEscape` is rewritten.
+ */
+test('a $-pattern in a page source survives the splice verbatim', () => {
+    const tag = '<script type="module" src="./x.ts"></script>';
+    const source = `<html><body>${tag}</body></html>`;
+    // What a bundle containing `'\\$&'` looks like.
+    const bundle = String.raw`const e = (v) => v.replace(/["\]/g, "\$&");`;
+
+    // The bug: a string replacement expands `$&` to the matched tag.
+    const broken = source.replace(tag, `<script type="module">\n${bundle}\n</script>`);
+    assert.ok(
+        broken.includes('src="./x.ts"'),
+        'a string replacement expands $& to the whole match — this is the bug'
+    );
+
+    // The fix: a function replacement is inserted as written.
+    const fixed = source.replace(tag, () => `<script type="module">\n${bundle}\n</script>`);
+    assert.ok(
+        !fixed.includes('src="./x.ts"'),
+        'a function replacement does not expand $&'
+    );
+    assert.ok(fixed.includes(String.raw`"\$&"`), 'the bundle is spliced in verbatim');
 });
 
 test('the built page still requests the file by the name that was copied', () => {
