@@ -241,13 +241,69 @@ const INTERMITTENT_PAGE_HTML = `<!DOCTYPE html><html><body>
 </div>
 </body></html>`;
 
+/**
+ * `site/tests.html`'s controls, by the ids that page's controller looks up.
+ *
+ * Copied from that page's markup and trimmed to what the controller and the
+ * shared scripts reach for, as `ISSUES_PAGE_HTML` is — so an id renamed on the
+ * page and not here fails as a null dereference in `start()` rather than
+ * passing against a template this file invented.
+ *
+ * `#timeline-canvas` is here because the controller destroys and rebuilds a
+ * chart on it, which is the seam `chartJs` records.
+ */
+const TESTS_PAGE_HTML = `<!DOCTYPE html><html><body>
+<div class="container">
+<h1 id="folder-heading">
+  <span class="heading-label">Tests in:</span>
+  <span class="heading-folder">
+    <input type="text" id="folder-path-input" class="heading-folder-input">
+    <div id="folder-path-dropdown" class="ac-dropdown"></div>
+  </span>
+  <span class="heading-harness" id="heading-harness"></span>
+  <span class="heading-window" id="status-text"></span>
+</h1>
+<div class="controls">
+  <div class="controls-filters">
+    <div class="issue-type-filters">
+      <label class="filter-checkbox"><input type="checkbox" id="filter-failures" checked> Failures</label>
+      <label class="filter-checkbox"><input type="checkbox" id="filter-timeouts" checked> Timeouts</label>
+      <label class="filter-checkbox"><input type="checkbox" id="filter-crashes" checked> Crashes</label>
+      <label class="filter-checkbox"><input type="checkbox" id="filter-skips" checked> Skips</label>
+    </div>
+    <div class="search-container">
+      <input type="text" class="search-box" id="search-box">
+      <button class="search-clear" id="search-clear">&times;</button>
+    </div>
+  </div>
+</div>
+<div id="error" class="error" style="display: none;"></div>
+<div id="folder-search" style="display: none;"></div>
+<div class="chart-box" id="charts-box">
+  <div class="chart-click-area">
+    <div class="chart-stack" id="issue-chart-area" style="display: none;">
+      <div class="chart-area"><canvas id="issue-chart-canvas"></canvas></div>
+    </div>
+    <div class="chart-stack" id="timeline-box">
+      <div class="chart-area"><canvas id="timeline-canvas"></canvas></div>
+    </div>
+  </div>
+  <p class="chart-note">Click a day to look at it alone.</p>
+</div>
+<div id="scope-line"></div>
+<div id="worklist-container" style="display: none;"><div id="worklist-table"></div></div>
+<div id="no-data" class="no-data" style="display: none;">No data available.</div>
+</div>
+</body></html>`;
+
 /** Which page's markup a harness should be built with. */
-export type PageKind = 'crashes' | 'issues' | 'intermittent';
+export type PageKind = 'crashes' | 'issues' | 'intermittent' | 'tests';
 
 const MARKUP: Record<PageKind, string> = {
     crashes: PAGE_HTML,
     issues: ISSUES_PAGE_HTML,
     intermittent: INTERMITTENT_PAGE_HTML,
+    tests: TESTS_PAGE_HTML,
 };
 
 /** Where each page's rendered list goes. */
@@ -255,6 +311,7 @@ const CONTENT_ID: Record<PageKind, string> = {
     crashes: 'content',
     issues: 'tree-table',
     intermittent: 'ranking-table',
+    tests: 'worklist-table',
 };
 
 /** One recorded `createRateChart` call. */
@@ -305,6 +362,8 @@ export interface Harness {
     charts: ChartCall[];
     /** Every `new Chart(…)` since the harness was built, in order. */
     chartJs: ChartJsCall[];
+    /** Plugins the page registered with `Chart.register`. */
+    chartPlugins: unknown[];
     /** Files `fetchData` will serve, by the name the controller asks for. */
     files: Map<string, unknown>;
     /** Names `fetchData` was asked for, in order, including the 404s. */
@@ -418,6 +477,8 @@ export function setupPage(
     // before drawing over it and a stub that always returned `undefined` would
     // let a page that never destroyed anything pass.
     const liveCharts = new Map<unknown, { destroy(): void; destroyed: boolean }>();
+    /** Plugins the page registered, so a test can assert one was. */
+    const registeredPlugins: unknown[] = [];
     class FakeChart {
         constructor(canvas: HTMLCanvasElement, config: Record<string, unknown>) {
             const data = config['data'] as
@@ -439,10 +500,24 @@ export function setupPage(
             const found = liveCharts.get(canvas);
             return found === undefined || found.destroyed ? undefined : found;
         }
+        /**
+         * Records a registered plugin rather than running it.
+         *
+         * `site/tests.ts` registers a `beforeDatasetsDraw` plugin to paint the
+         * selected day range as a band behind the bars — the treatment
+         * `test.html` uses. The plugin needs a 2D context, which jsdom has not,
+         * but its *registration* has to succeed: without this the page threw
+         * `Chart.register is not a function` and reported "Error loading data",
+         * having already merged both harnesses correctly.
+         */
+        static register(plugin: unknown): void {
+            registeredPlugins.push(plugin);
+        }
     }
     (dom.window as unknown as Record<string, unknown>)['Chart'] = FakeChart;
 
     return {
+        chartPlugins: registeredPlugins,
         window: dom.window,
         document: dom.window.document,
         content: dom.window.document.getElementById(CONTENT_ID[page])!,

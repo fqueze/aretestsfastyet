@@ -105,6 +105,19 @@
             color: #f60;
         }
 
+        /* A directory row's name, linking to that folder's burndown in the
+           source-tree view. The link colour only on hover, so a row still
+           reads as a name rather than as a link. */
+        .folder-link {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .folder-link:hover {
+            color: #0b5ed7;
+            text-decoration: underline;
+        }
+
         .folder-icon, .test-icon {
             margin-right: 5px;
         }

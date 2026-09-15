@@ -79,6 +79,20 @@
             margin-top: 4px;
         }
 
+        /*
+         * The path's folder segments, each a link to that folder's burndown.
+         *
+         * They inherit `.test-path-line a`'s blue rather than overriding it:
+         * an earlier version set `color: inherit` so the line would "read as a
+         * path", which instead made every segment the container's #555 and so
+         * they read as *disabled* next to the still-blue filename. A link that
+         * works should look like the page's other links.
+         */
+        .test-path-line .path-sep {
+            color: #aaa;
+            margin: 0 1px;
+        }
+
         .harness-badge {
             display: inline-block;
             padding: 2px 8px;

@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tests by path</title>
+    <script src="fetch-utils.js"></script>
+    <script src="dashboards.js"></script>
+    <script src="common-ui.js"></script>
+    <script src="common-links.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="icon" href="favicon-orange.svg">
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        /* --- controls ---------------------------------------------------- */
+
+        /* Filters only: the window moved up to the heading line, which is
+           what freed this row for them. */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .controls-filters {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            flex-wrap: wrap;
+            width: 100%;
+        }
+
+        .date-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .search-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .search-box {
+            padding: 8px 30px 8px 12px;
+            width: 300px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #999;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-clear:hover { color: #666; }
+
+        /* --- the breadcrumb ---------------------------------------------- */
+
+        /* --- the heading, which is the breadcrumb -------------------------- */
+
+        /*
+         * The full folder path *is* the `<h1>`.
+         *
+         * It used to be a heading reading "test — Mochitest Folder Burndown"
+         * with the path on a second line below it: the leaf name alone says
+         * nothing about which `test` directory this is, and the rest restated
+         * the switcher beside it. The path is the one thing worth the widest
+         * line on the page.
+         */
+        h1 {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        /*
+         * The label, the path and the input are all **one size**.
+         *
+         * They were 18px, 22px and the `<h1>`'s default respectively, so the
+         * three parts of one line disagreed and the line jumped as JS replaced
+         * the placeholder. The size is set on the `<h1>` and inherited, which
+         * is what makes it impossible for them to drift apart again.
+         */
+        h1#folder-heading {
+            font-size: 20px;
+            line-height: 1.4;
+            min-height: 1.4em;
+        }
+
+        .heading-label {
+            color: #555;
+            font-weight: normal;
+        }
+
+        /*
+         * The path is an input, so it can be typed into.
+         *
+         * Styled to read as the heading it replaces — no border until hovered
+         * or focused — because it *is* the title most of the time and only
+         * becomes a control when a reader reaches for it.
+         */
+        .heading-folder {
+            position: relative;
+            display: inline-block;
+        }
+
+        /*
+         * **One fixed width.** It used to be sized to its content in `ch`,
+         * which meant the field grew from its empty width to the path's as the
+         * data arrived — the last piece of the heading that still moved on
+         * load. Wide enough for a typical path, and paths longer than it
+         * scroll inside the field rather than reflowing the line.
+         */
+        .heading-folder-input {
+            font-family: monospace;
+            font-size: inherit;
+            font-weight: bold;
+            color: #222;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            background: transparent;
+            padding: 1px 4px;
+            width: 44ch;
+            max-width: 70vw;
+        }
+
+        .heading-folder-input:hover {
+            border-color: #ddd;
+            background: #fbfbfb;
+        }
+
+        /* Visible when empty: with no path loaded the hint below says "type a
+           path above", which needs something to point at. */
+        .heading-folder-input:placeholder-shown {
+            border-color: #ccc;
+            background: white;
+        }
+
+        .heading-folder-input::placeholder {
+            color: #bbb;
+            font-weight: normal;
+        }
+
+        .heading-folder-input:focus {
+            border-color: #007bff;
+            background: white;
+            outline: none;
+        }
+
+        /* Shared by the heading's input and the no-folder search form. */
+        .ac-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            min-width: 420px;
+            max-height: 300px;
+            overflow-y: auto;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 0 0 4px 4px;
+            z-index: 20;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        .crumb-path {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        /*
+         * **One link colour for the whole table**, and the visited state kept.
+         *
+         * The crumb links carried a hardcoded `#007bff` while the test-name
+         * links had no rule at all and so used the browser default — two
+         * visibly different blues in the same table, and the hardcoded one
+         * also overrode `:visited`, which on a page whose whole job is working
+         * through a list of tests is the state that tells you where you have
+         * been.
+         *
+         * So the colour is declared once, for every link in the worklist and
+         * in the total row's path, and `:visited` is left to the browser.
+         */
+        #worklist-table a:not(.action-button) {
+            color: #0d6efd;
+            text-decoration: none;
+        }
+
+        #worklist-table a:not(.action-button):visited {
+            color: #6f42c1;
+        }
+
+        #worklist-table a:not(.action-button):hover {
+            text-decoration: underline;
+        }
+
+        /* No surrounding space: a path's separator is tight against its
+           segments. */
+        .crumb-sep {
+            color: #bbb;
+            margin: 0 1px;
+            font-weight: normal;
+        }
+
+        .crumb-current { color: #222; }
+
+        /* The Searchfox link rides at the heading's text size, not the
+           heading's weight. */
+        .crumb-path .action-button {
+            font-size: 14px;
+            vertical-align: middle;
+            opacity: 1;
+        }
+
+        /* The window, on the heading line and deliberately small: it is
+           context, not a heading. */
+        h1 .heading-window {
+            font-size: 12px; /* Deliberately small: context, not heading. */
+            font-weight: normal;
+            color: #888;
+            white-space: nowrap;
+        }
+
+        h1 .heading-harness,
+        h1 .harness-switcher {
+            font-size: 13px;
+            font-weight: normal;
+            color: #666;
+            vertical-align: middle;
+        }
+
+        h1 .harness-switcher {
+            font-family: inherit;
+            padding: 2px 4px;
+        }
+
+        /* The harness badge on a row, when a folder holds both harnesses.
+           Same palette as test.html's header badge, so the two pages name the
+           harnesses the same way. */
+        .harness-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+
+        .harness-xpcshell {
+            background-color: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .harness-mochitest {
+            background-color: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        /* The no-path hint, in place of the charts and the table. The rest of
+           the page — heading, input, controls — is unchanged, so the two
+           states are one layout. */
+        .path-prompt {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin: 10px 0;
+            font-size: 14px;
+            color: #555;
+        }
+
+        /* --- the charts --------------------------------------------------- */
+
+        .chart-box {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 8px 16px 6px 16px;
+            margin: 10px 0;
+        }
+
+        /* The click target for the day selection: both plots, and nothing
+           else. A click on the note below is not a day. */
+        .chart-click-area { cursor: pointer; }
+
+        .chart-stack + .chart-stack { margin-top: 4px; }
+
+        .chart-area { height: 150px; }
+
+        .chart-note {
+            font-size: 11px;
+            color: #999;
+            margin: 4px 0 0 0;
+        }
+
+        /* --- the filters, in the controls box ----------------------------- */
+
+        .issue-type-filters {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            color: #333;
+        }
+
+        .filter-legend { color: #666; }
+
+        /*
+         * Each label is its own tooltip: the sentence that used to sit beside
+         * every checkbox ("Tests that ran but failed", and three more) is a
+         * `title`, which is where a description belongs once the reader can
+         * see what the control is.
+         */
+        .filter-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: help;
+            white-space: nowrap;
+            border-bottom: 1px dotted #ccc;
+        }
+
+        .filter-checkbox input[type="checkbox"] {
+            cursor: pointer;
+            margin: 0;
+        }
+
+        /* --- the worklist ------------------------------------------------ */
+
+        #scope-line {
+            font-size: 13px;
+            color: #555;
+            margin: 14px 0 8px 0;
+            font-weight: 600;
+        }
+
+        /*
+         * The escape from a selected range, as a link on the line that already
+         * states it.
+         *
+         * It was a "Whole window" button above the charts, beside a second copy
+         * of the range — two rows spent restating what this line says. A link
+         * here reads as part of the sentence: "…09-08 → 09-11 (4 days) · see
+         * all 21 days".
+         */
+        .scope-reset {
+            font-weight: normal;
+            color: #007bff;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: inherit;
+            font-family: inherit;
+            text-decoration: none;
+        }
+
+        .scope-reset:hover { text-decoration: underline; }
+
+        #worklist-table {
+            width: 100%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .tree-row {
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            min-height: 28px;
+        }
+
+        .tree-row:hover { background-color: #f5f5f5; }
+
+        .tree-row.expanded { background-color: #f0f8ff; }
+
+        .tree-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .tree-stats {
+            display: flex;
+            gap: 30px;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            text-align: right;
+            min-width: 60px;
+        }
+
+        /* The header keeps its labels: they are the column names. */
+        .sort-header .stat-label {
+            position: static;
+            width: auto;
+            height: auto;
+            margin: 0;
+            overflow: visible;
+            clip-path: none;
+        }
+
+        /*
+         * The per-row column labels are hidden, not omitted.
+         *
+         * `issues.html` prints a label under every number because it has no
+         * column header to read them off. This page has a sticky header, so
+         * repeating "RUNS / ISSUE % / SKIPS …" on all 126 rows says nothing the
+         * header does not and triples the visual weight of the numbers it sits
+         * under — it read as noise in a browser on
+         * `browser/components/urlbar/tests/unit`.
+         *
+         * Kept in the DOM rather than dropped from the renderer so a cell is
+         * still self-describing to a screen reader and to anything reading the
+         * markup, which is also what lets the tests assert a cell by its label.
+         */
+        .stat-label {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        .stat-value { font-weight: bold; color: #333; }
+        .stat-value.fail { color: #d00; }
+        .stat-value.orange { color: #ff8c00; }
+        .stat-value.yellow { color: #c9a500; }
+        .stat-value.skip, .stat-value.zero { color: #888; }
+        .stat-value.timeout { color: #f60; }
+        .stat-value.muted { color: #888; font-weight: normal; }
+        .stat-value.zero { color: #ccc; font-weight: normal; }
+
+        .test-icon { margin-right: 5px; flex-shrink: 0; }
+        .test-icon::before { content: "\1F4C4 "; }
+
+        .folder-count {
+            color: #999;
+            font-size: 11px;
+            margin-left: 8px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .sort-header {
+            background: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            cursor: default;
+        }
+
+        .sort-header:hover { background: #f8f9fa; }
+
+        .sort-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 10px;
+            margin: 0 -10px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            text-align: right;
+            width: 100%;
+            white-space: nowrap;
+        }
+
+        .sort-button.is-name { justify-content: flex-start; }
+
+        .sort-button:hover { background-color: #e9ecef; }
+        .sort-button.active { color: #007bff; background-color: #e7f3ff; }
+
+        .sort-arrow {
+            font-size: 10px;
+            margin-right: 2px;
+            width: 8px;
+            display: inline-block;
+            text-align: left;
+        }
+
+        .total-row {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #ddd;
+            font-weight: bold;
+            cursor: default;
+        }
+
+        .total-row:hover { background-color: #f8f9fa; }
+        .total-row .tree-name { color: #495057; }
+
+        .action-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 6px;
+            font-size: 11px;
+            color: #666;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+            opacity: 0;
+            vertical-align: middle;
+            text-decoration: none;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        /* The 6px separates the run of buttons from the test path in front of
+           it, not the buttons from each other. Only the first keeps it. */
+        .action-button + .action-button { margin-left: 0; }
+
+        .tree-row:hover .action-button,
+        #folder-path .action-button { opacity: 1; }
+
+        .action-button:hover { background-color: #e9ecef; color: #333; }
+        .action-button:active { background-color: #007bff; color: white; }
+
+        /* --- the expanded test ------------------------------------------- */
+
+        .issue-details-row {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #eee;
+            padding: 15px 20px;
+        }
+
+        .issue-details-content {
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .issue-empty {
+            margin: 0;
+            color: #555;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .issue-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+            transition: background-color 0.2s;
+        }
+
+        .issue-item.has-runs { cursor: pointer; }
+        .issue-item:hover { background-color: #e9ecef; }
+        .issue-block:last-child .issue-item,
+        .issue-item:last-child { border-bottom: none; }
+
+        .issue-count {
+            font-weight: bold;
+            margin-right: 10px;
+            min-width: 30px;
+            text-align: right;
+            flex-shrink: 0;
+            color: #333;
+        }
+
+        .issue-badge {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-right: 10px;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+
+        .badge-skip { background-color: #6c757d; color: #fff; }
+        .badge-fail { background-color: #ff8c00; color: #fff; }
+        .badge-crash { background-color: #dc3545; color: #fff; }
+        .badge-timeout { background-color: #ffc107; color: #000; }
+
+        .issue-message {
+            flex: 1;
+            color: #333;
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        .issue-runs {
+            margin-left: 50px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .issue-runs table { border-spacing: 0; }
+
+        .issue-runs td { padding-top: 3px; padding-bottom: 3px; }
+
+        .issue-runs .view-links {
+            padding-left: 20px;
+            white-space: nowrap;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .issue-runs a { text-decoration: none; }
+        .issue-runs a:hover { text-decoration: underline; }
+
+        .issue-runs .loading {
+            color: #999;
+            font-style: italic;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            background: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!--
+          The heading's **shape** is here, so nothing about it moves once the
+          data lands: the label, an input at its final size, and empty spans
+          for the harnesses and the window. `renderHeading` fills the values.
+
+          Two earlier versions flickered. The first put a "Folder Burndown"
+          placeholder here, drawn at the `<h1>`'s own ~32px and then replaced
+          by 20px parts. The second left the `<h1>` empty but still called
+          `common-ui.js`'s `initHarnessSwitcher`, which writes its own dropdown
+          and "<harness> <suffix>" text into it before this page's first render
+          — so the heading flashed a dropdown and a title it does not use.
+        -->
+        <h1 id="folder-heading">
+            <span class="heading-label">Tests in:</span>
+            <span class="heading-folder">
+                <input type="text" id="folder-path-input" class="heading-folder-input"
+                       autocomplete="off" spellcheck="false" aria-label="Test path"
+                       placeholder="a/path/to/tests"
+                       title="Type a path to go there; completion offers every folder with tests">
+                <div id="folder-path-dropdown" class="ac-dropdown"></div>
+            </span>
+            <span class="heading-harness" id="heading-harness"></span>
+            <span class="heading-window" id="status-text"></span>
+        </h1>
+
+        <!--
+          No date selector and no single-day toggle.
+          This page exists to show how a folder changes *over time*, so a
+          single day is not one of its views: the timeline is the control, and
+          a range on it answers "since the fixes landed" in a way one day
+          cannot. The window is stated in the status text.
+        -->
+        <!--
+          One box for everything that narrows the list: the name filter and the
+          four issue-type checkboxes. They were in a separate bar below the
+          charts for three revisions; both controls answer "which rows do I
+          want", so they belong together and on one line.
+        -->
+        <div class="controls">
+            <div class="controls-filters">
+                <div class="issue-type-filters">
+                    <span class="filter-legend">Count as issues:</span>
+                    <label class="filter-checkbox" title="Tests that ran but failed.">
+                        <input type="checkbox" id="filter-failures" checked> Failures
+                    </label>
+                    <label class="filter-checkbox" title="Tests that exceeded their time limit and didn't finish.">
+                        <input type="checkbox" id="filter-timeouts" checked> Timeouts
+                    </label>
+                    <label class="filter-checkbox" title="Tests that caused a process to crash.">
+                        <input type="checkbox" id="filter-crashes" checked> Crashes
+                    </label>
+                    <label class="filter-checkbox" title="skip-if: tests that didn't run because they are known to be unreliable on some platforms or configurations. Tests annotated run-if are explicitly platform-specific and are not counted as skipped when they don't run elsewhere.">
+                        <input type="checkbox" id="filter-skips" checked> Skips
+                    </label>
+                </div>
+                <div class="search-container">
+                    <input type="text" class="search-box" id="search-box" placeholder="Filter by test name… (f)">
+                    <button class="search-clear" id="search-clear" title="Clear filter">&times;</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <!--
+          Both charts in one box, sharing an x axis and one click target.
+          Neither carries a title: what each one counts is on its y-axis
+          legend ("Issues" / "Tests"), whose tooltip is the sentence the title
+          used to spell out. Two title rows for two 150px plots was a third of
+          the box spent on labels.
+        -->
+        <div class="chart-box" id="charts-box">
+            <div class="chart-click-area">
+                <div class="chart-stack" id="issue-chart-area" style="display: none;">
+                    <div class="chart-area"><canvas id="issue-chart-canvas"></canvas></div>
+                </div>
+                <div class="chart-stack" id="timeline-box">
+                    <div class="chart-area"><canvas id="timeline-canvas"></canvas></div>
+                </div>
+            </div>
+            <p class="chart-note">
+                Click a day to look at it alone, <strong>shift-click</strong> another for the
+                range between them; click the selected day again for the whole window.
+            </p>
+        </div>
+
+        <!--
+          The no-path hint goes *here*, where the charts and the table are —
+          not above the controls, which is where it used to sit and which
+          pushed the whole control row 67px down, so the two states did not
+          line up.
+        -->
+        <div id="folder-search" style="display: none;"></div>
+
+        <div id="scope-line"></div>
+
+        <div id="worklist-container" style="display: none;">
+            <div id="worklist-table"></div>
+        </div>
+
+        <div id="no-data" class="no-data" style="display: none;">
+            No data available.
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script type="module" src="./tests-main.ts"></script>
+</body>
+</html>

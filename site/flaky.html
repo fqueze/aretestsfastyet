@@ -32,7 +32,7 @@
 
         /* Flaky is orange, not red: it is a nuisance to burn down rather than
            something broken, and red is reserved for that on these dashboards. */
-        .headline-tile.is-flaky { border-left-color: #e8834a; }
+        .headline-tile.is-flaky { border-left-color: #ff8c00; }
         .headline-tile.is-stable { border-left-color: #5cb85c; }
         .headline-tile.is-skipped { border-left-color: #9b9b9b; }
 
@@ -289,7 +289,7 @@
         .folder-row.band-none { border-left-color: #d7d7d7; }
         .folder-row.band-low { border-left-color: #9ccc9c; background-color: #f6fbf6; }
         .folder-row.band-medium { border-left-color: #f0c674; background-color: #fffbf2; }
-        .folder-row.band-high { border-left-color: #e8834a; background-color: #fff6f0; }
+        .folder-row.band-high { border-left-color: #ff8c00; background-color: #fff6f0; }
         .folder-row.band-severe { border-left-color: #c25a16; background-color: #fdeee3; }
 
         .folder-row.band-low:hover { background-color: #eef7ee; }
@@ -373,7 +373,7 @@
             background: #eee;
         }
 
-        .folder-bar-part.is-flaky { background-color: #e8834a; }
+        .folder-bar-part.is-flaky { background-color: #ff8c00; }
         .folder-bar-part.is-stable { background-color: #5cb85c; }
         .folder-bar-part.is-skipped { background-color: #bdbdbd; }
 
@@ -422,6 +422,20 @@
             color: #0b5ed7;
             text-decoration: none;
         }
+
+        /* A folder name in the table, linking to its tests. The page's link
+           blue only on hover, so the column still reads as a list of folders
+           rather than of links. */
+        .folder-link {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .folder-link:hover {
+            color: #0b5ed7;
+            text-decoration: underline;
+        }
+
 
         .test-link:hover { text-decoration: underline; }
 
@@ -536,7 +550,7 @@
                 <button id="historical-button" class="historical-button">Show Last 21 Days</button>
             </div>
             <div class="search-container">
-                <input type="text" class="search-box" id="search-box" placeholder="Filter folders...">
+                <input type="text" class="search-box" id="search-box" placeholder="Filter folders… (f)">
                 <button class="search-clear" id="search-clear" title="Clear search">&times;</button>
             </div>
         </div>

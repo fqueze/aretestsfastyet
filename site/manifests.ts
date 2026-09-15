@@ -217,7 +217,7 @@
  */
 
 import type { ManifestsFile } from '../lib/formats/manifests.ts';
-import { el, noData } from './drilldown-render.ts';
+import { bindFilterShortcut, el, noData } from './drilldown-render.ts';
 import {
     type Filters,
     type JobStats,
@@ -752,6 +752,11 @@ function wire(): void {
     for (const input of [elements.manifestSearch, elements.jobSearch]) {
         input.addEventListener('input', onFiltersChanged);
     }
+    // `f` focuses the manifest filter — the same shortcut the other dashboards
+    // got through `searchBox()`, which this page cannot use because it has two
+    // filter inputs in markup of its own. The manifest box and not the job one
+    // because it is the page's primary filter; Escape leaves either.
+    bindFilterShortcut('manifestSearch');
     elements.clearManifest.addEventListener('click', () => {
         elements.manifestSearch.value = '';
         onFiltersChanged();

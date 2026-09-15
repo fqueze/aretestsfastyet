@@ -129,52 +129,19 @@ import {
  * comparator's rate (`:2045-2048`) — and it changes which tests appear as child
  * rows, because a test is listed only when `issueCount > 0` (`:2017`).
  */
-export interface IssueFilters {
-    failures: boolean;
-    timeouts: boolean;
-    crashes: boolean;
-    skips: boolean;
-}
+// The four checkboxes and their URL encoding live in `site/issue-filters.ts`,
+// shared with `tests.html`. Imported for this file's own use, and re-exported
+// so this page's consumers and tests keep importing them from here.
+import { type IssueFilters, typesOf } from './issue-filters.ts';
 
-/** All four on, which is how the page loads. `old/issues.html:626-638`. */
-export const ALL_FILTERS: IssueFilters = {
-    failures: true,
-    timeouts: true,
-    crashes: true,
-    skips: true,
-};
-
-/** The checkbox element ids, in the page's order. `old/issues.html:626-638`. */
-export const FILTER_IDS: readonly (readonly [keyof IssueFilters, string])[] = [
-    ['failures', 'filter-failures'],
-    ['timeouts', 'filter-timeouts'],
-    ['crashes', 'filter-crashes'],
-    ['skips', 'filter-skips'],
-];
-
-/**
- * The filters as `lib/query/issues.ts`'s type list.
- *
- * The two vocabularies differ — the page says `failures`, the library says
- * `fail` — and this is the one place that mapping lives, so the page and the
- * CLI cannot drift into counting different things.
- */
-export function typesOf(filters: IssueFilters): IssueType[] {
-    const types: IssueType[] = [];
-    if (filters.failures) {
-        types.push('fail');
-    }
-    if (filters.timeouts) {
-        types.push('timeout');
-    }
-    if (filters.crashes) {
-        types.push('crash');
-    }
-    if (filters.skips) {
-        types.push('skip');
-    }
-    return types;
-}
+export {
+    type IssueFilters,
+    ALL_FILTERS,
+    FILTER_IDS,
+    decodeFilters,
+    encodeFilters,
+    typesOf,
+} from './issue-filters.ts';
 
 // --- the view modes -------------------------------------------------------
 
@@ -1471,6 +1438,14 @@ export interface UrlState {
     q: string;
     /** Which of the three "Show as" radios is selected. */
     view: ViewMode;
+    /**
+     * Which issue types are counted, as `encodeFilters` writes them.
+     *
+     * Added with `tests.html`, which needed it: these four boxes change every
+     * number on the page, so a shared link that silently re-checks them
+     * answers a different question from the one it was sent about.
+     */
+    issues: string;
 }
 
 /** The value that means the 21-day aggregate. `old/issues.html:3755`. */

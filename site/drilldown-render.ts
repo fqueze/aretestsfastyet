@@ -219,7 +219,84 @@ export function searchBox(options: {
     onSearch: () => void;
     updateUrlHash: () => void;
 }): SearchBoxManager {
-    return initSearchBox(options) as SearchBoxManager;
+    const manager = initSearchBox(options) as SearchBoxManager;
+    bindFilterShortcut(options.searchBoxId);
+    return manager;
+}
+
+/**
+ * `f` focuses the page's filter box; Escape leaves it.
+ *
+ * Exported as well as used by `searchBox()`, for `manifests.html`: it has
+ * **two** filter inputs in markup of its own and never goes through that
+ * wrapper, so it binds this directly on the one a bare `f` should reach.
+ *
+ * Wired here rather than per page because every page with a filter box already
+ * goes through `searchBox()` — `crashes`, `failures`, `errors`, `flaky`,
+ * `issues`, `tests` and `try` — so this is the one place that reaches all of
+ * them, and a seventh copy of a `keydown` listener is how they come to disagree
+ * about the key.
+ *
+ * ## What it must not do
+ *
+ * **Not fire while the reader is typing.** An `f` in a search box, a folder
+ * path or any other field is an `f`, so the handler ignores the event when the
+ * target is an input, a textarea, a select or anything `contenteditable`. This
+ * page family has two text inputs on one page (`tests.html`'s filter and its
+ * editable folder path), so "already focused somewhere" is the common case and
+ * not an edge one.
+ *
+ * **Not swallow a modified key.** `Ctrl+F`, `Cmd+F` and `Alt+F` belong to the
+ * browser — find-in-page is a different and legitimate thing to want — so only
+ * a bare `f` is taken.
+ *
+ * Escape blurs and is deliberately *not* a clear: the value is in the URL on
+ * most of these pages, so clearing on Escape would throw away state a reader
+ * may have arrived with.
+ */
+export function bindFilterShortcut(searchBoxId: string): void {
+    document.addEventListener('keydown', (event) => {
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+            return;
+        }
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName;
+        const typing =
+            tag === 'INPUT' ||
+            tag === 'TEXTAREA' ||
+            tag === 'SELECT' ||
+            target?.isContentEditable === true;
+
+        if (event.key === 'Escape' && typing && target?.id === searchBoxId) {
+            (target as HTMLInputElement).blur();
+            return;
+        }
+        if (event.key !== 'f' || typing) {
+            return;
+        }
+        const box = document.getElementById(searchBoxId);
+        if (box === null) {
+            return;
+        }
+        // Not a hidden box. `try.html` keeps its filter hidden until a
+        // revision is loaded, and focusing something invisible loses the
+        // reader's keystrokes with nothing to show why.
+        //
+        // Walked by `display` rather than read off `offsetParent`, which is
+        // the usual trick and is wrong here: jsdom does no layout, so
+        // `offsetParent` is *always* null there and the shortcut would be dead
+        // in every test while working in a browser — the kind of difference
+        // that makes a test suite say the opposite of the truth.
+        for (let node: HTMLElement | null = box; node !== null; node = node.parentElement) {
+            if (node.style.display === 'none') {
+                return;
+            }
+        }
+        // Prevented so the `f` does not also land in the box it just focused.
+        event.preventDefault();
+        (box as HTMLInputElement).focus();
+        (box as HTMLInputElement).select();
+    });
 }
 
 // --- small DOM helpers ----------------------------------------------------

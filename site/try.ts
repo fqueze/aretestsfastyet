@@ -219,7 +219,7 @@
 import { bucketFileSuffix, bucketIndexForPath } from '../lib/formats/buckets.ts';
 import { detectHarness, otherHarness } from '../lib/model/harness.ts';
 import { stripChunkSuffix } from '../lib/model/job-name.ts';
-import { el } from './drilldown-render.ts';
+import { el, searchBox } from './drilldown-render.ts';
 import { testPageUrl, testRowLink } from './test-link.ts';
 import {
     type ConsoleFailure,
@@ -1297,7 +1297,10 @@ function renderResults(failures: Failures, totalJobs: number, failedJobCount: nu
         el('div', { id: 'unblamed-table-container' })
     );
 
-    initSearchBox({
+    // `searchBox` and not the raw `initSearchBox` global: the wrapper narrows
+    // the return type *and* binds the `f` shortcut, so this page gets it with
+    // the rest of the family rather than needing its own listener.
+    searchBox({
         searchBoxId: 'search-box',
         searchClearId: 'search-clear',
         onSearch: () => {
@@ -2830,27 +2833,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // `f` focuses the filter box, unless something is already being typed into.
-    document.addEventListener('keydown', (event) => {
-        if (event.key !== 'f' || event.ctrlKey || event.metaKey || event.altKey) {
-            return;
-        }
-        const target = event.target as HTMLElement | null;
-        if (
-            target !== null &&
-            (target.tagName === 'INPUT' ||
-                target.tagName === 'TEXTAREA' ||
-                target.tagName === 'SELECT' ||
-                target.isContentEditable)
-        ) {
-            return;
-        }
-        if (requireElement('filter-container').style.display === 'none') {
-            return;
-        }
-        event.preventDefault();
-        const searchBox = requireInput('search-box');
-        searchBox.focus();
-        searchBox.select();
-    });
+    // The `f` shortcut is `searchBox()`'s, in `site/drilldown-render.ts`: this
+    // page had the only copy, and it is now shared with every other page that
+    // has a filter box. Its one extra rule — do nothing while the filter is
+    // hidden, which here means no revision is loaded — went into the shared
+    // handler as a visibility check, so a hidden box is never focused.
 });

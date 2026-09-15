@@ -308,6 +308,8 @@ import {
     ALL_FILTERS,
     DEFAULT_VIEW,
     FILTER_IDS,
+    decodeFilters,
+    encodeFilters,
     HISTORICAL_DATE,
     INITIAL_SORT,
     STAT_COLUMNS,
@@ -346,6 +348,9 @@ import {
     searchBox,
 } from './drilldown-render.ts';
 import { testRowLink } from './test-link.ts';
+// The `tests.html` URL builder, from the page that owns that URL shape.
+import { folderPageUrl } from './tests-view.ts';
+import { CHART_COLOURS } from './chart-colours.ts';
 
 // Declared here, next to the calls, rather than relied on from another
 // `site/` file. `tsconfig.site.json` compiles all of `site/**` as one program,
@@ -900,6 +905,38 @@ function onViewChange(): void {
 }
 
 /**
+ * A group row's name: a link to `tests.html` in the source-tree view.
+ *
+ * The **name itself** is the link rather than an icon beside it, because the
+ * name already says what the destination is — a folder — and a row that has a
+ * 🔍 and a 📉 and a 🐛 next to it stops reading as a name at all.
+ *
+ * Only in the source-tree view, where `row.key` **is** a directory. In the
+ * components view it is `Product :: Component`, which `tests.html` cannot
+ * take: it selects tests by path prefix, and a component name is not one.
+ *
+ * No harness travels with the link: `tests.html` loads both aggregates and
+ * merges them into one ranked list, so naming one would only show half of
+ * what is under the path.
+ */
+function groupLabel(key: string): HTMLElement {
+    if (currentView() !== 'tree') {
+        return el('strong', { text: key });
+    }
+    const link = externalLink(
+        // No harness: `tests.html` loads both and merges them, so a link
+        // naming one would only show half the path.
+        folderPageUrl(key, {
+            date: isHistoricalMode ? HISTORICAL_DATE : dateSelect().value,
+        }),
+        key,
+        'folder-link'
+    );
+    link.title = `Tests in ${key}`;
+    return el('strong', { children: [link] });
+}
+
+/**
  * One group header row — a component or a directory. `old/issues.html:2094-2130`.
  *
  * Identical in both grouped modes, including the 🧩 icon — the CSS puts it
@@ -939,7 +976,7 @@ function componentHeader(
                 class: 'tree-name',
                 children: [
                     el('span', { class: isExpanded ? 'folder-icon expanded' : 'folder-icon' }),
-                    el('strong', { text: row.key }),
+                    groupLabel(row.key),
                     note,
                 ],
             }),
@@ -1492,22 +1529,22 @@ function drawOutcomeCharts(chartId: string, series: DailyOutcomes[]): void {
                     {
                         label: 'Failure %',
                         data: series.map((day, i) => rate(day.failures, executed[i]!)),
-                        backgroundColor: 'rgba(255, 140, 0, 0.7)',
-                        borderColor: '#ff8c00',
+                        backgroundColor: CHART_COLOURS.fail.bg,
+                        borderColor: CHART_COLOURS.fail.border,
                         borderWidth: 1,
                     },
                     {
                         label: 'Timeout %',
                         data: series.map((day, i) => rate(day.timeouts, executed[i]!)),
-                        backgroundColor: 'rgba(255, 193, 7, 0.7)',
-                        borderColor: '#ffc107',
+                        backgroundColor: CHART_COLOURS.timeout.bg,
+                        borderColor: CHART_COLOURS.timeout.border,
                         borderWidth: 1,
                     },
                     {
                         label: 'Crash %',
                         data: series.map((day, i) => rate(day.crashes, executed[i]!)),
-                        backgroundColor: 'rgba(220, 53, 69, 0.7)',
-                        borderColor: '#dc3545',
+                        backgroundColor: CHART_COLOURS.crash.bg,
+                        borderColor: CHART_COLOURS.crash.border,
                         borderWidth: 1,
                     },
                 ],
@@ -1562,8 +1599,8 @@ function drawOutcomeCharts(chartId: string, series: DailyOutcomes[]): void {
                 {
                     label: 'Skip %',
                     data: series.map((day, i) => rate(day.skips, scheduled[i]!)),
-                    backgroundColor: 'rgba(108, 117, 125, 0.7)',
-                    borderColor: '#6c757d',
+                    backgroundColor: CHART_COLOURS.skip.bg,
+                    borderColor: CHART_COLOURS.skip.border,
                     borderWidth: 1,
                 },
             ],
@@ -1585,10 +1622,10 @@ function drawOutcomeCharts(chartId: string, series: DailyOutcomes[]): void {
 
 /** The colours and the y-axis label for one issue type. `old/issues.html:2750-2771`. */
 const MESSAGE_CHART_STYLE: Record<IssueEntry['type'], [string, string, string]> = {
-    SKIP: ['rgba(108, 117, 125, 0.7)', '#6c757d', '% skips'],
-    FAIL: ['rgba(255, 140, 0, 0.7)', '#ff8c00', '% failures'],
-    TIMEOUT: ['rgba(255, 193, 7, 0.7)', '#ffc107', '% timeouts'],
-    CRASH: ['rgba(220, 53, 69, 0.7)', '#dc3545', '% crashes'],
+    SKIP: [CHART_COLOURS.skip.bg, CHART_COLOURS.skip.border, '% skips'],
+    FAIL: [CHART_COLOURS.fail.bg, CHART_COLOURS.fail.border, '% failures'],
+    TIMEOUT: [CHART_COLOURS.timeout.bg, CHART_COLOURS.timeout.border, '% timeouts'],
+    CRASH: [CHART_COLOURS.crash.bg, CHART_COLOURS.crash.border, '% crashes'],
 };
 
 /** The plural noun one issue type's tooltip uses. `old/issues.html:2789-2801`. */
@@ -1747,6 +1784,7 @@ function updateIssueFilters(): void {
     if (decoded !== null) {
         render();
     }
+    updateUrlHash();
 }
 
 // --- data loading ---------------------------------------------------------
@@ -1975,6 +2013,16 @@ async function loadFromUrlHash(): Promise<void> {
     }
 
     checkViewRadio(state.view ?? DEFAULT_VIEW);
+    // The URL wins over whatever the browser restored: these four boxes change
+    // every number on the page, so a link that named them must not be
+    // overridden by the previous visit's checkbox state.
+    filters = decodeFilters(state.issues);
+    for (const [key, id] of FILTER_IDS) {
+        const box = document.getElementById(id) as HTMLInputElement | null;
+        if (box !== null) {
+            box.checked = filters[key];
+        }
+    }
 
     if (isHistoricalDate(state.date)) {
         if (!isHistoricalMode) {
@@ -2027,6 +2075,10 @@ function initializeUI(): void {
             // silently rewrite their `components` selection to `tree` — the
             // same hash then works as they meant it on a file that has them.
             view: selectedView() === DEFAULT_VIEW ? '' : selectedView(),
+            // All four on is the default, which `encodeFilters` writes as `''`
+            // — so a reader who has touched nothing keeps the bare
+            // `#date=21days` this page is usually shared as.
+            issues: encodeFilters(filters),
         }),
         onHashChange: async () => {
             searchBoxManager.setNavigating(true);

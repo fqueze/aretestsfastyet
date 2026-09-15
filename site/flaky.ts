@@ -111,6 +111,11 @@ import {
     totalColumnLabel,
     visibleRows,
 } from './flaky-view.ts';
+// The `tests.html` URL builders, from the page that owns that URL shape
+// rather than copied here — the same reason `issues.ts` takes its `test.html`
+// link from `site/test-link.ts` instead of writing the query string again.
+import { folderPageUrl } from './tests-view.ts';
+import { CHART_COLOURS, SOLID, withAlpha } from './chart-colours.ts';
 import { type SearchBoxManager, el, externalLink, searchBox } from './drilldown-render.ts';
 
 /**
@@ -332,10 +337,17 @@ const COLOURS = {
     // Orange, not red: a flaky test is a nuisance to be burned down, and red is
     // reserved on these dashboards for something broken. It also keeps the
     // counts chart's two bands — orange and grey — clearly distinct.
-    flaky: '#e8834a',
+    //
+    // **The shared failure orange**, from `site/chart-colours.ts`. This page
+    // used `#e8834a`, a slightly redder orange of its own; `tests.html` puts a
+    // flaky-tests chart directly under a failures chart, and two
+    // near-identical oranges there read as a mistake rather than a
+    // distinction. The hue is the one `test.html` and `issues.html` already
+    // use for failures.
+    flaky: SOLID.flaky,
     /** The raw daily rate, under its own 7-day average. */
-    flakyFaint: 'rgba(232, 131, 74, 0.35)',
-    stable: '#5cb85c',
+    flakyFaint: withAlpha(CHART_COLOURS.flaky.bg, 0.35),
+    stable: SOLID.stable,
     /**
      * The counts chart's stable band, over months.
      *
@@ -352,7 +364,7 @@ const COLOURS = {
      * under deuteranopia, the best-separated pair of the three.
      */
     stableFaint: 'rgba(92, 184, 92, 0.30)',
-    skipped: '#9b9b9b',
+    skipped: SOLID.skipped,
 };
 
 /**
@@ -711,6 +723,10 @@ function folderRow(row: FolderRow): HTMLElement {
 
     if (row.kind === 'test') {
         name.append(el('span', { class: 'test-icon' }));
+        // No link to the folder holding it. A `…/` was tried and removed: a
+        // test row only ever appears under the folder row that was expanded to
+        // show it, and that row's name is already the link — so the `…/`
+        // duplicated a link one line above itself, as two cryptic characters.
         // The test name is a link to `test.html`, which is the page that
         // answers "why is this one flaky". A new tab, because the reader is
         // working down a list of candidates here and following one in place
@@ -741,7 +757,13 @@ function folderRow(row: FolderRow): HTMLElement {
                     : 'folder-icon leaf',
             })
         );
-        name.append(el('span', { class: 'folder-label', text: row.name }));
+        // The folder's **name is the link** to its tests, rather than an icon
+        // beside it: the name already says the destination is a folder, and a
+        // row carrying a 🔍 and a 📉 next to its name stops reading as a name.
+        // The row still expands on click — `folderLink` stops the anchor's
+        // click from reaching it, so the two actions are distinguishable by
+        // where you click.
+        name.append(folderLink(row.path, row.name, 'folder-label'));
         name.append(
             el('span', {
                 class: 'folder-count',
@@ -797,7 +819,7 @@ function listRow(row: ListRow): HTMLElement {
     // history. Without this a burndown candidate named a folder and then made
     // the reader switch to the tree and walk down to it to see what was in it.
     name.append(el('span', { class: isExpanded ? 'folder-icon expanded' : 'folder-icon' }));
-    name.append(el('span', { class: 'folder-label', text: row.path }));
+    name.append(folderLink(row.path, row.path, 'folder-label'));
     if (row.flaky !== row.selfFlaky) {
         name.append(
             el('span', {
@@ -876,6 +898,33 @@ function searchfoxLink(path: string): HTMLElement {
         'action-button'
     );
     link.title = `Open ${path} in Searchfox`;
+    return link;
+}
+
+/**
+ * A folder's name, linking to its tests on `tests.html`.
+ *
+ * This page ranks the tree and says *where* the work is; `tests.html` answers
+ * the next question for one path — which of its tests still fail, over a range
+ * of days a reader picks. So the link is on the thing that named the folder.
+ *
+ * **The name itself, not an icon beside it.** A 📉 was tried and is worse: the
+ * name already says the destination is a folder, and a row with a 🔍 and a 📉
+ * trailing it reads as a row of buttons rather than as a path. The colour is
+ * the page's link blue only on hover, so the table still reads as a list of
+ * folders.
+ *
+ * The click is stopped from reaching the row, which expands it — so clicking
+ * the name navigates and clicking anywhere else opens in place.
+ */
+function folderLink(path: string, text: string, className: string): HTMLElement {
+    const link = el('a', {
+        class: `${className} folder-link`,
+        text,
+        title: `Tests in ${path}`,
+        href: folderPageUrl(path),
+    });
+    link.addEventListener('click', (event) => event.stopPropagation());
     return link;
 }
 

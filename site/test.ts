@@ -151,6 +151,9 @@ import {
 import { computeTestStats } from '../lib/query/test-stats.ts';
 import { el } from './drilldown-render.ts';
 import { copyToClipboard } from './test-link.ts';
+// The `tests.html` URL builders, from the page that owns that URL shape.
+import { folderPageUrl } from './tests-view.ts';
+import { type ChartColour, CHART_COLOURS } from './chart-colours.ts';
 import {
     type CellBadge,
     type DailyRate,
@@ -403,15 +406,16 @@ function renderHeader(
     );
 
     const pathLine = el('div', { class: 'test-path-line' });
-    pathLine.append(
-        el('a', {
-            text: testPath,
-            attrs: {
-                href: `https://searchfox.org/mozilla-central/source/${testPath}`,
-                target: '_blank',
-            },
-        })
-    );
+    // The path, split at the separators: each directory segment links to that
+    // folder's burndown, and the filename keeps the Searchfox link the whole
+    // path used to carry.
+    //
+    // Split rather than given a button of its own. A "📉 Folder" button beside
+    // the path duplicated information the path already showed, and only offered
+    // the *immediate* parent — whereas the question after reading one test is
+    // often about a subsystem two or three levels up. The segments answer both
+    // and add no chrome.
+    pathLine.append(...pathSegments(testPath));
 
     // The copy button holds its own listener rather than an `onclick` attribute
     // reaching a global, so it also no longer depends on the implicit `event`
@@ -446,6 +450,46 @@ function renderHeader(
         header.append(line);
     }
     return header;
+}
+
+/**
+ * A test path as linked segments: each folder, then the filename.
+ *
+ * `dom/base/test/test_foo.html` becomes four links — `dom`, `base` and `test`
+ * to each folder's burndown, and `test_foo.html` to Searchfox. So a reader can
+ * ask "do this test's siblings fail the same way" at whichever level the
+ * question actually lives, which is not always the immediate parent.
+ *
+ * The separators are their own nodes so the path still reads as a path and a
+ * double-click selects one segment rather than the whole line.
+ */
+function pathSegments(testPath: string): Node[] {
+    const parts = testPath.split('/');
+    const fileName = parts.pop() ?? testPath;
+    const nodes: Node[] = [];
+    let prefix = '';
+    for (const part of parts) {
+        prefix = prefix === '' ? part : `${prefix}/${part}`;
+        const link = el('a', {
+            class: 'path-segment',
+            text: part,
+            title: `Tests in ${prefix}`,
+            href: folderPageUrl(prefix),
+        });
+        nodes.push(link, el('span', { class: 'path-sep', text: '/' }));
+    }
+    nodes.push(
+        el('a', {
+            class: 'path-file',
+            text: fileName,
+            title: 'Open in Searchfox',
+            attrs: {
+                href: `https://searchfox.org/mozilla-central/source/${testPath}`,
+                target: '_blank',
+            },
+        })
+    );
+    return nodes;
 }
 
 /** One figure of the summary bar. */
@@ -1141,12 +1185,18 @@ function buildRunInfo(
 
 // --- charts --------------------------------------------------------------
 
-/** The chart colours, per issue type. `old/test.html:1578`. */
-const ISSUE_CHART_COLOURS: Record<Issue['type'], { bg: string; border: string }> = {
-    SKIP: { bg: 'rgba(108, 117, 125, 0.7)', border: '#6c757d' },
-    FAIL: { bg: 'rgba(255, 140, 0, 0.7)', border: '#ff8c00' },
-    TIMEOUT: { bg: 'rgba(255, 193, 7, 0.7)', border: '#ffc107' },
-    CRASH: { bg: 'rgba(220, 53, 69, 0.7)', border: '#dc3545' },
+/**
+ * The chart colours, per issue type. `old/test.html:1578`.
+ *
+ * The values live in `site/chart-colours.ts`, which is the one copy shared with
+ * `tests.html`; this maps them onto *this* page's type names. The mapping is
+ * the page's, the palette is not.
+ */
+const ISSUE_CHART_COLOURS: Record<Issue['type'], ChartColour> = {
+    SKIP: CHART_COLOURS.skip,
+    FAIL: CHART_COLOURS.fail,
+    TIMEOUT: CHART_COLOURS.timeout,
+    CRASH: CHART_COLOURS.crash,
 };
 
 /** Chart.js options shared by all three charts. `old/test.html:1167`. */
@@ -1311,25 +1361,25 @@ function createDailyCharts(s: PageState): void {
             ...makeDatasetPair(
                 'Failure %',
                 percentages.map((d) => d.failureRate),
-                'rgba(255, 140, 0, 0.7)',
+                CHART_COLOURS.fail.bg,
                 'rgba(200, 180, 160, 0.18)',
-                '#ff8c00',
+                CHART_COLOURS.fail.border,
                 'failureRate'
             ),
             ...makeDatasetPair(
                 'Timeout %',
                 percentages.map((d) => d.timeoutRate),
-                'rgba(255, 193, 7, 0.7)',
+                CHART_COLOURS.timeout.bg,
                 'rgba(200, 185, 140, 0.18)',
-                '#ffc107',
+                CHART_COLOURS.timeout.border,
                 'timeoutRate'
             ),
             ...makeDatasetPair(
                 'Crash %',
                 percentages.map((d) => d.crashRate),
-                'rgba(220, 53, 69, 0.7)',
+                CHART_COLOURS.crash.bg,
                 'rgba(190, 150, 150, 0.18)',
-                '#dc3545',
+                CHART_COLOURS.crash.border,
                 'crashRate'
             ),
         ];
@@ -1352,7 +1402,7 @@ function createDailyCharts(s: PageState): void {
         const skipDatasets = makeDatasetPair(
             'Skip %',
             percentages.map((d) => d.skipRate),
-            'rgba(108, 117, 125, 0.7)',
+            CHART_COLOURS.skip.bg,
             'rgba(160, 160, 160, 0.15)',
             '#6c757d',
             'skipRate'
@@ -1462,9 +1512,16 @@ function wireChartArea(s: PageState): void {
             return -1;
         }
         const rect = refChart.canvas.getBoundingClientRect();
-        const barWidth = xScale.width / xScale.ticks.length;
-        const dayIndex = Math.floor((event.clientX - rect.left - xScale.left) / barWidth);
-        return dayIndex >= 0 && dayIndex < xScale.ticks.length ? dayIndex : -1;
+        // **The width of one day, not of one tick.** `xScale.ticks` holds the
+        // *rendered* labels, and this axis sets `maxTicksLimit` with `autoSkip`
+        // on, so a 21-day window draws about 11 of them: dividing by that made
+        // a day "twice as wide" as it is, and a click past the middle of the
+        // plot resolved to roughly half the intended index. The day count is
+        // `rates.length`, which is what the axis is actually divided into.
+        const columns = Math.max(1, refChart.data.labels.length);
+        const dayWidth = xScale.width / columns;
+        const dayIndex = Math.floor((event.clientX - rect.left - xScale.left) / dayWidth);
+        return dayIndex >= 0 && dayIndex < columns ? dayIndex : -1;
     };
 
     /** True when Chart.js is already handling this event itself. */
@@ -1664,7 +1721,11 @@ const DAY_COLUMN_HIGHLIGHT: ChartPlugin = {
             return;
         }
         const { ctx, chartArea } = chart;
-        const barWidth = xScale.width / xScale.ticks.length;
+        // One day's width, for the reason `dayFromEvent` records: the tick
+        // count is the *labels drawn*, not the columns, so this band was about
+        // twice as wide as the day it marked and spilled over its neighbours.
+        const columns = Math.max(1, chart.data.labels.length);
+        const barWidth = xScale.width / columns;
         ctx.save();
         if (clicked !== null) {
             ctx.fillStyle = '#d0e4fd';
