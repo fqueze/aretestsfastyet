@@ -627,10 +627,12 @@
 
         /* --- the expanded test ------------------------------------------- */
 
+        /* 10px left so a line's count sits under the filename; the items
+           bring their own vertical spacing and full width. */
         .issue-details-row {
             background-color: #f8f9fa;
             border-bottom: 1px solid #eee;
-            padding: 15px 20px;
+            padding: 0 0 0 10px;
         }
 
         .issue-details-content {
@@ -688,10 +690,11 @@
             word-break: break-word;
         }
 
+        /* Indented to the message column, so runs start under the text. */
         .issue-runs {
-            margin-left: 50px;
-            margin-top: 8px;
-            margin-bottom: 8px;
+            margin-left: 86px;
+            margin-top: 4px;
+            margin-bottom: 6px;
             font-size: 12px;
         }
 
