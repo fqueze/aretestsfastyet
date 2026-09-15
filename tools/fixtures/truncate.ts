@@ -80,15 +80,32 @@ export type AnyRecord = Record<string, unknown>;
 function selectTests(
     testRuns: (AnyRecord | null)[][],
     statuses: string[],
-    perStatus: number
+    perStatus: number,
+    preferred?: (testId: number) => boolean
 ): number[] {
     const chosen = new Set<number>();
+    // Two passes when a directory is preferred, and the order matters. The
+    // first takes the status's tests from inside that directory, so the fixture
+    // really does contain the folder; the second tops each status up from
+    // anywhere, because a status can be absent from one directory while present
+    // in the table — `EXPECTED-FAIL` is carried by 4 of 21,429 mochitest tests
+    // and by none in any one folder, and `fixtures.test.ts` requires every
+    // status in a table to have a test carrying it.
+    const passes =
+        preferred === undefined ? [undefined] : [preferred, undefined as undefined];
     for (let statusId = 0; statusId < statuses.length; statusId++) {
         let taken = 0;
-        for (let i = 0; i < testRuns.length && taken < perStatus; i++) {
-            if (testRuns[i]?.[statusId]) {
-                chosen.add(i);
-                taken += 1;
+        for (const filter of passes) {
+            for (let i = 0; i < testRuns.length && taken < perStatus; i++) {
+                if (filter !== undefined && !filter(i)) {
+                    continue;
+                }
+                if (testRuns[i]?.[statusId]) {
+                    if (!chosen.has(i)) {
+                        chosen.add(i);
+                    }
+                    taken += 1;
+                }
             }
         }
     }
@@ -104,8 +121,25 @@ function selectTests(
  * carries, and those are copied through generically.
  *
  * `perStatus` is how many tests to keep for each status, not a total.
+ *
+ * `pathPrefix` *prefers* tests under one directory, for a fixture that has to
+ * **contain** a particular folder — `tests.html` merges the two harnesses'
+ * aggregates, and testing that merge needs both fixtures to hold tests in one
+ * shared folder, which status coverage alone will not arrange.
+ *
+ * Prefers rather than restricts: a status can be absent from the chosen
+ * directory and present in the file's `statuses` table, and
+ * `fixtures.test.ts` requires every status in a table to be carried by some
+ * test. So each status is filled from the directory first and topped up from
+ * anywhere. Both properties hold — the folder is present, and so is every
+ * status — and the function throws rather than quietly returning a fixture
+ * that lacks the folder it was asked for.
  */
-export function truncateTimingFile(data: AnyRecord, perStatus: number): AnyRecord {
+export function truncateTimingFile(
+    data: AnyRecord,
+    perStatus: number,
+    pathPrefix?: string
+): AnyRecord {
     const tables = data['tables'] as Record<string, string[]>;
     const testInfo = data['testInfo'] as Record<string, (number | null)[]>;
     const testRuns = data['testRuns'] as (AnyRecord | null)[][];
@@ -123,7 +157,30 @@ export function truncateTimingFile(data: AnyRecord, perStatus: number): AnyRecor
     // they need their own remap that also drives taskInfo's truncation.
     const taskRemap = tables['taskIds'] ? new TableRemap(tables['taskIds']) : undefined;
 
-    const kept = selectTests(testRuns, keptStatuses, perStatus);
+    const preferred =
+        pathPrefix === undefined
+            ? undefined
+            : (testId: number): boolean => {
+                  const directoryId = testInfo['testPathIds']?.[testId];
+                  const directory =
+                      directoryId === null || directoryId === undefined
+                          ? ''
+                          : (tables['testPaths']?.[directoryId] ?? '');
+                  return directory === pathPrefix || directory.startsWith(`${pathPrefix}/`);
+              };
+    const kept = selectTests(testRuns, keptStatuses, perStatus, preferred);
+    if (kept.length === 0) {
+        throw new Error('No tests carry any status, so the fixture would be empty.');
+    }
+    if (preferred !== undefined && !kept.some(preferred)) {
+        // The whole point of asking for a directory is that the fixture
+        // contains it; silently producing one that does not would leave the
+        // test that needs it passing against the wrong data.
+        throw new Error(
+            `No tests under ${String(pathPrefix)} carry any status, so the fixture ` +
+                'would not contain that folder.'
+        );
+    }
 
     const keptRuns: (AnyRecord | null)[][] = [];
     for (const i of kept) {

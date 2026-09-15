@@ -220,6 +220,45 @@ async function main(): Promise<void> {
         )
     );
 
+    // And the mochitest 21-day aggregate, which is what `tests.html` merges
+    // with the xpcshell one. A folder in mozilla-central routinely holds an
+    // xpcshell manifest and a mochitest manifest side by side, so the merge is
+    // the page's ordinary path rather than an edge case — and testing it needs
+    // both harnesses' aggregates, not two copies of one.
+    //
+    // Two deliberate departures from every other fixture here, both forced by
+    // what the merge has to be tested against:
+    //
+    //  1. **Selected by path.** `toolkit/components/extensions/test` is a
+    //     directory both harnesses genuinely use — `.../test/xpcshell` and
+    //     `.../test/mochitest` — and it is already in the xpcshell fixture.
+    //     Status coverage alone picks tests from wherever they happen to be,
+    //     and the two fixtures then share no folder at all, leaving the merge
+    //     untestable on real data.
+    //  2. **The window is rewritten to the xpcshell fixture's.** The published
+    //     index serves only `latest`, so a mochitest aggregate contemporaneous
+    //     with the checked-in xpcshell one cannot be fetched. Day indices are
+    //     relative to `metadata.startTime`, and the page aligns the two
+    //     harnesses by day index — so without this the fixtures would describe
+    //     different calendars and every merged chart would be off by weeks.
+    //     Only the four window fields move; every count, status group and day
+    //     index is the real file's.
+    const mochitestIssues = truncateTimingFile(
+        await fetchJson(indexUrl('mochitest-timings', 'mochitest-issues.json')),
+        TESTS_PER_STATUS,
+        'toolkit/components/extensions/test/mochitest'
+    );
+    const xpcshellIssues = truncateTimingFile(
+        await fetchJson(indexUrl('xpcshell-timings', 'xpcshell-issues.json')),
+        TESTS_PER_STATUS
+    );
+    const xpcshellMeta = xpcshellIssues['metadata'] as Record<string, unknown>;
+    const mochitestMeta = mochitestIssues['metadata'] as Record<string, unknown>;
+    for (const field of ['startDate', 'endDate', 'startTime', 'days']) {
+        mochitestMeta[field] = xpcshellMeta[field];
+    }
+    await write('mochitest-issues.json', mochitestIssues);
+
     await write(
         `xpcshell-${date}-resources.json`,
         truncateResources(
