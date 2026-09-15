@@ -219,8 +219,13 @@ declare global {
     function getDataDateRange(data: unknown): { firstDate: string | null; lastDate: string | null };
     /** `common-links.js:215` — the 🐞 button's markup. */
     function getBugButton(bugUrl: string, tooltipText?: string): string;
-    /** `fetch-utils.js:172` — fetches a data file, honouring `?data-source=`. */
-    function fetchData(filename: string): Promise<Response>;
+    /**
+     * `fetch-utils.js` — fetches a data file, honouring `?data-source=`.
+     *
+     * `date` is an optional `YYYY-MM-DD` pushdate naming an *older* published
+     * run to read instead of the latest one. Omit it for the current data.
+     */
+    function fetchData(filename: string, date?: string): Promise<Response>;
     /** `fetch-utils.js:41` — carries `?data-source=`/`?profiler=` onto a link. */
     function withDevParams(url: string): string;
     /** `shared.js:3` — recolours the favicon. */

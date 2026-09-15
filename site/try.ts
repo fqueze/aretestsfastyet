@@ -315,8 +315,13 @@ declare global {
     function setFavicon(color: string): void;
     // `withDevParams` is no longer named here: the only call this page makes is
     // inside `site/test-link.ts`, which declares it there.
-    /** `fetch-utils.js:169` — fetches a data file, honouring `?data-source=`. */
-    function fetchData(filename: string): Promise<Response>;
+    /**
+     * `fetch-utils.js` — fetches a data file, honouring `?data-source=`.
+     *
+     * `date` is an optional `YYYY-MM-DD` pushdate naming an *older* published
+     * run to read instead of the latest one. Omit it for the current data.
+     */
+    function fetchData(filename: string, date?: string): Promise<Response>;
     /**
      * The worker sources the build inlined. See `tools/build-pages.ts`; the
      * page reads this rather than importing the worker, so that the built page

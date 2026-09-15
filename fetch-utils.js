@@ -56,23 +56,50 @@ function withDevParams(url) {
     return `${base}${sep}${params.join('&')}${hash}`;
 }
 
+// The index namespace segment naming *which* run of the timings job to read.
+// 'latest' is the newest one, which is what every page wants by default.
+//
+// Taskcluster also indexes each run under the push's date, so an older
+// aggregate is addressable by the day it was generated:
+//
+//   gecko.v2.mozilla-central.pushdate.2026.09.14.latest.source.test-info-…
+//
+// Those artifacts outlive the window they describe — measured 2026-09-15, the
+// oldest surviving pushdate was 2026-01-31 and 2026-01-30 was already a 404,
+// so roughly seven months, sliding forward daily. That is what lets a page
+// backfill: each older run published its own 21-day aggregate, so walking back
+// a run at a time reconstructs an arbitrarily long history.
+//
+// `date` is a YYYY-MM-DD string; anything falsy means 'latest'.
+function indexRevision(date) {
+    return date ? `pushdate.${date.replace(/-/g, '.')}.latest` : 'latest';
+}
+
 // Helper function to fetch from Firefox CI
 // indexName is the test-info-* suffix, e.g. 'xpcshell-timings', 'worker-data'
+// date is an optional YYYY-MM-DD pushdate; omitted means the latest run.
 // Caches the resolved base URL after the first redirect to avoid repeated redirects.
-const _resolvedBaseUrls = new Map(); // indexName -> resolved base URL prefix
-async function fetchFromCI(indexName, filename) {
-    const cached = _resolvedBaseUrls.get(indexName);
+//
+// The cache is keyed on the index *and* the date: the whole point of a resolved
+// base is that it names one task's artifact directory, so reusing `latest`'s
+// base for a pushdate request would quietly serve today's bytes for an older
+// window — the numbers would be wrong rather than missing.
+const _resolvedBaseUrls = new Map(); // `${indexName}@${revision}` -> resolved base URL prefix
+async function fetchFromCI(indexName, filename, date) {
+    const revision = indexRevision(date);
+    const cacheKey = `${indexName}@${revision}`;
+    const cached = _resolvedBaseUrls.get(cacheKey);
     if (cached) {
         return fetch(`${cached}${filename}`);
     }
     const repository = getDataSource() === 'try' ? 'try' : 'mozilla-central';
-    const prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.latest.source.test-info-${indexName}/artifacts/public/`;
+    const prefix = `https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/gecko.v2.${repository}.${revision}.source.test-info-${indexName}/artifacts/public/`;
     const response = await fetch(`${prefix}${filename}`);
     // Cache the resolved base URL from the final (redirected) URL.
     if (response.ok && response.url) {
         const base = response.url.substring(0, response.url.lastIndexOf('/') + 1);
         if (base !== prefix) {
-            _resolvedBaseUrls.set(indexName, base);
+            _resolvedBaseUrls.set(cacheKey, base);
         }
     }
     return response;
@@ -169,7 +196,13 @@ async function findTimingsJobsForRevision(revision) {
 
 // Fetch data file with appropriate prefix based on page protocol
 // For try runs, if xpcshell data doesn't exist, falls back to mochitest data
-async function fetchData(filename) {
+//
+// `date` is optional and defaults to the latest published run. Pass a
+// YYYY-MM-DD pushdate to read an older run's artifacts instead — see
+// `indexRevision()`. It only applies to the CI sources: a try revision already
+// names one task, and local ./data/ files have no history to ask for, so a
+// date is ignored on both paths rather than silently 404ing.
+async function fetchData(filename, date) {
     if (getDataSource() !== 'local') {
         // Check if this is a try revision file (format: xpcshell-try-<revision>.json or mochitest-try-<revision>.json)
         const tryMatch = filename.match(/^(xpcshell|mochitest)-try-([a-f0-9]{40})\.json$/);
@@ -219,7 +252,7 @@ async function fetchData(filename) {
         }
 
         // Try the detected harness first
-        const response = await fetchFromCI(harness + '-timings', filename);
+        const response = await fetchFromCI(harness + '-timings', filename, date);
 
         // If data exists, return it
         if (response.ok) {
@@ -230,7 +263,7 @@ async function fetchData(filename) {
         if (filename.startsWith('xpcshell-try-')) {
             const mochitestFilename = filename.replace('xpcshell-', 'mochitest-');
             console.log(`xpcshell data not found for ${filename}, trying ${mochitestFilename}...`);
-            return fetchFromCI('mochitest-timings', mochitestFilename);
+            return fetchFromCI('mochitest-timings', mochitestFilename, date);
         }
 
         // For non-try runs, return the original failed response
@@ -264,6 +297,6 @@ async function fetchData(filename) {
         } else if (filename === 'index.json') {
             harness = getHarnessType();
         }
-        return fetchFromCI(harness + '-timings', filename);
+        return fetchFromCI(harness + '-timings', filename, date);
     }
 }

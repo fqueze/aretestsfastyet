@@ -200,8 +200,13 @@ declare global {
     function initHarnessSwitcher(suffix: string): void;
     /** `fetch-utils.js:5` — the `?kind=` harness, defaulting to `xpcshell`. */
     function getHarnessType(): string;
-    /** `fetch-utils.js:172` — fetches a data file, honouring `?data-source=`. */
-    function fetchData(filename: string): Promise<Response>;
+    /**
+     * `fetch-utils.js` — fetches a data file, honouring `?data-source=`.
+     *
+     * `date` is an optional `YYYY-MM-DD` pushdate naming an *older* published
+     * run to read instead of the latest one. Omit it for the current data.
+     */
+    function fetchData(filename: string, date?: string): Promise<Response>;
 }
 
 /** What `initSearchBox` returns. `common-ui.js:89`. */
