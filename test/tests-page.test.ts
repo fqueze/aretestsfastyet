@@ -638,6 +638,39 @@ test('the click target covers both charts, not just one', async () => {
     }
 });
 
+test('each chart says which way round it counts, and gets it right', async () => {
+    // The bug: the issues plot's tooltip claimed one test failing 400 times and
+    // 400 tests failing once "look alike on the chart below and nothing alike
+    // here" — exactly inverted. That chart sums *occurrences*, so both are 400;
+    // the tests-per-day chart counts each test once a day, so they are 1 and
+    // 400. A reader who trusted it drew the opposite conclusion from the data.
+    const page = await freshPage('chart-units');
+    try {
+        const issues = page.document.getElementById('issue-chart-area')!.title;
+        const timeline = page.document.getElementById('timeline-box')!.title;
+
+        // The issues chart is the one that cannot tell them apart, and says so.
+        assert.match(issues, /same/i, 'the issues plot says the two read alike');
+        assert.match(issues, /400/, 'and makes it concrete');
+        assert.doesNotMatch(
+            issues,
+            /nothing alike here/i,
+            'the inverted claim is gone'
+        );
+
+        // The tests-per-day chart is the one that does, and counts tests.
+        assert.match(timeline, /counts tests/i);
+        assert.match(timeline, /once a day/i);
+
+        // Neither is a paragraph. They are `title` attributes on a plot, read
+        // on hover, and the long versions were the reason nobody read them.
+        assert.ok(issues.length < 200, `issues tooltip is ${issues.length} chars`);
+        assert.ok(timeline.length < 200, `timeline tooltip is ${timeline.length} chars`);
+    } finally {
+        page.restore();
+    }
+});
+
 test('both charts use the shared palette, at the same saturation', async () => {
     // The bug: this page filled bars with the solid hue while `test.html` fills
     // with the same hue at 0.7 alpha and uses the solid one as the border, so
