@@ -319,6 +319,40 @@
             margin: 4px 0 0 0;
         }
 
+        /* The backfill control, inline in the chart's note. Sized to the note
+           rather than to a form control: it is a quiet affordance next to the
+           sentence explaining the chart, not a primary action, and a 14px
+           button here would out-shout the chart. */
+        .backfill-button {
+            font-size: 11px;
+            font-family: inherit;
+            color: #0066cc;
+            background: none;
+            border: 1px solid #d6e4f0;
+            border-radius: 3px;
+            padding: 1px 6px;
+            margin-left: 8px;
+            cursor: pointer;
+        }
+
+        .backfill-button:hover:not(:disabled) {
+            background: #f0f6fc;
+            border-color: #0066cc;
+        }
+
+        /* Disabled covers both "fetching" and "nothing older to fetch" — the
+           label says which, so the style only has to stop looking clickable. */
+        .backfill-button:disabled {
+            color: #bbb;
+            border-color: #eee;
+            cursor: default;
+        }
+
+        .backfill-note {
+            margin-left: 6px;
+            font-style: italic;
+        }
+
         /* --- the filters, in the controls box ----------------------------- */
 
         .issue-type-filters {
@@ -763,6 +797,17 @@
             <p class="chart-note">
                 Click a day to look at it alone, <strong>shift-click</strong> another for the
                 range between them; click the selected day again for the whole window.
+                <!--
+                  Backfill sits under the chart it extends, not up with the
+                  path controls: it changes the x axis and nothing else, and a
+                  reader reaches for it after looking at the shape and wanting
+                  more of it.
+                -->
+                <button type="button" id="backfill-button" class="backfill-button"
+                        title="Fetch the previous run's 21-day aggregate and join it to this window">
+                    ← load 20 more days
+                </button>
+                <span class="backfill-note" id="backfill-note"></span>
             </p>
         </div>
 
