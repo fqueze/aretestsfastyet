@@ -27,10 +27,8 @@
             box-shadow: 0 0 0 2px rgba(0, 96, 223, 0.2);
         }
 
-        /* The box and its two buttons, welded into one control: shared borders,
-           square inner corners, no gap. Reads as an input with a `go` button,
-           which is what it is. `flex` rather than the parent's `gap`, which
-           would put 10px between the three. */
+        /* The box and its two buttons as one control. `flex` rather than the
+           parent's `gap`, which would put 10px between the three. */
         .load-group {
             display: flex;
             align-items: stretch;
@@ -42,18 +40,16 @@
             padding: 8px 12px;
             font-size: 13px;
             border-radius: 0;
-            /* One border between neighbours rather than two touching ones. */
+            /* One border between neighbours, not two touching ones. */
             border-left-width: 0;
             white-space: nowrap;
         }
         .load-group button:last-child {
             border-radius: 0 4px 4px 0;
         }
-        /* Which mode the results on screen are in — so the page says what it
-           did, rather than leaving it to be inferred from the header line.
-           Grey rather than `shared.css`'s blue `button.active`: these two are a
-           mode indicator, not a primary action, and a filled blue button next
-           to the focus ring reads as the thing to click next. */
+        /* Grey rather than `shared.css`'s blue `button.active`: these two are a
+           mode indicator, and a filled blue button beside the focus ring reads
+           as the thing to click next. */
         .load-group button.active {
             background: #e4e4e7;
             border-color: #c4c4c8;
@@ -63,8 +59,7 @@
         .load-group button.active:hover {
             background: #dcdce0;
         }
-        /* The focused input's ring must not be drawn under the button next to
-           it, so the box is lifted while focused. */
+        /* Lift the focused box so its ring is not drawn under the button. */
         .load-group input:focus {
             position: relative;
             z-index: 1;
@@ -93,8 +88,23 @@
         .progress-bar .fill {
             background: #0060df;
             height: 100%;
-            width: 0%;
-            transition: width 0.3s;
+            /* Full width, scaled down: `transform` runs on the compositor,
+               where `width` cannot — animating width relayouts every frame on
+               the main thread, which is the thread parsing profiles, so the
+               bar stuttered whenever the page was busy. */
+            width: 100%;
+            transform: scaleX(0);
+            transform-origin: left center;
+            /* Promote the layer up front, so the first step is composited too
+               rather than after Chrome notices the transition. */
+            will-change: transform;
+            /* Matches PROGRESS_STEP_MS: updates are coalesced onto that
+               cadence, so each transition lands just as the next target
+               arrives and is never restarted mid-flight. */
+            transition: transform 0.2s linear;
+        }
+        .progress-bar .fill.resetting {
+            transition: none;
         }
 
         #results {
@@ -118,15 +128,9 @@
             color: #888;
             font-size: 12px;
         }
-        /* Font Awesome's `phabricator` brand glyph, the one Treeherder's own
-           commit list uses. Inlined as a mask rather than pulled from the icon
-           package, because this page ships as a single file. Same technique as
-           `.mitten` below, except the paint is `currentColor` rather than a
-           literal: a mask is painted by its own `background-color`, so a
-           hardcoded colour is one the link state can never reach. Whether
-           `:visited` actually moves it is up to the browser's privacy rules
-           and is not relied on here — nothing else on the row has visited
-           feedback either (`.rev-hash` is a flat grey). */
+        /* Font Awesome's `phabricator` glyph, as Treeherder uses. Inlined as a
+           mask so the page stays one file; `currentColor` rather than a literal,
+           which the link state can never reach. */
         .revisions-list .phabricator-icon {
             display: inline-block;
             width: 12px;
@@ -137,8 +141,8 @@
             mask-size: contain;
             mask-repeat: no-repeat;
         }
-        /* The expander is a button for keyboard and screen-reader reasons, and
-           is styled back down to the link it reads as. */
+        /* A button for keyboard and screen-reader reasons, styled as the link
+           it reads as. */
         .revisions-list .rev-more {
             background: none;
             border: none;
@@ -800,12 +804,7 @@
         <div class="controls" id="input-section">
             <div class="revision-input">
                 <label for="revision-input">Revision:</label>
-                <!--
-                  The input and the two buttons are one control, joined with no
-                  gap: the first button is where a `go` button would be, and it
-                  is one — pressing Enter in the box does the same thing.
-                  Shift+Enter does what the second one does.
-                -->
+                <!-- One control: Enter presses the first button, Shift+Enter the second. -->
                 <span class="load-group">
                     <input type="text" id="revision-input" placeholder="Enter a revision (40-char hex, Treeherder URL, or repo:rev)" autofocus>
                     <button id="load-btn" title="Read the profiles of the test jobs that failed. Enter does this too.">Load failed jobs</button>

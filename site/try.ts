@@ -703,7 +703,8 @@ const MAX_CONCURRENT_FETCHES = 64;
  */
 function processJobsWithWorkers(
     failedTestJobs: readonly Job[],
-    onProgress: (done: number, total: number) => void
+    onProgress: (done: number, total: number) => void,
+    signal: AbortSignal
 ): Promise<{ timings: Timing[]; workers: Worker[] }> {
     return new Promise((resolve) => {
         const allTimings: Timing[] = [];
@@ -716,6 +717,14 @@ function processJobsWithWorkers(
             workers.push(new Worker(workerUrl));
         }
         const idleWorkers = [...workers];
+
+        // Switching mode mid-load kills this one: the workers are the expensive
+        // part, and a parse already in flight would otherwise keep a core busy
+        // for the whole of the load that replaced it.
+        signal.addEventListener('abort', () => {
+            for (const worker of workers) worker.terminate();
+            resolve({ timings: [], workers: [] });
+        });
         interface PendingBuffer {
             id: number;
             buffer: ArrayBuffer;
@@ -767,6 +776,7 @@ function processJobsWithWorkers(
         let inFlight = 0;
 
         const fetchNext = (): void => {
+            if (signal.aborted) return;
             while (inFlight < MAX_CONCURRENT_FETCHES && queue.length > 0) {
                 const job = queue.shift()!;
                 const id = nextId++;
@@ -774,7 +784,7 @@ function processJobsWithWorkers(
                 const url =
                     'https://firefoxci.taskcluster-artifacts.net/' +
                     `${job.taskId}/${job.retryId}/public/test_info/profile_resource-usage.json`;
-                fetch(url)
+                fetch(url, { signal })
                     .then((response) => (response.ok ? response.arrayBuffer() : null))
                     .then((buffer) => {
                         if (buffer !== null) {
@@ -934,14 +944,12 @@ interface PageState {
     revision: string | null;
     repo: string;
     /**
-     * Whether the successful test jobs' profiles are read too.
-     *
-     * Was the "All jobs" checkbox, which is now the second of two buttons —
-     * and a button is not a control you can read a value off, so the choice
-     * has to live here. Written by whichever button (or Enter chord) started
-     * the load, read by `selectTryJobs` and by `updateUrlState`, so the URL,
-     * the button highlight and the jobs actually fetched cannot disagree.
-     */
+      * Whether the successful test jobs' profiles are read too.
+      *
+      * Was the "All jobs" checkbox; a button has no value to read, so the
+      * choice lives here and feeds the highlight, the URL and `selectTryJobs`
+      * from one assignment.
+      */
     readPassingJobs: boolean;
     /** jobName -> completed runs, for the debug JSON. */
     jobRunCounts: Map<string, number> | null;
@@ -988,16 +996,102 @@ function setStatus(text: string, isError = false): void {
     node.className = isError ? 'error-text' : '';
 }
 
+/**
+ * Draws the load's progress, or hides the bar for `fraction < 0`.
+ *
+ * Two things make the animation smooth, and it needed both.
+ *
+ * Updates are coalesced onto `PROGRESS_STEP_MS` and the transition lasts
+ * exactly that, so each one completes as the next target lands. A transition
+ * retargeted mid-flight restarts from wherever it had reached, and at a median
+ * 86ms between profile completions a 150ms transition never finished a step.
+ *
+ * And the animated property is `transform`, which the compositor owns. `width`
+ * is a layout property: animating it runs layout every frame on the main
+ * thread — the same thread decoding and parsing profiles — so it stuttered
+ * exactly when the page was busiest.
+ */
 function setProgress(fraction: number): void {
     const bar = requireElement('progress-bar');
     const fill = requireElement('progress-fill');
     if (fraction < 0) {
-        bar.classList.remove('visible');
-    } else {
-        bar.classList.add('visible');
-        fill.style.width = `${Math.round(fraction * 100)}%`;
+        clearInterval(progressTick);
+        progressTick = undefined;
+        // Paint whatever the last tick had not got to yet — normally the 100%
+        // that a load's final callback set, which would otherwise be discarded
+        // here and the bar would stop a step short.
+        if (pendingFraction !== null) {
+            paintProgress(bar, fill, pendingFraction);
+            pendingFraction = null;
+        }
+        clearTimeout(hideProgressTimer);
+        hideProgressTimer = setTimeout(() => {
+            bar.classList.remove('visible');
+            // `.resetting` drops the transition so the hidden bar snaps back
+            // to empty instead of animating there behind the fade.
+            hideProgressTimer = setTimeout(() => {
+                fill.classList.add('resetting');
+                fill.style.transform = 'scaleX(0)';
+                void fill.offsetWidth;
+                fill.classList.remove('resetting');
+            }, PROGRESS_FADE_MS);
+        }, PROGRESS_HOLD_MS);
+        return;
     }
+    clearTimeout(hideProgressTimer);
+    bar.classList.add('visible');
+
+    // The first value paints at once — waiting a tick to show 0 would make the
+    // bar appear late — and every later one rides the cadence.
+    if (progressTick === undefined) {
+        paintProgress(bar, fill, fraction);
+        progressTick = setInterval(() => {
+            if (pendingFraction === null) {
+                clearInterval(progressTick);
+                progressTick = undefined;
+                return;
+            }
+            paintProgress(bar, fill, pendingFraction);
+            pendingFraction = null;
+        }, PROGRESS_STEP_MS);
+        return;
+    }
+    // Keep only the newest: intermediate values inside one tick are never
+    // painted, so animating to them would be animating to stale data.
+    pendingFraction = fraction;
 }
+
+/**
+ * Scales the fill to `fraction` of the track.
+ *
+ * Quantised to whole pixels of the current track width, so a step lands on a
+ * pixel edge: with 110 jobs each worth 0.91% of a 716px bar, rounding to
+ * integer *percent* left ten of them moving nothing at all.
+ */
+function paintProgress(bar: HTMLElement, fill: HTMLElement, fraction: number): void {
+    const track = bar.clientWidth;
+    const scale = track > 0 ? Math.round(fraction * track) / track : fraction;
+    fill.style.transform = `scaleX(${scale})`;
+}
+
+/** The update cadence, matching `.progress-bar .fill`'s transition. */
+const PROGRESS_STEP_MS = 200;
+
+/**
+ * How long the full bar stays before fading.
+ *
+ * At least `PROGRESS_STEP_MS`, since the last step is still animating when the
+ * load ends: fading during it is what used to leave the bar stopped short of
+ * 100%. The rest is so a finished bar registers as finished.
+ */
+const PROGRESS_HOLD_MS = PROGRESS_STEP_MS + 150;
+
+/** Matches `.progress-bar`'s `transition: opacity`. */
+const PROGRESS_FADE_MS = 300;
+
+let hideProgressTimer: ReturnType<typeof setTimeout> | undefined;
+let progressTick: ReturnType<typeof setInterval> | undefined;
+let pendingFraction: number | null = null;
 
 // --- URL state ------------------------------------------------------------
 
@@ -1016,14 +1110,14 @@ function updateUrlState(): void {
 // --- loading --------------------------------------------------------------
 
 /**
- * Loads in one of the two modes, which is what both buttons and both Enter
- * chords go through.
- *
- * Sets the mode before loading rather than reading it from a control, so the
- * highlight, the URL and the profiles fetched all come from the same
- * assignment. Re-pressing the button of the mode already on screen reloads,
- * which is the one thing a mode indicator that is also a button has to keep
- * doing — it is still the Load button.
+ * The load currently running, so the next one can cancel it. `null` when idle.
+ */
+let inFlightLoad: AbortController | null = null;
+
+/**
+ * Loads in one of the two modes — what both buttons and both Enter chords go
+ * through. Re-pressing the current mode's button still reloads: it is the Load
+ * button as well as the indicator.
  */
 async function load(readPassingJobs: boolean): Promise<void> {
     state.readPassingJobs = readPassingJobs;
@@ -1032,12 +1126,9 @@ async function load(readPassingJobs: boolean): Promise<void> {
 }
 
 /**
- * Highlights the button whose mode the page is in.
- *
- * `aria-pressed` as well as the class: these two are a toggle pair, and a
- * screen reader gets nothing from a grey background. Called before the load
- * rather than after, so the highlight moves when the click happens rather than
- * when 1,500 profiles finish arriving.
+ * Highlights the button whose mode the page is in. `aria-pressed` too, since a
+ * grey background reaches no screen reader. Called before the load, so the
+ * highlight moves on the click rather than on completion.
  */
 function markLoadMode(): void {
     const failed = requireElement('load-btn');
@@ -1059,17 +1150,16 @@ async function loadRevision(): Promise<void> {
     state.repo = repo;
     updateUrlState();
 
-    // Both of them: one load at a time, and the other button starts a load too.
-    // Disabling only the one that was pressed left "Load failed jobs" live
-    // during the minutes an all-jobs load takes, and clicking it there ran a
-    // second load into the same page state.
-    const loadButtons = ['load-btn', 'load-all-btn'].map(
-        (id) => requireElement(id) as HTMLButtonElement
-    );
-    const setLoading = (loading: boolean): void => {
-        for (const button of loadButtons) button.disabled = loading;
-    };
-    setLoading(true);
+    // Supersede any load already running rather than disabling the buttons.
+    // An all-jobs load reads every profile of the push and can take minutes,
+    // and the reason to click the other button is usually that you want out of
+    // it — so the escape hatch has to stay live. `abort` stops the fetches and
+    // the workers; the generation check below stops a superseded load from
+    // rendering over the one that replaced it.
+    inFlightLoad?.abort();
+    const thisLoad = new AbortController();
+    inFlightLoad = thisLoad;
+    const superseded = (): boolean => thisLoad.signal.aborted;
     requireElement('results').replaceChildren();
     requireElement('treeherder-link-container').replaceChildren();
     requireElement('filter-container').style.display = 'none';
@@ -1084,11 +1174,13 @@ async function loadRevision(): Promise<void> {
         setStatus('Looking up push on Treeherder...');
         setProgress(-1);
         const { pushId, revisions, revisionCount } = await fetchPushId(repo, revision);
+        if (superseded()) return;
         revisionsExpanded = false;
         renderRevisions(revisions, revisionCount);
 
         setStatus('Fetching jobs...');
         const { allJobs, propertyNames } = await fetchAllJobs(pushId);
+        if (superseded()) return;
         const jobs = parseJobs(allJobs, propertyNames);
 
         const totalJobs = jobs.length;
@@ -1138,7 +1230,6 @@ async function loadRevision(): Promise<void> {
             appendNoFailures(empty, true);
             requireElement('results').replaceChildren(empty);
             renderTreeherderLink();
-            setLoading(false);
             return;
         }
 
@@ -1151,10 +1242,16 @@ async function loadRevision(): Promise<void> {
         );
         setProgress(0);
 
-        const result = await processJobsWithWorkers(jobsToProcess, (done, total) => {
-            setStatus(`Fetching & parsing profiles... (${done}/${total})`);
-            setProgress(done / total);
-        });
+        const result = await processJobsWithWorkers(
+            jobsToProcess,
+            (done, total) => {
+                setStatus(`Fetching & parsing profiles... (${done}/${total})`);
+                setProgress(done / total);
+            },
+            thisLoad.signal
+        );
+        // Everything past here writes to the page, so a superseded load stops.
+        if (superseded()) return;
 
         tagIntermittent(result.timings, { jobsToProcess, successfulJobNames });
 
@@ -1205,24 +1302,24 @@ async function loadRevision(): Promise<void> {
             }
         }, 0);
     } catch (error) {
+        // An aborted fetch is this load being replaced, not a failure: the load
+        // that superseded it owns the status line now.
+        if (superseded()) return;
         setStatus(error instanceof Error ? error.message : String(error), true);
         setProgress(-1);
         console.error(error);
     } finally {
-        setLoading(false);
+        if (inFlightLoad === thisLoad) {
+            inFlightLoad = null;
+        }
     }
 }
 
 // --- rendering ------------------------------------------------------------
 
 /**
- * Whether the commit list is showing every commit Treeherder returned.
- *
- * Page state rather than URL state: which commits are on screen is not a view
- * of the push worth pasting into a bug, and `writeUrlState` deliberately keeps
- * the query to what is (`site/try-view.ts`'s note on the parameters it drops).
- * Reset on each load, so a 40-commit push does not open expanded because the
- * previous one was.
+ * Whether the commit list is expanded. Page state, not URL state: it is not a
+ * view of the push worth pasting into a bug. Reset on each load.
  */
 let revisionsExpanded = false;
 
@@ -1257,12 +1354,8 @@ function renderRevisions(revisions: readonly PushRevision[], totalCount: number)
 }
 
 /**
- * The commit list, with both cutoffs drawn.
- *
- * Takes its own redraw as a parameter rather than calling `renderRevisions`
- * again: expanding must not retitle the tab or re-derive the heading, and a
- * closure over the already-computed lists is also what keeps the expander from
- * needing a second Treeherder request.
+ * The commit list. Takes its own redraw rather than calling `renderRevisions`
+ * again, so expanding neither retitles the tab nor refetches the push.
  */
 function revisionList(
     displayRevs: readonly PushRevision[],
@@ -1286,11 +1379,8 @@ function revisionList(
         );
         const phabricator = phabricatorRevision(rev.comments);
         if (phabricator) {
-            // The icon carries the name in its tooltip rather than beside it:
-            // a column of `D327289`s cost more width than the commit message
-            // it pushed off the line, and the number is not what a reader
-            // scans for. Treeherder's own list makes the same trade
-            // (`mozilla/treeherder#9741`), with this glyph.
+            // The name is in the tooltip: a column of `D327289`s cost more
+            // width than the commit message they displaced.
             row.append(
                 link(phabricator.url, {
                     class: 'rev-phab',
@@ -1313,8 +1403,7 @@ function revisionList(
         list.append(row);
     }
 
-    // At most one of these is non-zero; `planRevisionList` is what guarantees
-    // it, so this renders both branches without checking the other.
+    // At most one is non-zero — `planRevisionList` guarantees it.
     if (plan.hidden > 0) {
         const more = el('button', {
             class: 'rev-more',
@@ -2979,9 +3068,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     requireInput('revision-input').addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
-        // The first button is where a `go` button goes and Enter is its key;
-        // Shift is what picks the second. `preventDefault` because this input
-        // is not in a form today and a future one must not also submit.
+        // Enter presses the first button, Shift+Enter the second.
+        // `preventDefault` so a future enclosing form cannot also submit.
         event.preventDefault();
         void load(event.shiftKey);
     });
