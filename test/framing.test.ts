@@ -818,7 +818,10 @@ const FRAMING: FramingEntry[] = [
             universe:
                 'failed test jobs; the successful ones opt-in, which is the only way a test ' +
                 'that failed then passed on retry can appear',
-            harness: 'mochitest and xpcshell — whichever the push ran',
+            harness:
+                'mochitest and xpcshell — whichever the push ran, including the ' +
+                'test-verify and test-verify-gpu suites, which run them under a name ' +
+                'that says the suite instead',
         },
         cli: {
             rowUnit: 'test path',
@@ -832,7 +835,10 @@ const FRAMING: FramingEntry[] = [
             universe:
                 'failed test jobs; the successful ones opt-in, which is the only way a test ' +
                 'that failed then passed on retry can appear',
-            harness: 'mochitest and xpcshell — whichever the push ran',
+            harness:
+                'mochitest and xpcshell — whichever the push ran, including the ' +
+                'test-verify and test-verify-gpu suites, which run them under a name ' +
+                'that says the suite instead',
         },
         divergences: [
             {
@@ -2445,6 +2451,49 @@ test('try lists only test jobs by default; --other-jobs adds the rest', async ()
         fetchUrl: profileFetcher(profiles),
     });
     assert.match(withFlag.stdout, /build-linux64/);
+});
+
+/**
+ * The same flag, on the exit `renderText` takes when nothing failed at the test
+ * level — which is where it is the only thing left to look at, and where it did
+ * nothing.
+ *
+ * The push here is the shape `test-verify` used to produce: every failure is a
+ * job this command could not attribute a test to, so the early return fires and
+ * the section that honours `--other-jobs` is never reached. A count with no way
+ * to see the list reads as "there is nothing more to show".
+ */
+test('try --other-jobs lists them on a push with no test-level failure either', async () => {
+    const jobs = [
+        job('test-linux2404-64/opt-xpcshell', 'TASKA', 'success'),
+        job('build-linux64/opt', 'TASKBUILD', 'busted'),
+    ];
+    const profiles = { TASKA: profileWithFailures([]) };
+
+    const byDefault = captureStreams();
+    await run({
+        argv: ['try', 'abcdef123456'],
+        streams: byDefault,
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder(jobs),
+        fetchUrl: profileFetcher(profiles),
+    });
+    assert.match(byDefault.stdout, /No test-level failures found/);
+    assert.match(byDefault.stdout, /1 non-test jobs failed/);
+    assert.doesNotMatch(byDefault.stdout, /build-linux64/, 'the default still counts only');
+
+    const withFlag = captureStreams();
+    await run({
+        argv: ['try', 'abcdef123456', '--other-jobs'],
+        streams: withFlag,
+        source: fixtureSource(),
+        cache: diskCache({ directory: join(tmpdir(), 'fx-tests-never-used'), ttlMs: 0 }),
+        treeherder: fakeTreeherder(jobs),
+        fetchUrl: profileFetcher(profiles),
+    });
+    assert.match(withFlag.stdout, /No test-level failures found/);
+    assert.match(withFlag.stdout, /build-linux64/, 'and the flag reaches this exit too');
 });
 
 /**

@@ -753,10 +753,27 @@ profiles by default and 1,584 with the flag — every completed test job, at ten
 of megabytes each. Raise `--concurrency` for it; the header line states which
 set was read either way, so a report cannot be mistaken for the other one.
 
+**What counts as a test job.** A job whose *name* holds `mochitest` or
+`xpcshell`, plus the `test-verify` and `test-verify-gpu` suites, which run those
+same two harnesses through `desktop_unittest.py` under a name that says the
+suite instead (`taskcluster/kinds/test/misc.yml`). Everything else is a non-test
+job here — reftest, wpt and `test-verify-wpt` included — because its profile
+carries no `Test` markers to read, however much of a test it is elsewhere.
+`lib/model/try-jobs.ts` owns the rule and both `fx-tests try` and `try.html`
+call it, so the two cannot disagree.
+
+Getting that list wrong is silent in a specific way: a test job the rule misses
+is not dropped, it is *reclassified* as a failed build, so the report says
+"no test-level failures" and points at Treeherder. On try `433ac99a803f` that
+hid three real mochitest failures behind a line reading `3 non-test jobs
+failed`.
+
 `--other-jobs` is the unrelated flag it is easy to confuse with this: builds and
 lint that failed are counted in the header and summarised in one line by
 default, and `--other-jobs` prints the list. That is a display filter over data
-already fetched, and it changes no fetch. `--json` always carries them as
+already fetched, and it changes no fetch. It applies to a push with no
+test-level failure too, which is where it matters most and where it used to do
+nothing. `--json` always carries them as
 `otherFailedJobs[]`, along with `profilesRead`, `readPassingJobs` and
 `passingTestJobCount` — the last three so a script can tell "no intermittents
 found" from "none looked for".

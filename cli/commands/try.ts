@@ -1718,6 +1718,33 @@ function renderTestReport(
     return joinLines(lines);
 }
 
+/**
+ * The non-test job failures, listed under `--other-jobs` and counted otherwise.
+ *
+ * One function because `renderText` has two exits — a push with no test-level
+ * failure returns early, before the sections — and the early one used to count
+ * these without offering the list, so `--other-jobs` was silently ignored on
+ * exactly the pushes where it is the only thing left to look at. That is not
+ * hypothetical: before `isTestJob` learned about `test-verify`, a push whose
+ * only failures were test-verify jobs took that exit with all of them in here.
+ */
+function otherFailedJobLines(result: TryJson, limit: number, otherJobs: boolean): string[] {
+    if (result.otherFailedJobs.length === 0) return [];
+    if (!otherJobs) {
+        return [
+            '',
+            `${result.otherFailedJobs.length} non-test jobs failed (--other-jobs to list them).`,
+        ];
+    }
+    const shown = applyLimit(result.otherFailedJobs, limit);
+    return [
+        '',
+        `OTHER FAILED JOBS (${result.otherFailedJobs.length})`,
+        ...shown.map((job) => `  ${job.result.padEnd(10)} ${job.jobName}  ${job.taskId}`),
+        moreLine(result.otherFailedJobs.length, shown.length),
+    ].filter((line): line is string => line !== null);
+}
+
 /** Plain text, as `CLI.md` lays it out. */
 function renderText(
     result: TryJson,
@@ -1748,12 +1775,7 @@ function renderText(
                     `attributed to them (harness crash, or no profile).`
             );
         }
-        if (result.otherFailedJobs.length > 0) {
-            lines.push(
-                `${result.otherFailedJobs.length} non-test jobs failed ` +
-                    `(--other-jobs to list them).`
-            );
-        }
+        lines.push(...otherFailedJobLines(result, limit, otherJobs));
         return joinLines(lines);
     }
 
@@ -1798,20 +1820,7 @@ function renderText(
         lines.push('  Treeherder; this command cannot say what failed in them.');
     }
 
-    if (otherJobs && result.otherFailedJobs.length > 0) {
-        lines.push('');
-        lines.push(`OTHER FAILED JOBS (${result.otherFailedJobs.length})`);
-        const shown = applyLimit(result.otherFailedJobs, limit);
-        for (const job of shown) {
-            lines.push(`  ${job.result.padEnd(10)} ${job.jobName}  ${job.taskId}`);
-        }
-        lines.push(moreLine(result.otherFailedJobs.length, shown.length));
-    } else if (result.otherFailedJobs.length > 0) {
-        lines.push('');
-        lines.push(
-            `${result.otherFailedJobs.length} non-test jobs also failed (--other-jobs to list).`
-        );
-    }
+    lines.push(...otherFailedJobLines(result, limit, otherJobs));
 
     return joinLines(lines);
 }

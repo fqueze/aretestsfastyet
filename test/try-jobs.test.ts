@@ -103,6 +103,32 @@ test('a job is a test job when its name contains a parseable harness', () => {
     assert.equal(isTestJob('test-linux2404-64/opt-web-platform-tests-2'), false);
     assert.deepEqual([...SUPPORTED_HARNESSES], ['mochitest', 'xpcshell']);
 
+    // And the harness name is not the only way a job runs one. `test-verify`
+    // reruns the tests a push touched through `desktop_unittest.py`, so its
+    // profile has the same `Test` markers, but its name says the suite rather
+    // than the harness — which is why the substring rule alone called these
+    // builds. Verified against try `433ac99a803f`: 20 runs, 3 `testfailed`,
+    // three real mochitest failures reported as failed *builds* before this.
+    assert.equal(isTestJob('test-linux2404-64/opt-test-verify-1'), true);
+    assert.equal(isTestJob('test-windows11-64-25h2/opt-test-verify-1'), true);
+    assert.equal(isTestJob('test-linux2404-64/debug-test-verify-1'), true);
+    assert.equal(isTestJob('test-android-em-14-x86_64/opt-test-verify-1'), true);
+    // The `no-fission` variant `misc.yml` declares.
+    assert.equal(isTestJob('test-linux2404-64/opt-test-verify-no-fission-1'), true);
+    // The rule anchors on the separator rather than stripping `opt-`/`debug-`,
+    // so a build type `misc.yml` excludes today would still be read as one.
+    assert.equal(isTestJob('test-linux2404-64/asan-test-verify-1'), true);
+    // Same suite category on a GPU worker, so the same harnesses. Its file
+    // patterns take some reftests too, which contribute no marker and are
+    // therefore absent from the report rather than wrong in it.
+    assert.equal(isTestJob('test-linux2404-64/opt-test-verify-gpu-1'), true);
+
+    // `test-verify-wpt` is the wpt harness, and is the reason the kinds are
+    // prefixes read longest-first rather than one `test-verify` prefix test:
+    // the shorter prefix matches this name, and must not decide it.
+    assert.equal(isTestJob('test-linux2404-64/opt-test-verify-wpt-1'), false);
+    assert.equal(isTestJob('test-windows11-64-25h2/debug-test-verify-wpt-2'), false);
+
     // The looseness cuts the other way too, and on this fixture it decides
     // 127 jobs: every geckoview job on this push is a geckoview-*mochitest*,
     // so the substring rule takes all of them. Named because "geckoview" reads

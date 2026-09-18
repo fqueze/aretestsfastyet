@@ -10724,7 +10724,15 @@ function oneLine3(value) {
 
 // lib/model/try-jobs.ts
 var SUPPORTED_HARNESSES = ["mochitest", "xpcshell"];
+var VERIFY_JOB_KINDS = [
+  { prefix: "test-verify-wpt", parseable: false },
+  { prefix: "test-verify-gpu", parseable: true },
+  { prefix: "test-verify", parseable: true }
+];
 function isTestJob(jobName) {
+  for (const kind of VERIFY_JOB_KINDS) {
+    if (jobName.includes(`-${kind.prefix}`)) return kind.parseable;
+  }
   return SUPPORTED_HARNESSES.some((harness) => jobName.includes(harness));
 }
 var FAILURE_STATUSES = /* @__PURE__ */ new Set([
@@ -12523,6 +12531,22 @@ function renderTestReport(context, revision, project, testPath, timings, runsPer
   );
   return joinLines(lines);
 }
+function otherFailedJobLines(result, limit, otherJobs) {
+  if (result.otherFailedJobs.length === 0) return [];
+  if (!otherJobs) {
+    return [
+      "",
+      `${result.otherFailedJobs.length} non-test jobs failed (--other-jobs to list them).`
+    ];
+  }
+  const shown = applyLimit(result.otherFailedJobs, limit);
+  return [
+    "",
+    `OTHER FAILED JOBS (${result.otherFailedJobs.length})`,
+    ...shown.map((job) => `  ${job.result.padEnd(10)} ${job.jobName}  ${job.taskId}`),
+    moreLine(result.otherFailedJobs.length, shown.length)
+  ].filter((line) => line !== null);
+}
 function renderText9(result, limit, permaOnly, otherJobs, allMessages) {
   const lines = [];
   lines.push(
@@ -12539,11 +12563,7 @@ function renderText9(result, limit, permaOnly, otherJobs, allMessages) {
         `${result.unblamedJobCount} failed test jobs had no test-level failure attributed to them (harness crash, or no profile).`
       );
     }
-    if (result.otherFailedJobs.length > 0) {
-      lines.push(
-        `${result.otherFailedJobs.length} non-test jobs failed (--other-jobs to list them).`
-      );
-    }
+    lines.push(...otherFailedJobLines(result, limit, otherJobs));
     return joinLines(lines);
   }
   lines.push("");
@@ -12584,20 +12604,7 @@ function renderText9(result, limit, permaOnly, otherJobs, allMessages) {
     );
     lines.push("  Treeherder; this command cannot say what failed in them.");
   }
-  if (otherJobs && result.otherFailedJobs.length > 0) {
-    lines.push("");
-    lines.push(`OTHER FAILED JOBS (${result.otherFailedJobs.length})`);
-    const shown = applyLimit(result.otherFailedJobs, limit);
-    for (const job of shown) {
-      lines.push(`  ${job.result.padEnd(10)} ${job.jobName}  ${job.taskId}`);
-    }
-    lines.push(moreLine(result.otherFailedJobs.length, shown.length));
-  } else if (result.otherFailedJobs.length > 0) {
-    lines.push("");
-    lines.push(
-      `${result.otherFailedJobs.length} non-test jobs also failed (--other-jobs to list).`
-    );
-  }
+  lines.push(...otherFailedJobLines(result, limit, otherJobs));
   return joinLines(lines);
 }
 function section(title, failures, description, limit, allMessages) {

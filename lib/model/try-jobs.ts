@@ -82,16 +82,64 @@ import { FAILED_JOB_RESULTS } from '../sources/treeherder.ts';
 export const SUPPORTED_HARNESSES: readonly string[] = ['mochitest', 'xpcshell'];
 
 /**
- * Whether a job name names one of the harnesses whose profiles can be parsed.
+ * Job kinds that run a supported harness without naming it.
  *
- * A substring test on the job name, which is what upstream does and is looser
- * than it looks: it matches `test-linux2404-64/debug-xpcshell-3` and would also
- * match a hypothetical `mochitest-devtools-chrome` variant nobody has parsed.
- * Kept as the substring test rather than tightened, because the two consumers
+ * `test-verify` reruns the tests a push *touched*, over and over, to catch the
+ * new intermittent before it lands. It runs them through `desktop_unittest.py`
+ * — mochitest and xpcshell, the same two harnesses, the same `Test` markers in
+ * the same `profile_resource-usage.json`. `taskcluster/kinds/test/misc.yml`
+ * names the suite `test-verify` rather than after what it runs, so the
+ * substring rule below sees a job name with no harness in it and calls a
+ * mochitest job a build.
+ *
+ * `test-verify-gpu` is the same suite on a GPU worker
+ * (`suite: {category: test-verify, name: test-verify-gpu}`), so it is here too.
+ * Its file patterns (`taskcluster/gecko_taskgraph/util/perfile.py:34`) select
+ * `dom/canvas`, `gfx/tests`, `webgl` and `devtools/canvasdebugger` — mochitests
+ * — alongside a `reftest` glob, which is not parseable. That mix costs nothing:
+ * a reftest contributes no `Test` marker, so it is absent from the report
+ * rather than wrong in it, which is what a reftest job already is here.
+ *
+ * `test-verify-wpt` is **not** here, and is why this is a list of prefixes read
+ * longest-first rather than a `test-verify` prefix test. It is the wpt harness
+ * (`taskcluster/kinds/web-platform-tests/kind.yml:966`), whose profile has no
+ * `Test` markers — the same line `SUPPORTED_HARNESSES` draws for
+ * `test-linux2404-64/opt-web-platform-tests-2`.
+ */
+const VERIFY_JOB_KINDS: readonly { prefix: string; parseable: boolean }[] = [
+    { prefix: 'test-verify-wpt', parseable: false },
+    { prefix: 'test-verify-gpu', parseable: true },
+    { prefix: 'test-verify', parseable: true },
+];
+
+/**
+ * Whether a job runs a harness whose profile this tooling can extract
+ * per-test timings from.
+ *
+ * Two rules, because Firefox names test jobs two ways. Most name their harness,
+ * and those are a substring test on the job name — what upstream does, and
+ * looser than it looks: it matches `test-linux2404-64/debug-xpcshell-3` and
+ * would also match a hypothetical `mochitest-devtools-chrome` variant nobody
+ * has parsed. Kept loose rather than tightened, because the two consumers
  * agreeing matters more here than either one being right — and a tightening
  * would silently drop rows from one of them if only one copy got it.
+ *
+ * The rest name a *suite* that runs one, and `VERIFY_JOB_KINDS` is the list of
+ * those. A substring test cannot express it: `test-verify` is a prefix of
+ * `test-verify-wpt`, which must not match, so the kinds are read longest-prefix
+ * first and the first hit decides. Verified against a real push — 20
+ * `test-verify` runs on try `433ac99a803f`, 3 of them `testfailed`, all three
+ * reported as failed *builds* before this.
  */
 export function isTestJob(jobName: string): boolean {
+    // `test-linux2404-64/opt-test-verify-1` — the kind is the tail, after the
+    // platform and the build type, so this reads the whole name and anchors on
+    // the separator rather than stripping a list of build types. `misc.yml`
+    // keeps test-verify off asan and ccov today, and an `includes` that did not
+    // anchor would take `test-verify-wpt` through the `test-verify` entry.
+    for (const kind of VERIFY_JOB_KINDS) {
+        if (jobName.includes(`-${kind.prefix}`)) return kind.parseable;
+    }
     return SUPPORTED_HARNESSES.some((harness) => jobName.includes(harness));
 }
 
