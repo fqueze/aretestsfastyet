@@ -337,9 +337,12 @@ Two kinds of profile, with different availability:
   holds the job's per-test outcomes, which is what `fx-tests task` reads.
 - **Per-test failure profile**, uploaded only when a test fails: the filename is
   *not* derivable from the task ID. It appears in the failure message as
-  `"profile uploaded in profile_<name>.json"`, so getting it means reading that
-  message (`old/try.html:2900`). This is why profile URLs matter most for
-  `fx-tests try`, which already has the push's failure messages in hand.
+  `"profile uploaded in profile_<name>.json.gz"`, so getting it means reading
+  that message (`old/try.html:2900`). Test jobs upload the profile gzipped;
+  the older `.json` name is still accepted, because artifacts uploaded before
+  the change keep it and Treeherder serves their messages unchanged. This is
+  why profile URLs matter most for `fx-tests try`, which already has the push's
+  failure messages in hand.
 
 For commands working from aggregated data the failure message is in the data
 file, so the same extraction applies. In practice few tests keep a

@@ -1151,9 +1151,11 @@ export function visibleUnblamedGroups(
  * `lib/links.ts` has `uploadedProfileName`, which is the same regex. Not
  * imported, because the page needs it in the *worker* too and the worker's
  * bundle should not pull in the link builders; see `site/try-worker.ts`.
+ * Both accept `.json` and `.json.gz`, and a change to one is a change to the
+ * other — `lib/links.ts` explains why the `.gz` branch is load-bearing.
  */
 export function extractUploadedProfileName(message: string | null | undefined): string | null {
-    const match = message?.match(/profile uploaded in (profile_\S+\.json)/);
+    const match = message?.match(/profile uploaded in (profile_\S+\.json(?:\.gz)?)/);
     return match ? match[1]! : null;
 }
 

@@ -1533,6 +1533,40 @@ test('a pure profile notice is not ranked as a test path', () => {
     );
 });
 
+test('a gzipped rerun profile is still recognised as a rerun', () => {
+    // `RERUN_SUFFIX` is `$`-anchored, so the `.gz` is not cosmetic: without it
+    // every gzipped rerun matched nothing and reported `isRerun: false`, which
+    // is the flag a reader uses to tell the second upload from the first.
+    const occurrence: BugOccurrence = {
+        bugId: 2060167,
+        jobId: 1,
+        testSuite: 'mochitest-browser-chrome-1',
+        platform: 'linux2404-64',
+        buildType: 'opt',
+        revision: 'abc',
+        tree: 'autoland',
+        pushTime: '2026-09-03 21:00:00',
+        machineName: 'm',
+        taskId: 'T1',
+        runId: 0,
+        lines: [
+            'TEST-UNEXPECTED-FAIL | browser_a.js | failed; profile uploaded in profile_browser_a.js.json.gz',
+            'TEST-UNEXPECTED-FAIL | browser_a.js | failed; profile uploaded in profile_browser_a-2.js.json.gz',
+        ],
+    };
+    const profiles = occurrenceProfiles([occurrence])[0]!.profiles;
+    // The whole name survives, so the URL points at an artifact that exists.
+    assert.deepEqual(
+        profiles.map((entry) => entry.filename),
+        ['profile_browser_a.js.json.gz', 'profile_browser_a-2.js.json.gz']
+    );
+    assert.deepEqual(
+        profiles.map((entry) => entry.isRerun),
+        [false, true]
+    );
+    assert.ok(profiles.every((entry) => entry.url?.endsWith(entry.filename)));
+});
+
 test('no reader of an occurrence reaches the raw lines past the partition', async () => {
     // The class rather than the two symptoms: whatever a caller asks for, a
     // `profile uploaded in …` notice must not appear as a failure message or as

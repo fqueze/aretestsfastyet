@@ -1648,6 +1648,42 @@ test('the "profile uploaded in" notice yields the artifact filename', () => {
     assert.equal(extractUploadedProfileName(undefined), null);
 });
 
+test('the notice keeps the .gz of a gzipped profile', () => {
+    // Same regex as `uploadedProfileName` (`lib/links.ts`), duplicated for the
+    // worker bundle, so it needs the same coverage: `.json` is a prefix of
+    // `.json.gz`, and a pattern ending at `.json` truncates instead of failing.
+    assert.equal(
+        extractUploadedProfileName(
+            'Found unexpected failures during the test; profile uploaded in profile_test_foo.js.json.gz'
+        ),
+        'profile_test_foo.js.json.gz'
+    );
+    assert.equal(
+        extractUploadedProfileName('profile uploaded in profile_test_foo.js.json'),
+        'profile_test_foo.js.json'
+    );
+});
+
+test('a gzipped notice is still suppressed from the message list', () => {
+    // The icon replaces the line. A truncated match would still suppress it,
+    // so this pins the pairing rather than the extraction.
+    const instance: Timing = {
+        path: 'a/test_x.js',
+        duration: 1,
+        status: 'FAIL',
+        timestamp: 1,
+        jobName: 'j',
+        taskId: 'T',
+        retryId: 0,
+        allMessages: [
+            { message: 'the real failure' },
+            { message: 'profile uploaded in profile_x.json.gz' },
+        ],
+    };
+    assert.deepEqual(instanceMessages([instance]), ['the real failure']);
+    assert.equal(findUploadedProfile([instance])!.filename, 'profile_x.json.gz');
+});
+
 test('the notice is excluded from the copied message list', () => {
     const instance: Timing = {
         path: 'a/test_x.js',

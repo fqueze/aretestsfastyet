@@ -524,13 +524,17 @@ export function occurrenceConfiguration(row: BugOccurrence): string {
 /**
  * The `-2` rerun suffix the harness appends to a second upload of one test.
  *
- * `profile_browser_resize_sidebar-2.js.json` against
- * `profile_browser_resize_sidebar.js.json`: the suffix sits before the test's
- * own extension, not at the end of the name.
+ * `profile_browser_resize_sidebar-2.js.json.gz` against
+ * `profile_browser_resize_sidebar.js.json.gz`: the suffix sits before the
+ * test's own extension, not at the end of the name.
+ *
+ * The trailing `(?:\.gz)?` is not optional decoration: this test is
+ * `$`-anchored, so before it every gzipped rerun profile matched nothing and
+ * reported `isRerun: false`.
  *
  * Used to **recognise** a name the log gave, never to build one it did not.
  */
-const RERUN_SUFFIX = /-2(\.\w+\.json)$/;
+const RERUN_SUFFIX = /-2(\.\w+\.json)(?:\.gz)?$/;
 
 /**
  * Every per-test profile one bug's occurrences point at, occurrence order.

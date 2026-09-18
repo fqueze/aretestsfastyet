@@ -284,7 +284,7 @@ export const TRAPS: readonly TrapFact[] = [
             'task ID — that is the one showing whether a timeout was the test being slow or the',
             'machine saturated. The **per-test failure profile** is different: uploaded only',
             'when a test fails, and named only in the failure message ("profile uploaded in',
-            'profile_<name>.json"). Where none was named, no URL exists to construct.',
+            'profile_<name>.json.gz"). Where none was named, no URL exists to construct.',
         ],
     },
     {

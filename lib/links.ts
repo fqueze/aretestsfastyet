@@ -44,6 +44,13 @@
  * `uploadedProfileName()` therefore returns `null` rather than guessing, and
  * `CLI.md` makes the same promise to the user: where no profile was uploaded,
  * no URL is emitted.
+ *
+ * The extension is `.json` or `.json.gz` — test jobs moved to uploading the
+ * profile gzipped. Both are accepted because a window of already-uploaded
+ * artifacts uses the old name, and Treeherder serves their messages unchanged.
+ * `.json` being a prefix of `.json.gz` is why the `(?:\.gz)?` matters: without
+ * it the pattern still matched, backtracked to the shorter boundary and
+ * returned a truncated filename, so the link 404ed instead of failing here.
  */
 
 // --- Taskcluster ---------------------------------------------------------
@@ -101,8 +108,11 @@ export function resourceUsageProfileUrl(taskId: string, retryId: number): string
  * including the regex. The message looks like:
  *
  * ```
- * Found unexpected failures during the test; profile uploaded in profile_foo.js.json
+ * Found unexpected failures during the test; profile uploaded in profile_foo.js.json.gz
  * ```
+ *
+ * The extension is `.json.gz` on current jobs and `.json` on older uploads;
+ * both are matched. See the module comment.
  *
  * `null` is the common case and is not an error: most failure messages carry no
  * profile, because the harness only captures one for certain failures. A caller
@@ -112,7 +122,7 @@ export function uploadedProfileName(message: string | null | undefined): string 
     if (!message) {
         return null;
     }
-    const match = /profile uploaded in (profile_\S+\.json)/.exec(message);
+    const match = /profile uploaded in (profile_\S+\.json(?:\.gz)?)/.exec(message);
     return match?.[1] ?? null;
 }
 

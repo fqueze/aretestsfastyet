@@ -1981,7 +1981,7 @@ function uploadedProfileName(message) {
   if (!message) {
     return null;
   }
-  const match = /profile uploaded in (profile_\S+\.json)/.exec(message);
+  const match = /profile uploaded in (profile_\S+\.json(?:\.gz)?)/.exec(message);
   return match?.[1] ?? null;
 }
 function uploadedProfileUrl(taskId, retryId, message) {
@@ -5448,7 +5448,7 @@ var TRAPS = [
       "task ID \u2014 that is the one showing whether a timeout was the test being slow or the",
       "machine saturated. The **per-test failure profile** is different: uploaded only",
       'when a test fails, and named only in the failure message ("profile uploaded in',
-      'profile_<name>.json"). Where none was named, no URL exists to construct.'
+      'profile_<name>.json.gz"). Where none was named, no URL exists to construct.'
     ]
   },
   {
@@ -7513,7 +7513,7 @@ function tally(names) {
 function occurrenceConfiguration(row) {
   return `${occurrenceConfig(row)} ${row.testSuite}`;
 }
-var RERUN_SUFFIX = /-2(\.\w+\.json)$/;
+var RERUN_SUFFIX = /-2(\.\w+\.json)(?:\.gz)?$/;
 function occurrenceProfiles(occurrences) {
   const rows2 = [];
   for (const occurrence of occurrences) {

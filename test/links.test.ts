@@ -93,6 +93,34 @@ test('uploadedProfileName reads the filename out of a failure message', () => {
     assert.equal(uploadedProfileName('profile uploaded in somewhere else'), null);
 });
 
+test('uploadedProfileName keeps the .gz of a gzipped profile', () => {
+    // Test jobs upload the profile gzipped. The whole extension belongs to the
+    // filename: `.json` is a *prefix* of `.json.gz`, so a pattern ending at
+    // `.json` still matches a gzipped name, backtracks to the shorter boundary
+    // and returns a truncated filename — which is a URL that 404s rather than a
+    // null the callers already handle.
+    assert.equal(
+        uploadedProfileName(
+            'Found unexpected failures during the test; profile uploaded in profile_test_foo.js.json.gz'
+        ),
+        'profile_test_foo.js.json.gz'
+    );
+    // Older uploads predate the change and their messages are served unchanged.
+    assert.equal(
+        uploadedProfileName('profile uploaded in profile_test_foo.js.json'),
+        'profile_test_foo.js.json'
+    );
+});
+
+test('uploadedProfileUrl points at the gzipped artifact that exists', () => {
+    // The truncated name would be a well-formed URL to a missing artifact, so
+    // this is the assertion that the link actually resolves.
+    assert.equal(
+        uploadedProfileUrl(TASK, 2, 'test failed; profile uploaded in profile_browser_tabs.js.json.gz'),
+        `${FIREFOX_CI_ROOT}/api/queue/v1/task/${TASK}/runs/2/artifacts/public/test_info/profile_browser_tabs.js.json.gz`
+    );
+});
+
 test('uploadedProfileUrl returns nothing rather than guessing a filename', () => {
     const message = 'test failed; profile uploaded in profile_browser_tabs.js.json';
     assert.equal(
