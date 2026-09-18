@@ -1398,6 +1398,131 @@ export function hgRepoPath(repo: string): string {
     return map[repo] ?? repo;
 }
 
+// --- the commit list ------------------------------------------------------
+
+/**
+ * How many commits the list shows before the first "more" link.
+ *
+ * A 39-commit stack pushed to try filled the whole first screen with commit
+ * messages and pushed the failures — the thing the page is for — below the
+ * fold. Five is what fits above the summary cards.
+ */
+export const REVISIONS_SHOWN = 5;
+
+/**
+ * Treeherder's own cap on the commits it will return for a push.
+ *
+ * `treeherder/webapp/api/serializers.py`'s `PushSerializer.get_revisions`
+ * slices `push.commits.all().order_by("-id")[:20]`. It is a constant in the
+ * serializer, not a query parameter, so **no request can ask for more** — the
+ * `count=10` in our push URL bounds the number of *pushes*, and `full=true`
+ * only decides whether `revisions` is present at all. Checked against the
+ * source at `../treeherder`; a push of 40 commits answers with 20 and
+ * `revision_count: 40`.
+ *
+ * Recorded as a named constant because the number is not ours and cannot be
+ * derived from a response: a push of exactly 20 commits is indistinguishable
+ * from a truncated one by length alone. `revision_count` is the only signal,
+ * which is why `revisionOverflow` takes it.
+ */
+export const TREEHERDER_REVISION_CAP = 20;
+
+/** What the commit list renders. */
+export interface RevisionListPlan<R> {
+    /** The commits to render, newest first. */
+    shown: R[];
+    /**
+     * Commits not on screen that clicking the expander would put there.
+     *
+     * Counted over the whole push rather than over the response, so a long
+     * stack reads `+ 34 more` where the API only returned 14 of those 34. That
+     * over-promises by design: two links at once
+     * (`+ 14 more` above `+ 20 more on the pushlog`) read as broken, and one
+     * honest-but-partial count is the better trade. What the click cannot
+     * deliver, `beyondApi` then offers.
+     */
+    hidden: number;
+    /**
+     * Commits Treeherder never sent, so nothing here can reveal them.
+     *
+     * Non-zero only once `expanded` is true: while the expander is on screen
+     * its count already covers these, and saying so twice is the stacked pair
+     * this replaced. After expanding, the expander is gone and this becomes the
+     * only thing left to say — which is also when the pushlog is the only place
+     * left to say it about.
+     */
+    beyondApi: number;
+}
+
+/**
+ * Splits a push's commits into the shown, the collapsed and the unreachable.
+ *
+ * The two counts are never both non-zero, which is the whole point: the list
+ * shows at most one "more" control at a time. Collapsed, the expander speaks
+ * for every commit off screen; expanded, the pushlog link speaks for the ones
+ * that were never sent.
+ *
+ * On try the push's own head commit — the one carrying the try syntax, not a
+ * patch under review — is dropped by the caller before this is reached, so
+ * `total` counts one more than `all` holds. That is why the two are separate
+ * parameters rather than `all.length` being trusted.
+ */
+export function planRevisionList<R>(
+    /** The commits to display: what Treeherder returned, less the try head. */
+    all: readonly R[],
+    /** `revision_count` — every commit in the push, including any not returned. */
+    total: number,
+    /** How many commits Treeherder actually returned, try head included. */
+    returned: number,
+    expanded: boolean
+): RevisionListPlan<R> {
+    const shown = expanded ? [...all] : all.slice(0, REVISIONS_SHOWN);
+    // Every commit this list could ever draw: the push, less the try head that
+    // `all` was stripped of. `Math.max` because a `revision_count` that lags
+    // the commit rows must not print a negative.
+    const displayable = total - (returned - all.length);
+    const offScreen = Math.max(0, displayable - shown.length);
+    // One number, routed to whichever control is appropriate — which is what
+    // keeps them mutually exclusive by construction rather than by a caller
+    // remembering to render only one.
+    return {
+        shown,
+        hidden: expanded ? 0 : offScreen,
+        beyondApi: expanded ? offScreen : 0,
+    };
+}
+
+/**
+ * The pushlog URL, which is where the commits Treeherder did not return are.
+ *
+ * The same link Treeherder's own `MoreRevisionsLink` uses, built the same way
+ * (`ui/models/repository.js`'s `getPushLogHref`: `${pushLogUrl}?changeset=`).
+ * Takes the push's head revision rather than the last one shown — the pushlog
+ * keys on the push, and passing a commit from the middle of the stack would
+ * land on a different page.
+ */
+export function pushLogUrl(repo: string, headRevision: string): string {
+    return `https://hg.mozilla.org/${hgRepoPath(repo)}/pushloghtml?changeset=${headRevision}`;
+}
+
+/**
+ * The Phabricator revision a commit message names, or `null`.
+ *
+ * Ported from `mozilla/treeherder#9741`, regex included, so the two agree on
+ * what counts: the `Differential Revision:` trailer `moz-phab` appends, matched
+ * anchored per-line so a message that merely mentions one in prose does not
+ * produce a link.
+ *
+ * The URL comes out of the message rather than being built from the `D` number.
+ * A commit submitted to a different Phabricator instance then links to that
+ * instance, and a trailer this page cannot parse produces no link instead of a
+ * wrong one.
+ */
+export function phabricatorRevision(comments: string): { url: string; name: string } | null {
+    const match = /^Differential Revision: (\S+\/(D[0-9]+))\s*$/m.exec(comments);
+    return match ? { url: match[1]!, name: match[2]! } : null;
+}
+
 // --- the console API ------------------------------------------------------
 
 /** One entry of `window.failures`. `old/try.html:3685`. */

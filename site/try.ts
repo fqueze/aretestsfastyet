@@ -260,7 +260,10 @@ import {
     nextSort,
     noFailuresText,
     parseSearch,
+    phabricatorRevision,
     pickHeadlineRate,
+    planRevisionList,
+    pushLogUrl,
     readUrlState,
     runCountTooltip,
     runKeyOf,
@@ -820,20 +823,29 @@ function processJobsWithWorkers(
 async function fetchPushId(
     repo: string,
     revision: string
-): Promise<{ pushId: number; revisions: PushRevision[] }> {
+): Promise<{ pushId: number; revisions: PushRevision[]; revisionCount: number }> {
     const url = `${TH_BASE}/api/project/${repo}/push/?full=true&count=10&revision=${revision}`;
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to look up revision on Treeherder (HTTP ${response.status})`);
     }
     const data = (await response.json()) as {
-        results?: { id: number; revisions?: PushRevision[] }[];
+        results?: { id: number; revisions?: PushRevision[]; revision_count?: number }[];
     };
     const push = data.results?.[0];
     if (push === undefined) {
         throw new Error(`No push found for revision ${revision} on ${repo}`);
     }
-    return { pushId: push.id, revisions: push.revisions ?? [] };
+    const revisions = push.revisions ?? [];
+    return {
+        pushId: push.id,
+        revisions,
+        // Absent on an older Treeherder than the one this was written against;
+        // falling back to what arrived reports no unreachable commits, which
+        // is the safe direction — a missing "+N on the pushlog" link is a
+        // smaller wrong than one claiming commits that do not exist.
+        revisionCount: push.revision_count ?? revisions.length,
+    };
 }
 
 /** One commit of a push. */
@@ -1018,8 +1030,9 @@ async function loadRevision(): Promise<void> {
     try {
         setStatus('Looking up push on Treeherder...');
         setProgress(-1);
-        const { pushId, revisions } = await fetchPushId(repo, revision);
-        renderRevisions(revisions);
+        const { pushId, revisions, revisionCount } = await fetchPushId(repo, revision);
+        revisionsExpanded = false;
+        renderRevisions(revisions, revisionCount);
 
         setStatus('Fetching jobs...');
         const { allJobs, propertyNames } = await fetchAllJobs(pushId);
@@ -1148,8 +1161,19 @@ async function loadRevision(): Promise<void> {
 
 // --- rendering ------------------------------------------------------------
 
+/**
+ * Whether the commit list is showing every commit Treeherder returned.
+ *
+ * Page state rather than URL state: which commits are on screen is not a view
+ * of the push worth pasting into a bug, and `writeUrlState` deliberately keeps
+ * the query to what is (`site/try-view.ts`'s note on the parameters it drops).
+ * Reset on each load, so a 40-commit push does not open expanded because the
+ * previous one was.
+ */
+let revisionsExpanded = false;
+
 /** `old/try.html:1616`. The commit list, the heading and the tab title. */
-function renderRevisions(revisions: readonly PushRevision[]): void {
+function renderRevisions(revisions: readonly PushRevision[], totalCount: number): void {
     const container = requireElement('revisions-container');
     if (revisions.length === 0) {
         container.replaceChildren();
@@ -1160,10 +1184,44 @@ function renderRevisions(revisions: readonly PushRevision[]): void {
     // like Treeherder.
     const displayRevs =
         state.repo === 'try' && revisions.length > 1 ? revisions.slice(1) : revisions;
-    const repoPath = hgRepoPath(state.repo);
 
+    // The head commit, not `displayRevs[0]`: the pushlog keys on the push, and
+    // the try head is exactly the commit that was stripped above.
+    const headRevision = revisions[0]?.revision ?? '';
+    const draw = (): void => {
+        container.replaceChildren(
+            revisionList(displayRevs, totalCount, revisions.length, headRevision, draw)
+        );
+    };
+    draw();
+
+    const repoLabel = state.repo.charAt(0).toUpperCase() + state.repo.slice(1);
+    const mainRev = displayRevs[0] ?? revisions[0];
+    const commitMsg = mainRev?.comments.split('\n')[0];
+    requireElement('page-heading').textContent = `${repoLabel} Push Results`;
+    document.title = commitMsg ? `${repoLabel}: ${commitMsg}` : `${repoLabel} Push Results`;
+}
+
+/**
+ * The commit list, with both cutoffs drawn.
+ *
+ * Takes its own redraw as a parameter rather than calling `renderRevisions`
+ * again: expanding must not retitle the tab or re-derive the heading, and a
+ * closure over the already-computed lists is also what keeps the expander from
+ * needing a second Treeherder request.
+ */
+function revisionList(
+    displayRevs: readonly PushRevision[],
+    totalCount: number,
+    returnedCount: number,
+    headRevision: string,
+    redraw: () => void
+): HTMLElement {
+    const plan = planRevisionList(displayRevs, totalCount, returnedCount, revisionsExpanded);
+    const repoPath = hgRepoPath(state.repo);
     const list = el('div', { class: 'revisions-list' });
-    for (const rev of displayRevs) {
+
+    for (const rev of plan.shown) {
         const row = el('div');
         row.append(
             link(`https://hg.mozilla.org/${repoPath}/rev/${rev.revision}`, {
@@ -1172,6 +1230,22 @@ function renderRevisions(revisions: readonly PushRevision[]): void {
             }),
             ' '
         );
+        const phabricator = phabricatorRevision(rev.comments);
+        if (phabricator) {
+            // The icon carries the name in its tooltip rather than beside it:
+            // a column of `D327289`s cost more width than the commit message
+            // it pushed off the line, and the number is not what a reader
+            // scans for. Treeherder's own list makes the same trade
+            // (`mozilla/treeherder#9741`), with this glyph.
+            row.append(
+                link(phabricator.url, {
+                    class: 'rev-phab',
+                    title: `Open ${phabricator.name} on Phabricator`,
+                    children: [el('span', { class: 'phabricator-icon' })],
+                }),
+                ' '
+            );
+        }
         const comment = el('span', { class: 'rev-comment' });
         appendLinkifiedBugNumbers(comment, rev.comments.split('\n')[0] ?? '');
         row.append(comment);
@@ -1184,13 +1258,35 @@ function renderRevisions(revisions: readonly PushRevision[]): void {
         );
         list.append(row);
     }
-    container.replaceChildren(list);
 
-    const repoLabel = state.repo.charAt(0).toUpperCase() + state.repo.slice(1);
-    const mainRev = displayRevs[0] ?? revisions[0];
-    const commitMsg = mainRev?.comments.split('\n')[0];
-    requireElement('page-heading').textContent = `${repoLabel} Push Results`;
-    document.title = commitMsg ? `${repoLabel}: ${commitMsg}` : `${repoLabel} Push Results`;
+    // At most one of these is non-zero; `planRevisionList` is what guarantees
+    // it, so this renders both branches without checking the other.
+    if (plan.hidden > 0) {
+        const more = el('button', {
+            class: 'rev-more',
+            text: `+ ${plan.hidden} more`,
+            attrs: { type: 'button' },
+        });
+        more.addEventListener('click', () => {
+            revisionsExpanded = true;
+            redraw();
+        });
+        list.append(el('div', { children: [more] }));
+    }
+    if (plan.beyondApi > 0) {
+        list.append(
+            el('div', {
+                children: [
+                    link(pushLogUrl(state.repo, headRevision), {
+                        class: 'rev-more-link',
+                        text: `+ ${plan.beyondApi} more on the pushlog`,
+                        title: 'Treeherder returns at most 20 commits per push',
+                    }),
+                ],
+            })
+        );
+    }
+    return list;
 }
 
 /** `old/try.html:2057`. Turns `bug 12345` in a commit message into a link. */

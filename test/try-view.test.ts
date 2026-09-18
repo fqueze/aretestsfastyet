@@ -80,7 +80,10 @@ import {
     nextSort,
     noFailuresText,
     parseSearch,
+    phabricatorRevision,
     pickHeadlineRate,
+    planRevisionList,
+    pushLogUrl,
     readUrlState,
     runCountTooltip,
     runKeyOf,
@@ -1907,4 +1910,161 @@ test('formatForPrompt says permafails or is flaky, and names the configs', () =>
 test('a run key pairs the task with its JOB-level retry', () => {
     assert.equal(runKeyOf({ taskId: 'ABC', retryId: 0 }), 'ABC.0');
     assert.equal(runKeyOf({ taskId: 'ABC', retryId: 2 }), 'ABC.2');
+});
+
+// --- the commit list ------------------------------------------------------
+
+/**
+ * The push that drove this, with its numbers pinned.
+ *
+ * Try `de1c6569d675`: a 40-commit stack whose `revision_count` says 40 and
+ * whose `revisions` array holds 20 — the first of which is the try head the
+ * page strips, leaving 19 it can draw.
+ *
+ * So the displayable total is 39, not 40, and that is the number the collapsed
+ * count is taken against. The missing one is the try head, a commit of the
+ * push and not a patch under review. It is why `planRevisionList` takes
+ * `returned` as well as `total` rather than subtracting the displayable count.
+ */
+const PUSH_DE1C = { total: 40, returned: 20, displayable: 19 };
+
+const revs = (n: number): { revision: string }[] =>
+    Array.from({ length: n }, (_unused, i) => ({ revision: `rev${i}` }));
+
+test('the commit list shows five, and one control at a time', () => {
+    const collapsed = planRevisionList(
+        revs(PUSH_DE1C.displayable),
+        PUSH_DE1C.total,
+        PUSH_DE1C.returned,
+        false
+    );
+    assert.equal(collapsed.shown.length, 5, 'five commits, not the 39 that filled a screen');
+    // 34, not 14: the count is of the push, so it covers the commits the API
+    // never sent as well. Over-promising by design — two stacked links
+    // (`+ 14 more` then `+ 20 more on the pushlog`) read as broken.
+    assert.equal(collapsed.hidden, 34, '39 displayable less the 5 shown');
+    assert.equal(collapsed.beyondApi, 0, 'and nothing else, while the expander speaks for them');
+    assert.equal(collapsed.shown[0]!.revision, 'rev0', 'newest first, as Treeherder orders them');
+
+    // Expanding shows everything the API sent. The click could not deliver all
+    // 34, so what is left over now gets its own link — and the expander, whose
+    // count covered these, is gone.
+    const expanded = planRevisionList(
+        revs(PUSH_DE1C.displayable),
+        PUSH_DE1C.total,
+        PUSH_DE1C.returned,
+        true
+    );
+    assert.equal(expanded.shown.length, 19, 'every commit the API sent and the page can show');
+    assert.equal(expanded.hidden, 0, 'no expander left');
+    assert.equal(expanded.beyondApi, 20, '40 in the push less the 20 Treeherder returned');
+});
+
+test('the two counts are never both non-zero, so only one control renders', () => {
+    // The property the renderer relies on instead of checking. Asserted over
+    // every cutoff of a truncated push and of a whole one, because it is what
+    // stops the stacked pair from coming back.
+    for (const [total, returned, count] of [
+        [PUSH_DE1C.total, PUSH_DE1C.returned, PUSH_DE1C.displayable],
+        [7, 7, 6],
+        [4, 4, 3],
+        [21, 20, 19],
+    ] as const) {
+        for (const expanded of [false, true]) {
+            const plan = planRevisionList(revs(count), total, returned, expanded);
+            assert.ok(
+                plan.hidden === 0 || plan.beyondApi === 0,
+                `total=${total} expanded=${expanded}: ${plan.hidden} and ${plan.beyondApi}`
+            );
+        }
+    }
+});
+
+test('a push the API returned whole is fully revealed by the expander', () => {
+    // 6 commits, all returned. Expanding shows them all and leaves no link:
+    // there is no pushlog to send anyone to.
+    const collapsed = planRevisionList(revs(6), 7, 7, false);
+    assert.equal(collapsed.shown.length, 5);
+    assert.equal(collapsed.hidden, 1);
+    assert.equal(collapsed.beyondApi, 0);
+
+    const expanded = planRevisionList(revs(6), 7, 7, true);
+    assert.deepEqual(
+        [expanded.shown.length, expanded.hidden, expanded.beyondApi],
+        [6, 0, 0],
+        'no expander and no link once everything is on screen'
+    );
+
+    // And a push shorter than the cutoff has no control from the start.
+    const short = planRevisionList(revs(3), 4, 4, false);
+    assert.deepEqual([short.shown.length, short.hidden, short.beyondApi], [3, 0, 0]);
+});
+
+test('a revision_count that lags the commit rows cannot print a negative', () => {
+    // Defensive: the two numbers come from different queries in Treeherder's
+    // serializer (`commits.count()` against a sliced `commits.all()`), so a
+    // push mid-ingestion can answer with more rows than it counts.
+    const plan = planRevisionList(revs(19), 3, 20, false);
+    assert.equal(plan.hidden, 0, 'clamped, not -17');
+    assert.equal(planRevisionList(revs(19), 3, 20, true).beyondApi, 0);
+});
+
+test('the pushlog link keys on the push head, not on the last commit shown', () => {
+    // The same URL shape Treeherder's own MoreRevisionsLink builds
+    // (`ui/models/repository.js`'s getPushLogHref).
+    assert.equal(
+        pushLogUrl('try', 'de1c6569d6752d665492ad6cecc5654821bab9ea'),
+        'https://hg.mozilla.org/try/pushloghtml?changeset=de1c6569d6752d665492ad6cecc5654821bab9ea'
+    );
+    // autoland's hg path is not its Treeherder name, which is what hgRepoPath
+    // is for; asserted here because a wrong path is a 404 rather than a visible
+    // error.
+    assert.equal(
+        pushLogUrl('autoland', 'abc123'),
+        'https://hg.mozilla.org/integration/autoland/pushloghtml?changeset=abc123'
+    );
+    assert.equal(
+        pushLogUrl('mozilla-central', 'abc123'),
+        'https://hg.mozilla.org/mozilla-central/pushloghtml?changeset=abc123'
+    );
+});
+
+// --- Phabricator links ----------------------------------------------------
+
+test('a commit links the Phabricator revision its trailer names', () => {
+    // A real message off push de1c6569d675, trailer included.
+    const found = phabricatorRevision(
+        'Bug 2073421 - Stop TopSitesFeed dispatching a top sites row after uninit().\n' +
+            '\n' +
+            'Mark the instance in uninit() and treat that mark like a superseded generation.\n' +
+            '\n' +
+            'Differential Revision: https://phabricator.services.mozilla.com/D327289'
+    );
+    assert.deepEqual(found, {
+        url: 'https://phabricator.services.mozilla.com/D327289',
+        name: 'D327289',
+    });
+
+    // The URL is taken from the message rather than built from the number, so a
+    // commit reviewed on another instance links to that instance.
+    assert.equal(
+        phabricatorRevision('x\n\nDifferential Revision: https://phab.example.org/D1')?.url,
+        'https://phab.example.org/D1'
+    );
+});
+
+test('a commit without the trailer gets no Phabricator link', () => {
+    assert.equal(phabricatorRevision('Bug 1 - a patch that never went to review, r=me'), null);
+    // The try head commit, which carries try syntax and no trailer. This is the
+    // one the page strips anyway, but it is also the shape a `hg commit` patch
+    // has.
+    assert.equal(phabricatorRevision('newtab burndown push 7: 39-commit stack'), null);
+
+    // Anchored per line: a message that discusses the trailer in prose is not
+    // one that carries it. Matching unanchored would link the word rather than
+    // the commit.
+    assert.equal(
+        phabricatorRevision('Explain that Differential Revision: https://x/D2 is a trailer.'),
+        null
+    );
 });
