@@ -41,7 +41,7 @@ Class 3 has never been tested here, and it is where the two worst reports landed
 ### A seventh defect, and the fourth class it names
 
 `fx-tests try --all-jobs` printed the push's non-test job failures — builds and
-lint — from data it had already fetched. `try.html`'s "All jobs" checkbox
+lint — from data it had already fetched. `try.html`'s "Load all jobs" button
 fetches the *successful test jobs' profiles*, so that tests which failed and
 then passed on the harness's rerun appear at all: those jobs are green on
 Treeherder, so nothing in the default set references them. Measured on try push

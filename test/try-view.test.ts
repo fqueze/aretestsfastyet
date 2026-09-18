@@ -673,7 +673,7 @@ test('a rerun that failed again is failedTwice, and the two branches are disting
 });
 
 test('a read run of a failing config that did not fail is passed, not notAnalyzed', () => {
-    // The bucket only "All jobs" can reach: a run whose profile WAS parsed and
+    // The bucket only an all-jobs load can reach: a run whose profile WAS parsed and
     // held no failure of this test. It is the distinction the checkbox exists
     // for — the same run is `notAnalyzed` when its profile is not fetched, and
     // reporting it as unread once it has been read would waste the fetch.
@@ -877,9 +877,9 @@ test('another run failing on DIFFERENT tests makes this failure intermittent', (
     assert.equal(both[1]!.intermittent, false);
 });
 
-// --- the "All jobs" checkbox ---------------------------------------------
+// --- the "load all jobs" mode --------------------------------------------
 
-test('"All jobs" changes the universe that intermittency is judged against', () => {
+test('loading all jobs changes the universe intermittency is judged against', () => {
     // `old/try.html:1342`. The checkbox adds the successful test jobs to
     // `jobsToProcess`, which is what `tagIntermittent` seeds its per-run failure
     // sets from and what the page fetches profiles for. It is not a visibility

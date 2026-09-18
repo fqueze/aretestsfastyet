@@ -933,6 +933,16 @@ interface PageState {
     expandedUnblamed: Set<string>;
     revision: string | null;
     repo: string;
+    /**
+     * Whether the successful test jobs' profiles are read too.
+     *
+     * Was the "All jobs" checkbox, which is now the second of two buttons —
+     * and a button is not a control you can read a value off, so the choice
+     * has to live here. Written by whichever button (or Enter chord) started
+     * the load, read by `selectTryJobs` and by `updateUrlState`, so the URL,
+     * the button highlight and the jobs actually fetched cannot disagree.
+     */
+    readPassingJobs: boolean;
     /** jobName -> completed runs, for the debug JSON. */
     jobRunCounts: Map<string, number> | null;
     /** Failed jobs of harnesses this page cannot parse. */
@@ -961,6 +971,7 @@ const state: PageState = {
     expandedUnblamed: new Set(),
     revision: null,
     repo: 'try',
+    readPassingJobs: false,
     jobRunCounts: null,
     otherFailedJobs: [],
     treeherderUrl: '',
@@ -997,12 +1008,45 @@ function updateUrlState(): void {
         rev: state.revision,
         repo: state.repo,
         filter: requireInput('search-box').value,
-        allJobs: requireInput('alljobs-checkbox').checked,
+        allJobs: state.readPassingJobs,
     });
     window.history.replaceState(null, '', url);
 }
 
 // --- loading --------------------------------------------------------------
+
+/**
+ * Loads in one of the two modes, which is what both buttons and both Enter
+ * chords go through.
+ *
+ * Sets the mode before loading rather than reading it from a control, so the
+ * highlight, the URL and the profiles fetched all come from the same
+ * assignment. Re-pressing the button of the mode already on screen reloads,
+ * which is the one thing a mode indicator that is also a button has to keep
+ * doing — it is still the Load button.
+ */
+async function load(readPassingJobs: boolean): Promise<void> {
+    state.readPassingJobs = readPassingJobs;
+    markLoadMode();
+    await loadRevision();
+}
+
+/**
+ * Highlights the button whose mode the page is in.
+ *
+ * `aria-pressed` as well as the class: these two are a toggle pair, and a
+ * screen reader gets nothing from a grey background. Called before the load
+ * rather than after, so the highlight moves when the click happens rather than
+ * when 1,500 profiles finish arriving.
+ */
+function markLoadMode(): void {
+    const failed = requireElement('load-btn');
+    const all = requireElement('load-all-btn');
+    failed.classList.toggle('active', !state.readPassingJobs);
+    all.classList.toggle('active', state.readPassingJobs);
+    failed.setAttribute('aria-pressed', String(!state.readPassingJobs));
+    all.setAttribute('aria-pressed', String(state.readPassingJobs));
+}
 
 /** `old/try.html:1286`. The whole load, from a revision string to a rendered page. */
 async function loadRevision(): Promise<void> {
@@ -1015,8 +1059,17 @@ async function loadRevision(): Promise<void> {
     state.repo = repo;
     updateUrlState();
 
-    const loadButton = requireElement('load-btn') as HTMLButtonElement;
-    loadButton.disabled = true;
+    // Both of them: one load at a time, and the other button starts a load too.
+    // Disabling only the one that was pressed left "Load failed jobs" live
+    // during the minutes an all-jobs load takes, and clicking it there ran a
+    // second load into the same page state.
+    const loadButtons = ['load-btn', 'load-all-btn'].map(
+        (id) => requireElement(id) as HTMLButtonElement
+    );
+    const setLoading = (loading: boolean): void => {
+        for (const button of loadButtons) button.disabled = loading;
+    };
+    setLoading(true);
     requireElement('results').replaceChildren();
     requireElement('treeherder-link-container').replaceChildren();
     requireElement('filter-container').style.display = 'none';
@@ -1040,14 +1093,15 @@ async function loadRevision(): Promise<void> {
 
         const totalJobs = jobs.length;
 
-        // The "All jobs" checkbox changes the UNIVERSE, not just the visible
+        // "Load all jobs" changes the UNIVERSE, not just the visible
         // rows: it adds the successful test jobs' profiles, so tests that failed
-        // initially and passed on retry surface at all. Unchecked by default
-        // (`old/try.html:706`, forced at `:3775`). The checkbox is the only part
-        // of this the page owns — `selectTryJobs` decides what the answer means,
-        // and `fx-tests try --all-jobs` calls it with the same argument.
+        // initially and passed on retry surface at all. Off by default
+        // (`old/try.html:706`, forced at `:3775`). Which button was pressed is
+        // the only part of this the page owns — `selectTryJobs` decides what
+        // the answer means, and `fx-tests try --all-jobs` calls it with the
+        // same argument.
         const selection = selectTryJobs(jobs, {
-            readPassingJobs: requireInput('alljobs-checkbox').checked,
+            readPassingJobs: state.readPassingJobs,
         });
         const { failedTestJobs, jobsToProcess, successfulJobNames } = selection;
 
@@ -1084,7 +1138,7 @@ async function loadRevision(): Promise<void> {
             appendNoFailures(empty, true);
             requireElement('results').replaceChildren(empty);
             renderTreeherderLink();
-            loadButton.disabled = false;
+            setLoading(false);
             return;
         }
 
@@ -1155,7 +1209,7 @@ async function loadRevision(): Promise<void> {
         setProgress(-1);
         console.error(error);
     } finally {
-        loadButton.disabled = false;
+        setLoading(false);
     }
 }
 
@@ -2905,21 +2959,16 @@ document.addEventListener('DOMContentLoaded', () => {
         requireInput('search-box').value = url.filter;
         state.search = parseSearch(url.filter);
     }
-    // Set explicitly rather than only when present, so a browser-preserved
-    // checkbox state cannot disagree with the URL after a reload.
-    requireInput('alljobs-checkbox').checked = url.allJobs;
+    // Set from the URL rather than left to whatever the browser preserved, so
+    // `?alljobs=1` and the highlighted button always agree after a reload.
+    state.readPassingJobs = url.allJobs;
+    markLoadMode();
 
     requireElement('load-btn').addEventListener('click', () => {
-        void loadRevision();
+        void load(false);
     });
-    // Toggling "All jobs" changes which jobs get fetched, so reload the push.
-    // With nothing loaded yet, just record the choice for the next Load.
-    requireInput('alljobs-checkbox').addEventListener('change', () => {
-        if (state.revision !== null) {
-            void loadRevision();
-        } else {
-            updateUrlState();
-        }
+    requireElement('load-all-btn').addEventListener('click', () => {
+        void load(true);
     });
 
     if (url.rev !== null) {
@@ -2929,9 +2978,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     requireInput('revision-input').addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            void loadRevision();
-        }
+        if (event.key !== 'Enter') return;
+        // The first button is where a `go` button goes and Enter is its key;
+        // Shift is what picks the second. `preventDefault` because this input
+        // is not in a form today and a future one must not also submit.
+        event.preventDefault();
+        void load(event.shiftKey);
     });
 
     // The `f` shortcut is `searchBox()`'s, in `site/drilldown-render.ts`: this

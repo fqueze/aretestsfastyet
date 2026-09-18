@@ -27,6 +27,49 @@
             box-shadow: 0 0 0 2px rgba(0, 96, 223, 0.2);
         }
 
+        /* The box and its two buttons, welded into one control: shared borders,
+           square inner corners, no gap. Reads as an input with a `go` button,
+           which is what it is. `flex` rather than the parent's `gap`, which
+           would put 10px between the three. */
+        .load-group {
+            display: flex;
+            align-items: stretch;
+        }
+        .load-group input {
+            border-radius: 4px 0 0 4px;
+        }
+        .load-group button {
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 0;
+            /* One border between neighbours rather than two touching ones. */
+            border-left-width: 0;
+            white-space: nowrap;
+        }
+        .load-group button:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+        /* Which mode the results on screen are in — so the page says what it
+           did, rather than leaving it to be inferred from the header line.
+           Grey rather than `shared.css`'s blue `button.active`: these two are a
+           mode indicator, not a primary action, and a filled blue button next
+           to the focus ring reads as the thing to click next. */
+        .load-group button.active {
+            background: #e4e4e7;
+            border-color: #c4c4c8;
+            color: #18181b;
+            font-weight: 600;
+        }
+        .load-group button.active:hover {
+            background: #dcdce0;
+        }
+        /* The focused input's ring must not be drawn under the button next to
+           it, so the box is lifted while focused. */
+        .load-group input:focus {
+            position: relative;
+            z-index: 1;
+        }
+
         #status {
             color: #666;
             font-size: 13px;
@@ -142,20 +185,6 @@
             gap: 8px;
             align-items: center;
             margin-left: auto;
-        }
-
-        .alljobs-checkbox {
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-            font-size: 13px;
-            color: #444;
-            white-space: nowrap;
-        }
-        .alljobs-checkbox input[type="checkbox"] {
-            width: auto;
-            margin: 0 5px 0 0;
-            cursor: pointer;
         }
 
         .search-container {
@@ -771,11 +800,17 @@
         <div class="controls" id="input-section">
             <div class="revision-input">
                 <label for="revision-input">Revision:</label>
-                <input type="text" id="revision-input" placeholder="Enter a revision (40-char hex, Treeherder URL, or repo:rev)" autofocus>
-                <button id="load-btn">Load</button>
-                <label class="alljobs-checkbox" title="Also fetch profiles of test jobs that ultimately succeeded, so tests that failed initially but passed on retry surface too.">
-                    <input type="checkbox" id="alljobs-checkbox"> All jobs
-                </label>
+                <!--
+                  The input and the two buttons are one control, joined with no
+                  gap: the first button is where a `go` button would be, and it
+                  is one — pressing Enter in the box does the same thing.
+                  Shift+Enter does what the second one does.
+                -->
+                <span class="load-group">
+                    <input type="text" id="revision-input" placeholder="Enter a revision (40-char hex, Treeherder URL, or repo:rev)" autofocus>
+                    <button id="load-btn" title="Read the profiles of the test jobs that failed. Enter does this too.">Load failed jobs</button>
+                    <button id="load-all-btn" title="Also read the profiles of the test jobs that succeeded, so a test that failed and then passed on retry surfaces too. Much slower. Shift+Enter does this too.">Load all jobs</button>
+                </span>
                 <span id="status"></span>
                 <span id="treeherder-link-container"></span>
                 <span id="filter-container" style="display:none; margin-left: auto;">

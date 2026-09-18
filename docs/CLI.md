@@ -737,12 +737,12 @@ An unknown ID is exit 2; a URL naming two landing jobs is exit 1.
 
 **`--all-jobs` changes which jobs are read, not which rows are printed.** By
 default the command reads one profile per **failed** test job, which is what
-`try.html` does with its "All jobs" box unchecked. That misses a whole class of
+`try.html` does with its "Load failed jobs" button. That misses a whole class of
 failure: a test that failed and then **passed when the harness reran it** leaves
 the job green on Treeherder, so nothing in the default universe references it at
 all. Such a failure is not ranked low — it is absent. `--all-jobs` adds the
 profiles of the test jobs that succeeded, which is the only way those surface,
-and is exactly what checking the page's box does (`site/try.ts:944`).
+and is exactly what the page's "Load all jobs" button does.
 
 Measured on try push `7d16bff81bb1`: 26 failing tests by default, 116 with the
 flag. All 90 of the added ones passed on the harness's rerun, and none of the
