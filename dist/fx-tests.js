@@ -10722,6 +10722,238 @@ function oneLine3(value) {
   return value.replace(/\s*\r?\n\s*/g, " \u23CE ").trim();
 }
 
+// lib/model/failure-message.ts
+function normalizeMessage(message) {
+  if (message === null || message === void 0) {
+    return null;
+  }
+  return message.replace(/\r\n/g, "\n").replace(/task_\d+/g, "task_id").replace(/\nRejection date: [^\n]+/g, "").replace(/Test ran for \d+s/g, "Test ran for Xs");
+}
+
+// lib/model/test-markers.ts
+function isStreamedProfile(bytes2) {
+  const head = new TextDecoder().decode(bytes2.subarray(0, 64 * 1024));
+  const newline = head.indexOf("\n");
+  if (newline < 0) {
+    return false;
+  }
+  const rest = head.slice(newline + 1).trim();
+  try {
+    JSON.parse(head.slice(0, newline));
+  } catch {
+    return false;
+  }
+  return rest.startsWith("{");
+}
+function resolveStack(stackIndex, thread) {
+  const stackTable = thread.stackTable;
+  const frameTable = thread.frameTable;
+  const funcTable = thread.funcTable;
+  const strings = thread.stringArray ?? [];
+  if (stackIndex === null || stackIndex === void 0 || stackTable?.frame === void 0 || frameTable?.func === void 0 || funcTable?.name === void 0) {
+    return null;
+  }
+  const frames = [];
+  let index = stackIndex;
+  while (index !== null && index !== void 0 && index >= 0) {
+    const frame = stackTable.frame[index];
+    const func = frameTable.func[frame];
+    let text = strings[funcTable.name[func]] || "?";
+    const fileIndex = funcTable.fileName?.[func];
+    const file = fileIndex === null || fileIndex === void 0 ? null : strings[fileIndex];
+    if (file) {
+      text += ` @ ${file}`;
+      const line = frameTable.line?.[frame];
+      if (line !== null && line !== void 0 && line >= 0) {
+        text += `:${line}`;
+      }
+    }
+    frames.push(text);
+    index = stackTable.prefix?.[index];
+  }
+  return frames.length > 0 ? frames.join("\n") : null;
+}
+var DROP_WORTH_REPORTING = /* @__PURE__ */ new Set(["FAIL", "TIMEOUT", "CRASH", "ERROR"]);
+function parseTestMarkers(profile, job, dropped = []) {
+  const thread = profile?.threads?.[0];
+  const markers = thread?.markers;
+  const stringArray = thread?.stringArray;
+  if (markers?.data === void 0 || markers.name === void 0 || stringArray === void 0) {
+    return [];
+  }
+  const length = markers.length ?? markers.data.length;
+  const startTime = markers.startTime ?? [];
+  const endTime = markers.endTime ?? [];
+  const rangesOf = (text) => {
+    const ranges = [];
+    for (let i = 0; i < length; i++) {
+      const data = markers.data[i];
+      if (data?.type === "Text" && data.text === text) {
+        ranges.push({ start: startTime[i] ?? 0, end: endTime[i] ?? 0 });
+      }
+    }
+    return ranges;
+  };
+  const parallelRanges = rangesOf("parallel");
+  const retryRanges = rangesOf("retry");
+  const overlaps = (start, end, ranges) => ranges.some((range) => start < range.end && end > range.start);
+  const crashMarkers = [];
+  for (let i = 0; i < length; i++) {
+    const data = markers.data[i];
+    if (data?.type !== "Crash" || data.test === void 0) {
+      continue;
+    }
+    crashMarkers.push({
+      testPath: data.test,
+      start: startTime[i] ?? 0,
+      signature: data.signature ?? null,
+      minidump: data.minidump ?? null,
+      reason: data.reason ?? null,
+      consumed: false
+    });
+  }
+  const failStringId = stringArray.indexOf("FAIL");
+  const errorStringId = stringArray.indexOf("ERROR");
+  const testStatusMarkers = [];
+  for (let i = 0; i < length; i++) {
+    const nameId = markers.name[i];
+    if (nameId !== failStringId && nameId !== errorStringId) {
+      continue;
+    }
+    const data = markers.data[i];
+    if (data?.type !== "TestStatus" || data.test === void 0) {
+      continue;
+    }
+    const message = normalizeMessage(data.message ?? null);
+    if (message === null) {
+      continue;
+    }
+    testStatusMarkers.push({
+      test: data.test,
+      time: startTime[i] ?? 0,
+      message,
+      statusName: stringArray[nameId] ?? "FAIL",
+      stack: resolveStack(markers.stack?.[i], thread)
+    });
+  }
+  testStatusMarkers.sort((a, b) => a.time - b.time);
+  const markersInRange = (test, start, end) => testStatusMarkers.filter(
+    (marker) => marker.test === test && marker.time >= start && marker.time <= end
+  );
+  const messagesInRange = (test, start, end) => markersInRange(test, start, end).map((marker) => ({
+    message: marker.message,
+    status: marker.statusName
+  }));
+  const testStringId = stringArray.indexOf("test");
+  const timings = [];
+  for (let i = 0; i < length; i++) {
+    if (markers.name[i] !== testStringId) {
+      continue;
+    }
+    const data = markers.data[i];
+    if (data?.type !== "Test") {
+      continue;
+    }
+    const fullTestId = data.test ?? data.name ?? "";
+    const path = normalizeTestPath(fullTestId);
+    if (path === null) {
+      const status2 = data.status ?? "";
+      if (DROP_WORTH_REPORTING.has(status2)) {
+        dropped.push({
+          kind: "Test",
+          id: fullTestId,
+          reason: describeTestPathDrop(fullTestId),
+          status: status2,
+          minidump: null
+        });
+      }
+      continue;
+    }
+    const start = startTime[i] ?? 0;
+    const end = endTime[i] ?? 0;
+    let status = data.status ?? "UNKNOWN";
+    if (status === "FAIL" && data.color === "green") {
+      status = "EXPECTED-FAIL";
+    } else if (status === "PASS" && data.expected !== void 0 && data.expected !== "PASS") {
+      status = "UNEXPECTED-PASS";
+    } else if (["TIMEOUT", "FAIL", "CRASH", "PASS"].includes(status) && parallelRanges.length > 0) {
+      status += overlaps(start, end, parallelRanges) ? "-PARALLEL" : "-SEQUENTIAL";
+    }
+    let message = normalizeMessage(data.message ?? null);
+    let minidump = null;
+    let details = [];
+    let partitioned = { messages: [], profileFilenames: [] };
+    if (status.startsWith("FAIL") || status.startsWith("TIMEOUT") || status === "ERROR") {
+      partitioned = partitionMarkerMessages(messagesInRange(fullTestId, start, end));
+      message = partitioned.messages[0] ?? message;
+      details = markersInRange(fullTestId, start, end).filter((marker) => uploadedProfileName(marker.message) === null).map((marker) => ({
+        message: marker.message,
+        status: marker.statusName,
+        stack: marker.stack
+      }));
+    }
+    if (status.startsWith("CRASH")) {
+      const matching = crashMarkers.find(
+        (crash) => !crash.consumed && crash.testPath === fullTestId && crash.start >= start && crash.start <= end
+      );
+      if (matching !== void 0) {
+        matching.consumed = true;
+        message ??= normalizeMessage(matching.signature);
+        minidump = matching.minidump;
+      }
+    }
+    timings.push({
+      path,
+      status,
+      message,
+      messages: partitioned.messages,
+      profileFilenames: partitioned.profileFilenames,
+      jobName: job.jobName,
+      taskId: job.taskId,
+      retryId: job.retryId,
+      isRerun: retryRanges.length > 0 && overlaps(start, end, retryRanges),
+      start,
+      duration: end - start,
+      minidump,
+      details
+    });
+  }
+  for (const crash of crashMarkers) {
+    if (crash.consumed) {
+      continue;
+    }
+    const path = normalizeTestPath(crash.testPath);
+    if (path === null) {
+      dropped.push({
+        kind: "Crash",
+        id: crash.testPath,
+        reason: describeTestPathDrop(crash.testPath),
+        status: "CRASH",
+        minidump: crash.minidump
+      });
+      continue;
+    }
+    timings.push({
+      path,
+      status: "CRASH",
+      message: normalizeMessage(crash.signature ?? crash.reason),
+      // The harness uploads a per-test profile from a failure handler that
+      // a crash never reaches.
+      messages: [],
+      profileFilenames: [],
+      jobName: job.jobName,
+      taskId: job.taskId,
+      retryId: job.retryId,
+      isRerun: false,
+      start: crash.start,
+      duration: 0,
+      minidump: crash.minidump,
+      details: []
+    });
+  }
+  return timings;
+}
+
 // lib/model/try-jobs.ts
 var SUPPORTED_HARNESSES = ["mochitest", "xpcshell"];
 var VERIFY_JOB_KINDS = [
@@ -10808,185 +11040,191 @@ function selectTryJobs(jobs, options) {
   };
 }
 
-// lib/model/failure-message.ts
-function normalizeMessage(message) {
-  if (message === null || message === void 0) {
-    return null;
-  }
-  return message.replace(/\r\n/g, "\n").replace(/task_\d+/g, "task_id").replace(/\nRejection date: [^\n]+/g, "").replace(/Test ran for \d+s/g, "Test ran for Xs");
+// lib/query/task-summary.ts
+function revisionOf(source) {
+  const match = /\/file\/([0-9a-f]{12,40})\//.exec(source ?? "");
+  return match?.[1] ?? null;
 }
-
-// lib/model/test-markers.ts
-function isStreamedProfile(bytes2) {
-  const head = new TextDecoder().decode(bytes2.subarray(0, 64 * 1024));
-  const newline = head.indexOf("\n");
-  if (newline < 0) {
-    return false;
-  }
-  const rest = head.slice(newline + 1).trim();
-  try {
-    JSON.parse(head.slice(0, newline));
-  } catch {
-    return false;
-  }
-  return rest.startsWith("{");
-}
-var DROP_WORTH_REPORTING = /* @__PURE__ */ new Set(["FAIL", "TIMEOUT", "CRASH", "ERROR"]);
-function parseTestMarkers(profile, job, dropped = []) {
-  const thread = profile?.threads?.[0];
-  const markers = thread?.markers;
-  const stringArray = thread?.stringArray;
-  if (markers?.data === void 0 || markers.name === void 0 || stringArray === void 0) {
-    return [];
-  }
-  const length = markers.length ?? markers.data.length;
-  const startTime = markers.startTime ?? [];
-  const endTime = markers.endTime ?? [];
-  const rangesOf = (text) => {
-    const ranges = [];
-    for (let i = 0; i < length; i++) {
-      const data = markers.data[i];
-      if (data?.type === "Text" && data.text === text) {
-        ranges.push({ start: startTime[i] ?? 0, end: endTime[i] ?? 0 });
-      }
-    }
-    return ranges;
+function taskIdentity(definition) {
+  return {
+    jobName: definition.metadata?.name ?? definition.tags?.label ?? null,
+    project: definition.tags?.project ?? null,
+    revision: revisionOf(definition.metadata?.source)
   };
-  const parallelRanges = rangesOf("parallel");
-  const retryRanges = rangesOf("retry");
-  const overlaps = (start, end, ranges) => ranges.some((range) => start < range.end && end > range.start);
-  const crashMarkers = [];
-  for (let i = 0; i < length; i++) {
-    const data = markers.data[i];
-    if (data?.type !== "Crash" || data.test === void 0) {
-      continue;
-    }
-    crashMarkers.push({
-      testPath: data.test,
-      start: startTime[i] ?? 0,
-      signature: data.signature ?? null,
-      minidump: data.minidump ?? null,
-      reason: data.reason ?? null,
-      consumed: false
-    });
+}
+function isRetryRescue(timing) {
+  return timing.isRerun && timing.status.startsWith("PASS");
+}
+var TaskProfileError = class extends Error {
+  problem;
+  /** The HTTP status, when there was one. */
+  status;
+  constructor(problem, message, status) {
+    super(message);
+    this.name = "TaskProfileError";
+    this.problem = problem;
+    this.status = status;
   }
-  const failStringId = stringArray.indexOf("FAIL");
-  const errorStringId = stringArray.indexOf("ERROR");
-  const testStatusMarkers = [];
-  for (let i = 0; i < length; i++) {
-    const nameId = markers.name[i];
-    if (nameId !== failStringId && nameId !== errorStringId) {
-      continue;
+};
+async function readTaskProfile(source, taskId, retryId) {
+  let bytes2;
+  try {
+    bytes2 = await source.fetch(
+      taskArtifactName(taskId, retryId, "public/test_info/profile_resource-usage.json")
+    );
+  } catch (error) {
+    if (error instanceof DataFileNotFoundError) {
+      throw new TaskProfileError("missing", error.message, 404);
     }
-    const data = markers.data[i];
-    if (data?.type !== "TestStatus" || data.test === void 0) {
-      continue;
-    }
-    const message = normalizeMessage(data.message ?? null);
-    if (message === null) {
-      continue;
-    }
-    testStatusMarkers.push({
-      test: data.test,
-      time: startTime[i] ?? 0,
-      message,
-      statusName: stringArray[nameId] ?? "FAIL"
-    });
-  }
-  testStatusMarkers.sort((a, b) => a.time - b.time);
-  const messagesInRange = (test, start, end) => testStatusMarkers.filter(
-    (marker) => marker.test === test && marker.time >= start && marker.time <= end
-  ).map((marker) => ({ message: marker.message, status: marker.statusName }));
-  const testStringId = stringArray.indexOf("test");
-  const timings = [];
-  for (let i = 0; i < length; i++) {
-    if (markers.name[i] !== testStringId) {
-      continue;
-    }
-    const data = markers.data[i];
-    if (data?.type !== "Test") {
-      continue;
-    }
-    const fullTestId = data.test ?? data.name ?? "";
-    const path = normalizeTestPath(fullTestId);
-    if (path === null) {
-      const status2 = data.status ?? "";
-      if (DROP_WORTH_REPORTING.has(status2)) {
-        dropped.push({
-          kind: "Test",
-          id: fullTestId,
-          reason: describeTestPathDrop(fullTestId),
-          status: status2
-        });
-      }
-      continue;
-    }
-    const start = startTime[i] ?? 0;
-    const end = endTime[i] ?? 0;
-    let status = data.status ?? "UNKNOWN";
-    if (status === "FAIL" && data.color === "green") {
-      status = "EXPECTED-FAIL";
-    } else if (status === "PASS" && data.expected !== void 0 && data.expected !== "PASS") {
-      status = "UNEXPECTED-PASS";
-    } else if (["TIMEOUT", "FAIL", "CRASH", "PASS"].includes(status) && parallelRanges.length > 0) {
-      status += overlaps(start, end, parallelRanges) ? "-PARALLEL" : "-SEQUENTIAL";
-    }
-    let message = normalizeMessage(data.message ?? null);
-    let partitioned = { messages: [], profileFilenames: [] };
-    if (status.startsWith("FAIL") || status.startsWith("TIMEOUT") || status === "ERROR") {
-      partitioned = partitionMarkerMessages(messagesInRange(fullTestId, start, end));
-      message = partitioned.messages[0] ?? message;
-    }
-    if (status.startsWith("CRASH")) {
-      const matching = crashMarkers.find(
-        (crash) => !crash.consumed && crash.testPath === fullTestId && crash.start >= start && crash.start <= end
+    if (error instanceof DataFetchError) {
+      throw new TaskProfileError(
+        error.status === 400 ? "not-a-task" : "fetch",
+        error.message,
+        error.status
       );
-      if (matching !== void 0) {
-        matching.consumed = true;
-        message ??= normalizeMessage(matching.signature);
+    }
+    throw error;
+  }
+  if (isStreamedProfile(bytes2)) {
+    throw new TaskProfileError("streamed", "the profile is a partial stream");
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes2));
+  } catch (error) {
+    throw new TaskProfileError("invalid-json", error.message);
+  }
+}
+async function readTaskDefinition(source, taskId) {
+  const bytes2 = await source.fetch(taskDefinitionName(taskId));
+  return JSON.parse(new TextDecoder().decode(bytes2));
+}
+function summarize3(taskId, retryId, identity, profileUrl, timings) {
+  const byTest = /* @__PURE__ */ new Map();
+  const entryFor = (path) => {
+    let entry = byTest.get(path);
+    if (entry === void 0) {
+      entry = {
+        path,
+        failureCount: 0,
+        executionCount: 0,
+        statuses: /* @__PURE__ */ new Set(),
+        allStatuses: /* @__PURE__ */ new Set(),
+        modes: /* @__PURE__ */ new Set(),
+        passedOnRerun: false,
+        messages: /* @__PURE__ */ new Map(),
+        otherMessages: /* @__PURE__ */ new Map()
+      };
+      byTest.set(path, entry);
+    }
+    return entry;
+  };
+  for (const timing of timings) {
+    const entry = entryFor(timing.path);
+    entry.executionCount++;
+    entry.allStatuses.add(baseStatus(timing.status));
+    if (isFailureStatus(timing.status)) {
+      entry.failureCount++;
+      entry.statuses.add(baseStatus(timing.status));
+      entry.modes.add(/-(PARALLEL|SEQUENTIAL)$/.exec(timing.status)?.[1] ?? "UNRECORDED");
+      if (timing.message !== null) {
+        entry.messages.set(
+          timing.message,
+          (entry.messages.get(timing.message) ?? 0) + 1
+        );
+      }
+      for (const message of timing.messages) {
+        entry.otherMessages.set(
+          message,
+          (entry.otherMessages.get(message) ?? 0) + 1
+        );
+      }
+    } else if (isRetryRescue(timing)) {
+      entry.passedOnRerun = true;
+    }
+  }
+  const statusCounts = {};
+  for (const entry of byTest.values()) {
+    for (const status of entry.allStatuses) {
+      statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+    }
+  }
+  const failures = [];
+  for (const entry of byTest.values()) {
+    if (entry.failureCount === 0) {
+      continue;
+    }
+    const failure = {
+      path: entry.path,
+      failureCount: entry.failureCount,
+      executionCount: entry.executionCount,
+      statuses: [...entry.statuses].sort(),
+      passedOnRerun: entry.passedOnRerun,
+      parallelOnly: entry.modes.size === 1 && entry.modes.has("PARALLEL"),
+      messages: [...entry.messages].sort((a, b) => b[1] - a[1]).map(([message]) => message),
+      allMessages: [...entry.otherMessages].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([message, count2]) => ({ message, count: count2 }))
+    };
+    failures.push(failure);
+  }
+  return {
+    taskId,
+    retryId,
+    jobName: identity.jobName,
+    project: identity.project,
+    revision: identity.revision,
+    treeherderUrl: identity.project !== null && identity.revision !== null ? treeherderJobUrl(identity.project, identity.revision, taskId, retryId) : null,
+    profileUrl,
+    testCount: byTest.size,
+    executionCount: timings.length,
+    rerunCount: timings.filter((timing) => timing.isRerun).length,
+    statusCounts,
+    // `try`'s default sort, and its deterministic tie-break: failing
+    // executions descending, then the path, so two runs over one warm cache
+    // produce the same bytes.
+    failures: failures.sort(
+      (a, b) => b.failureCount - a.failureCount || a.path.localeCompare(b.path)
+    )
+  };
+}
+function nonFailures(timings, failures) {
+  const failing = new Set(failures.map((failure) => failure.path));
+  const byPath = /* @__PURE__ */ new Map();
+  for (const timing of timings) {
+    if (failing.has(timing.path)) {
+      continue;
+    }
+    let entry = byPath.get(timing.path);
+    if (entry === void 0) {
+      entry = { statuses: /* @__PURE__ */ new Set(), executionCount: 0 };
+      byPath.set(timing.path, entry);
+    }
+    entry.statuses.add(baseStatus(timing.status));
+    entry.executionCount++;
+  }
+  return [...byPath].map(([path, entry]) => ({
+    path,
+    statuses: [...entry.statuses].sort(),
+    executionCount: entry.executionCount
+  })).sort((a, b) => a.path.localeCompare(b.path));
+}
+function attachProvenance(failures, timings, taskId, retryId) {
+  const byPath = /* @__PURE__ */ new Map();
+  for (const timing of timings) {
+    if (!isFailureStatus(timing.status)) {
+      continue;
+    }
+    const list = byPath.get(timing.path) ?? [];
+    for (const filename of timing.profileFilenames) {
+      if (!list.includes(filename)) {
+        list.push(filename);
       }
     }
-    timings.push({
-      path,
-      status,
-      message,
-      messages: partitioned.messages,
-      profileFilenames: partitioned.profileFilenames,
-      jobName: job.jobName,
-      taskId: job.taskId,
-      retryId: job.retryId,
-      isRerun: retryRanges.length > 0 && overlaps(start, end, retryRanges)
-    });
+    byPath.set(timing.path, list);
   }
-  for (const crash of crashMarkers) {
-    if (crash.consumed) {
-      continue;
-    }
-    const path = normalizeTestPath(crash.testPath);
-    if (path === null) {
-      dropped.push({
-        kind: "Crash",
-        id: crash.testPath,
-        reason: describeTestPathDrop(crash.testPath),
-        status: "CRASH"
-      });
-      continue;
-    }
-    timings.push({
-      path,
-      status: "CRASH",
-      message: normalizeMessage(crash.signature ?? crash.reason),
-      // The harness uploads a per-test profile from a failure handler that
-      // a crash never reaches.
-      messages: [],
-      profileFilenames: [],
-      jobName: job.jobName,
-      taskId: job.taskId,
-      retryId: job.retryId,
-      isRerun: false
-    });
+  for (const failure of failures) {
+    failure.testProfiles = (byPath.get(failure.path) ?? []).map(
+      (filename) => testInfoArtifactUrl(taskId, retryId, filename)
+    );
   }
-  return timings;
 }
 
 // cli/format/failure-lines.ts
@@ -11135,8 +11373,7 @@ async function runTask(context, args) {
 async function fetchIdentity(context, source, taskId) {
   let definition;
   try {
-    const bytes2 = await source.fetch(taskDefinitionName(taskId));
-    definition = JSON.parse(new TextDecoder().decode(bytes2));
+    definition = await readTaskDefinition(source, taskId);
   } catch {
     warn(
       context,
@@ -11144,14 +11381,7 @@ async function fetchIdentity(context, source, taskId) {
     );
     return { jobName: null, project: null, revision: null };
   }
-  return {
-    // `metadata.name` and `tags.label` are the same string on every gecko
-    // test task measured; the tag is the fallback rather than the source
-    // because `metadata.name` is the field Taskcluster documents.
-    jobName: definition.metadata?.name ?? definition.tags?.label ?? null,
-    project: definition.tags?.project ?? null,
-    revision: revisionOf(definition.metadata?.source)
-  };
+  return taskIdentity(definition);
 }
 function reportDropped(context, dropped) {
   if (dropped.length === 0) {
@@ -11163,184 +11393,40 @@ function reportDropped(context, dropped) {
     `${count2} failing marker${count2 === 1 ? "" : "s"} in this job named no test path and ${count2 === 1 ? "is" : "are"} not in the table below (a crash recorded against a manifest has no test to attribute it to): ${shown}`
   );
 }
-function revisionOf(source) {
-  const match = /\/file\/([0-9a-f]{12,40})\//.exec(source ?? "");
-  return match?.[1] ?? null;
-}
 async function fetchProfile(source, taskId, retryId, url) {
-  let bytes2;
   try {
-    bytes2 = await source.fetch(
-      taskArtifactName(taskId, retryId, "public/test_info/profile_resource-usage.json")
-    );
+    return await readTaskProfile(source, taskId, retryId);
   } catch (error) {
-    if (error instanceof DataFileNotFoundError) {
-      throw goneError(
-        `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is not there.`,
-        "Taskcluster expires task artifacts after about a month, so this is permanent and retrying will not help. Check the retry number \u2014 `.0` is assumed \u2014 and get a current task ID from `fx-tests test <path> --task-ids`. A job that is not a test job never uploads one."
-      );
+    if (!(error instanceof TaskProfileError)) {
+      throw error;
     }
-    if (error instanceof DataFetchError && error.status === 400) {
-      throw usageError(
-        `"${taskId}" is not a task ID Taskcluster will accept (HTTP 400).`,
-        "A task ID is 22 URL-safe base64 characters. The `.<retryId>` suffix is optional and defaults to .0. Get one from `fx-tests test <path> --task-ids`, `fx-tests try <rev> --task-ids`, or the `selectedTaskRun` parameter of a Treeherder job URL."
-      );
-    }
-    if (error instanceof DataFetchError) {
-      throw upstreamError(
-        `could not fetch ${url}: ${error.message}`,
-        error.status === 403 ? "A 403 here is usually a malformed artifact path rather than an expired artifact, which answers 404. Retrying may work." : "This looks transient \u2014 retrying may work."
-      );
-    }
-    throw error;
-  }
-  if (isStreamedProfile(bytes2)) {
-    throw upstreamError(
-      `task ${taskId}.${retryId} was killed for exceeding its maximum duration, so its profile is a partial stream rather than a finished document and this tool does not read that format.`,
-      "The job never got to write a profile, so there are no per-test results to read. Its duration is the problem to look at; the log is on Treeherder."
-    );
-  }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes2));
-  } catch (error) {
-    throw upstreamError(
-      `the profile of task ${taskId}.${retryId} is not valid JSON: ${error.message}`,
-      `Re-run with --no-cache in case a truncated copy was cached; the artifact is ${url}.`
-    );
-  }
-}
-function summarize3(taskId, retryId, identity, profileUrl, timings) {
-  const byTest = /* @__PURE__ */ new Map();
-  const entryFor = (path) => {
-    let entry = byTest.get(path);
-    if (entry === void 0) {
-      entry = {
-        path,
-        failureCount: 0,
-        executionCount: 0,
-        statuses: /* @__PURE__ */ new Set(),
-        allStatuses: /* @__PURE__ */ new Set(),
-        modes: /* @__PURE__ */ new Set(),
-        passedOnRerun: false,
-        messages: /* @__PURE__ */ new Map(),
-        otherMessages: /* @__PURE__ */ new Map(),
-        profileFilenames: []
-      };
-      byTest.set(path, entry);
-    }
-    return entry;
-  };
-  for (const timing of timings) {
-    const entry = entryFor(timing.path);
-    entry.executionCount++;
-    entry.allStatuses.add(baseStatus(timing.status));
-    if (isFailureStatus(timing.status)) {
-      entry.failureCount++;
-      entry.statuses.add(baseStatus(timing.status));
-      entry.modes.add(/-(PARALLEL|SEQUENTIAL)$/.exec(timing.status)?.[1] ?? "UNRECORDED");
-      if (timing.message !== null) {
-        entry.messages.set(
-          timing.message,
-          (entry.messages.get(timing.message) ?? 0) + 1
+    switch (error.problem) {
+      case "missing":
+        throw goneError(
+          `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is not there.`,
+          "Taskcluster expires task artifacts after about a month, so this is permanent and retrying will not help. Check the retry number \u2014 `.0` is assumed \u2014 and get a current task ID from `fx-tests test <path> --task-ids`. A job that is not a test job never uploads one."
         );
-      }
-      for (const message of timing.messages) {
-        entry.otherMessages.set(
-          message,
-          (entry.otherMessages.get(message) ?? 0) + 1
+      case "not-a-task":
+        throw usageError(
+          `"${taskId}" is not a task ID Taskcluster will accept (HTTP 400).`,
+          "A task ID is 22 URL-safe base64 characters. The `.<retryId>` suffix is optional and defaults to .0. Get one from `fx-tests test <path> --task-ids`, `fx-tests try <rev> --task-ids`, or the `selectedTaskRun` parameter of a Treeherder job URL."
         );
-      }
-      for (const filename of timing.profileFilenames) {
-        if (!entry.profileFilenames.includes(filename)) {
-          entry.profileFilenames.push(filename);
-        }
-      }
-    } else if (timing.isRerun && timing.status.startsWith("PASS")) {
-      entry.passedOnRerun = true;
+      case "streamed":
+        throw upstreamError(
+          `task ${taskId}.${retryId} was killed for exceeding its maximum duration, so its profile is a partial stream rather than a finished document and this tool does not read that format.`,
+          "The job never got to write a profile, so there are no per-test results to read. Its duration is the problem to look at; the log is on Treeherder."
+        );
+      case "invalid-json":
+        throw upstreamError(
+          `the profile of task ${taskId}.${retryId} is not valid JSON: ${error.message}`,
+          `Re-run with --no-cache in case a truncated copy was cached; the artifact is ${url}.`
+        );
+      case "fetch":
+        throw upstreamError(
+          `could not fetch ${url}: ${error.message}`,
+          error.status === 403 ? "A 403 here is usually a malformed artifact path rather than an expired artifact, which answers 404. Retrying may work." : "This looks transient \u2014 retrying may work."
+        );
     }
-  }
-  const statusCounts = {};
-  for (const entry of byTest.values()) {
-    for (const status of entry.allStatuses) {
-      statusCounts[status] = (statusCounts[status] ?? 0) + 1;
-    }
-  }
-  const failures = [];
-  for (const entry of byTest.values()) {
-    if (entry.failureCount === 0) {
-      continue;
-    }
-    const failure = {
-      path: entry.path,
-      failureCount: entry.failureCount,
-      executionCount: entry.executionCount,
-      statuses: [...entry.statuses].sort(),
-      passedOnRerun: entry.passedOnRerun,
-      parallelOnly: entry.modes.size === 1 && entry.modes.has("PARALLEL"),
-      messages: [...entry.messages].sort((a, b) => b[1] - a[1]).map(([message]) => message),
-      allMessages: [...entry.otherMessages].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([message, count2]) => ({ message, count: count2 }))
-    };
-    failures.push(failure);
-  }
-  return {
-    taskId,
-    retryId,
-    jobName: identity.jobName,
-    project: identity.project,
-    revision: identity.revision,
-    treeherderUrl: identity.project !== null && identity.revision !== null ? treeherderJobUrl(identity.project, identity.revision, taskId, retryId) : null,
-    profileUrl,
-    testCount: byTest.size,
-    executionCount: timings.length,
-    rerunCount: timings.filter((timing) => timing.isRerun).length,
-    statusCounts,
-    // `try`'s default sort, and its deterministic tie-break: failing
-    // executions descending, then the path, so two runs over one warm cache
-    // produce the same bytes.
-    failures: failures.sort(
-      (a, b) => b.failureCount - a.failureCount || a.path.localeCompare(b.path)
-    )
-  };
-}
-function nonFailures(timings, failures) {
-  const failing = new Set(failures.map((failure) => failure.path));
-  const byPath = /* @__PURE__ */ new Map();
-  for (const timing of timings) {
-    if (failing.has(timing.path)) {
-      continue;
-    }
-    let entry = byPath.get(timing.path);
-    if (entry === void 0) {
-      entry = { statuses: /* @__PURE__ */ new Set(), executionCount: 0 };
-      byPath.set(timing.path, entry);
-    }
-    entry.statuses.add(baseStatus(timing.status));
-    entry.executionCount++;
-  }
-  return [...byPath].map(([path, entry]) => ({
-    path,
-    statuses: [...entry.statuses].sort(),
-    executionCount: entry.executionCount
-  })).sort((a, b) => a.path.localeCompare(b.path));
-}
-function attachProvenance(failures, timings, taskId, retryId) {
-  const byPath = /* @__PURE__ */ new Map();
-  for (const timing of timings) {
-    if (!isFailureStatus(timing.status)) {
-      continue;
-    }
-    const list = byPath.get(timing.path) ?? [];
-    for (const filename of timing.profileFilenames) {
-      if (!list.includes(filename)) {
-        list.push(filename);
-      }
-    }
-    byPath.set(timing.path, list);
-  }
-  for (const failure of failures) {
-    failure.testProfiles = (byPath.get(failure.path) ?? []).map(
-      (filename) => testInfoArtifactUrl(taskId, retryId, filename)
-    );
   }
 }
 function headerLines5(result) {

@@ -154,6 +154,14 @@ const DASHBOARDS = [
       long: 'A utility for inspecting a single crash dump loaded from a URL, decoding and ' +
             'displaying its contents. Usually reached by following a link from another ' +
             'dashboard rather than browsed directly.' },
+    { file: 'task.html', tier: 2, title: 'Task',
+      desc: 'What happened in one task: failures, every test, and its artifacts.',
+      long: 'Opened via ?task=<taskId>.<run>, usually from a Task link on another ' +
+            'dashboard. Reads the task’s own resource-usage profile and lists the ' +
+            'failing tests with their messages, per-test profiles and crash dumps, ' +
+            'then every test the job ran with its outcome and time, and the run’s ' +
+            'artifacts — most of what you would otherwise dig out of the profile or ' +
+            'the Treeherder failure summary.' },
     { file: 'job-speed.html', tier: 2, title: 'Job Speed',
       desc: 'XPCShell job speed; used to tune per-job-type timeout multipliers.',
       long: 'A specialized XPCShell dashboard built (together with Runtime Histograms) to ' +

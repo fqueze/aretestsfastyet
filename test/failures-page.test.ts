@@ -27,7 +27,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { setupPage, fixture, shape, shapes, pathTo } from './dom-harness.ts';
+import { setupPage, fixture, shape, shapes } from './dom-harness.ts';
 import type { IssuesWithTaskIdsFile } from '../lib/formats/issues.ts';
 
 // --- ground truth ---------------------------------------------------------
@@ -585,10 +585,8 @@ test('the failures page puts view-links on the td, with no span', () => {
                 null,
                 'and there is no span wrapper — that is the crashes page'
             );
-            assert.equal(
-                pathTo(single, single.querySelector('.view-links a')!),
-                'table.inline-instance > tbody > tr > td.view-links > a'
-            );
+            // Empty: the job name in the cell before it opens task.html.
+            assert.equal(cells[2]!.textContent, '');
             checked++;
         }
         row.click();
@@ -596,17 +594,16 @@ test('the failures page puts view-links on the td, with no span', () => {
     assert.ok(checked > 0, `${checked} inline cells were checked`);
 });
 
-test('an occurrence gets Profile and Job, and never a Crash link', () => {
-    // `occurrenceLinks` (`site/failures.ts:280`): no crash viewer, because a
-    // failure has no minidump. The crashes page emits three links at the same
-    // position, so the absent one is a real distinction.
+test('an occurrence gets no View links, and never a Crash link', () => {
+    // `occurrenceLinks` (`site/failures.ts`): the job name is the task.html
+    // link, which has the profile and the Treeherder job, and a failure has no
+    // minidump for the crash viewer the crashes page leaves in this position.
     let checked = 0;
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-failure'))) {
             const labels = [...single.querySelectorAll('.view-links a')].map((a) => a.textContent);
-            assert.deepEqual(labels, ['Profile', 'Job']);
-            assert.equal(labels.includes('Crash'), false);
+            assert.deepEqual(labels, []);
             assert.equal(single.querySelector('a[href^="crash-viewer.html"]'), null);
             checked++;
         }
@@ -615,8 +612,8 @@ test('an occurrence gets Profile and Job, and never a Crash link', () => {
     assert.ok(checked > 0);
 });
 
-test('a single-failure row opens the profiler, and is never inert', () => {
-    // `singleRowHref` (`site/failures.ts:297`) always returns a profiler URL.
+test('a single-failure row opens task.html, and is never inert', () => {
+    // `singleRowHref` (`site/failures.ts`) always returns a task page URL.
     // The crashes page returns `null` for a crash with no dump; here there is
     // no such case, so every single row is clickable.
     const opened: string[] = [];
@@ -640,24 +637,24 @@ test('a single-failure row opens the profiler, and is never inert', () => {
         assert.equal(opened.length, clicked, 'every single row opened something');
         assert.ok(clicked > 0);
         for (const url of opened) {
-            assert.ok(url.startsWith('https://profiler.firefox.com/from-url/'), url);
+            assert.match(url, /^task\.html\?task=[\w-]{22}\.\d+&test=/);
         }
     } finally {
         (harness.window as unknown as { open: unknown }).open = realOpen;
     }
 });
 
-test('the job name in a failures row points at the profiler, not a crash viewer', () => {
-    // `jobNameHref` (`site/failures.ts:291`) — the crashes page prefers the
-    // crash viewer here, which is the pages' other link divergence.
+test('the job name in a failures row points at task.html, for its own run', () => {
+    // `jobNameHref` (`site/failures.ts`), the same destination the crashes page
+    // uses since the task page lists a run's crashes too.
     let checked = 0;
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-failure'))) {
             const anchor = single.querySelector('.failure-job-name a') as HTMLAnchorElement;
-            assert.ok(
-                anchor.getAttribute('href')!.startsWith('https://profiler.firefox.com/from-url/')
-            );
+            const match = /^task\.html\?task=([\w-]{22}\.\d+)&test=/.exec(anchor.getAttribute('href')!);
+            assert.ok(match !== null, anchor.getAttribute('href')!);
+            assert.ok(RAW.tables.taskIds.includes(match[1]!), 'a run the file records');
             assert.equal(anchor.textContent!.length > 0, true, 'the job name is not empty');
             checked++;
         }

@@ -347,7 +347,7 @@ import {
     renderChartSlot,
     searchBox,
 } from './drilldown-render.ts';
-import { testRowLink } from './test-link.ts';
+import { taskPageUrl, testRowLink } from './test-link.ts';
 // The `tests.html` URL builder, from the page that owns that URL shape.
 import { folderPageUrl } from './tests-view.ts';
 import { CHART_COLOURS } from './chart-colours.ts';
@@ -1352,9 +1352,8 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
     interface Run {
         date: string | null;
         jobName: string;
-        profileUrl: string;
+        taskUrl: string;
         crashUrl: string | null;
-        jobUrl: string | null;
     }
     const runs: Run[] = [];
 
@@ -1383,10 +1382,7 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
                 // upstream's `dayIndex != null ? … : null` (`:3268`).
                 date: run.day === null ? null : dayLabel(startTime, run.day),
                 jobName,
-                profileUrl: getProfilerUrl(
-                    { taskId, retryId: String(retryId), jobName },
-                    test.fullPath
-                ),
+                taskUrl: taskPageUrl(taskId, retryId, test.fullPath),
                 // `getCrashViewerUrl` returns `''` with no minidump
                 // (`common-links.js:32`), which is upstream's own guard at
                 // `:3208` written a second way; `|| null` keeps the two cases
@@ -1396,7 +1392,6 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
                         ? getCrashViewerUrl({ taskId, retryId: String(retryId), minidump }) ||
                           null
                         : null,
-                jobUrl: getTreeherderJobUrl({ taskId, retryId: String(retryId) }, rawData),
             });
         }
     }
@@ -1417,21 +1412,16 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
 
         // The job name links to the crash viewer for a crash and to the
         // profiler otherwise (`:3236-3237`).
-        const mainUrl = run.crashUrl ?? run.profileUrl;
+        // The job name opens `task.html`, which has the profile and the
+        // Treeherder job; only the crash viewer is left beside it.
         const nameCell = el('td', {
             class: 'run-job-name',
-            children: [externalLink(mainUrl, run.jobName)],
+            children: [externalLink(run.taskUrl, run.jobName)],
         });
-
         const links = el('td', { class: 'view-links' });
-        links.append('View: ', externalLink(run.profileUrl, 'Profile'));
         if (run.crashUrl !== null) {
-            links.append(' ', externalLink(run.crashUrl, 'Crash'));
+            links.append('View: ', externalLink(run.crashUrl, 'Crash'));
         }
-        if (run.jobUrl !== null) {
-            links.append(' ', externalLink(run.jobUrl, 'Job'));
-        }
-
         return el('tr', { children: [dateCell, nameCell, links] });
     });
 }

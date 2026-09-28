@@ -51,6 +51,7 @@ import {
     stripManifestPrefix,
 } from '../lib/model/test-path.ts';
 import { type DroppedMarker, parseTestMarkers } from '../cli/commands/try.ts';
+import { sampleProfile } from './task-fixture.ts';
 import {
     type FailingTest,
     type Timing,
@@ -1487,6 +1488,7 @@ test('a crash against a manifest is recorded as a drop, with its reason', () => 
             id: 'toolkit/components/extensions/test/xpcshell/xpcshell.toml',
             reason: 'not-a-test-path',
             status: 'CRASH',
+            minidump: null,
         },
     ]);
 });
@@ -1635,4 +1637,40 @@ test('the +N more count matches the messages that exist, crashes included', asyn
     // failure mode review flagged in the item 15 probe, which had no control.
     assert.ok(checkedHints > 0, 'no rendered row exercised the +N hint');
     assert.ok(checkedNested > 0, 'no rendered row had more messages than it showed');
+});
+
+/**
+ * A failure line's stack, the same text on both sides.
+ *
+ * `lib/model/test-markers.ts` resolves a `TestStatus` marker's stack for
+ * `task.html` with a port of the worker's `resolveStack`; the worker is a code
+ * string that cannot import, so the two copies are pinned here instead. The
+ * profile is `task.html`'s fixture: one leak with a two-frame stack whose inner
+ * frame has a file and a line, and a retry of it with none.
+ */
+test('a failure line carries the same stack on both sides', () => {
+    type PageTiming = { path: string; allMessages: { message: string; stack?: string }[] };
+    const profile = sampleProfile();
+    const page = (workerExtractTestTimings()(profile) as unknown as PageTiming[])
+        .filter((timing) => timing.path === 'a/browser_twice.js')
+        .flatMap((timing) => timing.allMessages)
+        .filter((entry) => !entry.message.includes('profile uploaded in'))
+        .map((entry) => [entry.message, entry.stack ?? null]);
+    const cli = parseTestMarkers(profile, {
+        jobName: 'test-linux/opt-mochitest-1',
+        taskId: 'T',
+        retryId: 0,
+    } as TreeherderJob)
+        .filter((timing) => timing.path === 'a/browser_twice.js')
+        .flatMap((timing) => timing.details)
+        .map((detail) => [detail.message, detail.stack]);
+    assert.deepEqual(cli, [
+        [
+            'leaked 1 window(s)',
+            'run @ chrome://mochitests/content/browser/a/browser_twice.js:12\n' +
+                'observe — JS Function - observe @  0x1f',
+        ],
+        ['leaked 1 window(s)', null],
+    ]);
+    assert.deepEqual(page, cli, 'the worker resolves the same stacks');
 });

@@ -216,17 +216,16 @@
  * `site/try-view.ts`.
  */
 
-import { bucketFileSuffix, bucketIndexForPath } from '../lib/formats/buckets.ts';
-import { detectHarness, otherHarness } from '../lib/model/harness.ts';
 import { stripChunkSuffix } from '../lib/model/job-name.ts';
 import { el, searchBox } from './drilldown-render.ts';
-import { testPageUrl, testRowLink } from './test-link.ts';
+import { fetchFlakiness, mitten, paintFlakinessCell } from './flakiness-fetch.ts';
+import { type AssertionItem, renderAssertionItem } from './assertion-render.ts';
+import { taskPageUrl, testRowLink } from './test-link.ts';
 import {
     type ConsoleFailure,
     type FailingTest,
     type Failures,
     type FlakinessData,
-    type FlakinessRequest,
     type Job,
     type SearchTerm,
     type SortColumn,
@@ -246,10 +245,8 @@ import {
     extractUploadedProfileName,
     findUploadedProfile,
     filterTests,
-    flakinessCell,
     flakinessRequests,
     formatForPrompt,
-    groupRequestsByChunk,
     groupUnblamedJobs,
     hgRepoPath,
     initialSort,
@@ -278,7 +275,6 @@ import {
     visibleUnblamedGroups,
     writeUrlState,
 } from './try-view.ts';
-import type { FlakinessResult, WorkerResponse } from './try-flakiness-worker.ts';
 
 // --- the shared scripts, as they are --------------------------------------
 //
@@ -318,20 +314,6 @@ declare global {
     function setFavicon(color: string): void;
     // `withDevParams` is no longer named here: the only call this page makes is
     // inside `site/test-link.ts`, which declares it there.
-    /**
-     * `fetch-utils.js` — fetches a data file, honouring `?data-source=`.
-     *
-     * `date` is an optional `YYYY-MM-DD` pushdate naming an *older* published
-     * run to read instead of the latest one. Omit it for the current data.
-     */
-    function fetchData(filename: string, date?: string): Promise<Response>;
-    /**
-     * The worker sources the build inlined. See `tools/build-pages.ts`; the
-     * page reads this rather than importing the worker, so that the built page
-     * stays one file with no extra request.
-     */
-    // eslint-disable-next-line no-var
-    var __workers: Record<string, string> | undefined;
 }
 
 // --- constants ------------------------------------------------------------
@@ -342,10 +324,6 @@ const TH_BASE = 'https://treeherder.mozilla.org';
 const isLocal =
     window.location.protocol === 'file:' || window.location.hostname === 'localhost';
 
-/** The mitten glyph's element. `old/try.html:1483` writes it as markup. */
-function mitten(): HTMLElement {
-    return el('span', { class: 'mitten' });
-}
 
 /**
  * A section heading's row count, as ` — N`.
@@ -966,7 +944,6 @@ interface PageState {
      * containing `&`, `<` or `"`. Holding the elements removes the class of bug.
      */
     flakinessCells: Map<string, HTMLElement>;
-    flakinessWorker: Worker | null;
 }
 
 const state: PageState = {
@@ -985,7 +962,6 @@ const state: PageState = {
     treeherderUrl: '',
     flakiness: new Map(),
     flakinessCells: new Map(),
-    flakinessWorker: null,
 };
 
 // --- status and progress --------------------------------------------------
@@ -1903,14 +1879,6 @@ function renderJobDetailRow(
 ): HTMLTableRowElement {
     const platform = extractPlatform(job.jobName);
     const builds = extractBuildTypes(job.jobName);
-    const profilerUrl = getProfilerUrl(
-        { taskId: job.taskId, retryId: job.retryId, jobName: job.jobName },
-        test.path.split('/').pop()
-    );
-    const thJobUrl =
-        `${TH_BASE}/jobs?repo=${state.repo}&selectedTaskRun=${job.taskId}.${job.retryId}` +
-        `&revision=${state.revision ?? ''}`;
-
     const jobStatuses = new Set<string>();
     for (const instance of job.instances) {
         jobStatuses.add(baseStatus(instance.status));
@@ -1950,7 +1918,9 @@ function renderJobDetailRow(
 
     const info = el('td', { class: 'test-info' });
     const header = el('div', { class: 'job-header' });
-    header.append(el('span', { class: 'job-name', text: job.jobName }));
+    // The job name opens `task.html`, which has the profile and the Treeherder
+    // job; only the crash viewer is left beside it.
+    header.append(plainLink(taskPageUrl(job.taskId, job.retryId, test.path), job.jobName, 'job-name'));
 
     // A test that fails is rerun in the harness's "retry" phase. Split the
     // failures into the initial run and the retry, ordered by time; when it
@@ -1971,7 +1941,6 @@ function renderJobDetailRow(
     }
 
     const links = el('span', { class: 'job-links' });
-    links.append(plainLink(profilerUrl, 'Profile'));
     const crashUrls = new Set<string>();
     for (const instance of job.instances) {
         if (instance.minidump !== undefined) {
@@ -1989,8 +1958,9 @@ function renderJobDetailRow(
             links.append(plainLink(crashUrl, 'Crash'));
         }
     }
-    links.append(plainLink(thJobUrl, 'Treeherder'));
-    header.append(' ', links);
+    if (links.childNodes.length > 0) {
+        header.append(' ', links);
+    }
     info.append(header);
 
     info.append(...renderAssertionList(test, { showRuns, initialInstances, retryInstances, passedOnRetry, jobKey }));
@@ -2007,21 +1977,10 @@ function renderJobDetailRow(
  * links carry no `onclick` (`old/try.html:2204`), because a detail row is not
  * itself clickable, so there is no row toggle to suppress.
  */
-function plainLink(href: string, text: string): HTMLAnchorElement {
-    const anchor = el('a', { href, text });
+function plainLink(href: string, text: string, className?: string): HTMLAnchorElement {
+    const anchor = el('a', { href, text, class: className });
     anchor.target = '_blank';
     return anchor;
-}
-
-/** One item of the assertion list: a message, a crash signature, or a phase label. */
-interface AssertionItem {
-    separator?: boolean;
-    label?: string;
-    cls?: string;
-    icon?: HTMLElement | null;
-    /** The rendered content, already escaped by construction. */
-    content?: Node | string;
-    stack?: string | undefined;
 }
 
 /** How many assertions show before the `show N more` link. `old/try.html:2356`. */
@@ -2139,162 +2098,6 @@ function renderAssertionList(
     return [list, more];
 }
 
-/** One `<li>` of the assertion list. `old/try.html:2345`. */
-function renderAssertionItem(item: AssertionItem, isHidden: boolean): HTMLElement {
-    const classes: string[] = [];
-    if (item.separator === true) {
-        classes.push('phase-label');
-    } else if (item.cls) {
-        classes.push('phase-body');
-    }
-    if (item.cls) {
-        classes.push(item.cls);
-    }
-    if (isHidden) {
-        classes.push('assertion-hidden');
-    }
-    const li = el('li', { class: classes.join(' ') });
-    if (isHidden) {
-        li.hidden = true;
-    }
-
-    if (item.separator === true) {
-        li.append(el('span', { class: 'chip', text: item.label ?? '' }));
-        if (item.icon != null) {
-            li.append(item.icon);
-        }
-        return li;
-    }
-    if (item.content !== undefined) {
-        li.append(item.content);
-    }
-    if (item.stack !== undefined) {
-        li.append(renderStack(item.stack));
-    }
-    return li;
-}
-
-// --- stack colouring ------------------------------------------------------
-//
-// `old/try.html:2251-2333`. Three line shapes, tried in order, and everything else
-// is printed plain. The point of the colouring is that a leak stack and a JS
-// stack look different at a glance and each links to Searchfox where it can.
-
-/** Known prefix → Searchfox source path. The prefix is hidden. `old/try.html:2252`. */
-const SOURCE_PREFIX_MAP: [string, string][] = [
-    ['chrome://mochitests/content/browser/', ''],
-    ['chrome://mochikit/content/', 'testing/mochitest/'],
-];
-
-/** One `file:line:col` reference, linked where possible. `old/try.html:2257`. */
-function renderJsFile(file: string, funcName: string | null): Node {
-    const lineMatch = /^(.+?):(\d+)(:\d+)?$/.exec(file);
-    const filePart = lineMatch ? lineMatch[1]! : file;
-    const lineNum = lineMatch ? lineMatch[2]! : null;
-    const lineSuffix = lineMatch ? `:${lineMatch[2]!}${lineMatch[3] ?? ''}` : '';
-    const fileName = filePart.split('/').pop();
-
-    for (const [prefix, replacement] of SOURCE_PREFIX_MAP) {
-        if (filePart.startsWith(prefix)) {
-            const srcPath = replacement + filePart.slice(prefix.length);
-            const href =
-                `https://searchfox.org/mozilla-central/source/${srcPath}` +
-                (lineNum !== null ? `#${lineNum}` : '');
-            const anchor = el('a', { href });
-            anchor.target = '_blank';
-            anchor.append(el('span', { class: 'stack-file', text: srcPath }));
-            if (lineSuffix) {
-                anchor.append(el('span', { class: 'stack-line', text: lineSuffix }));
-            }
-            return anchor;
-        }
-    }
-
-    // Unknown scheme (`resource://`, `chrome://browser/`, …): grey out the
-    // prefix and link to a Searchfox *search* rather than a source path,
-    // because the mapping from a runtime URL to a source file is not one this
-    // page knows.
-    const schemeMatch = /^(.+\/)([^/]+)$/.exec(filePart);
-    const fragment = document.createDocumentFragment();
-    if (schemeMatch) {
-        fragment.append(el('span', { class: 'stack-prefix', text: schemeMatch[1]! }));
-        fragment.append(el('span', { class: 'stack-file', text: schemeMatch[2]! }));
-    } else {
-        fragment.append(el('span', { class: 'stack-file', text: filePart }));
-    }
-    if (lineSuffix) {
-        fragment.append(el('span', { class: 'stack-line', text: lineSuffix }));
-    }
-    if (fileName !== undefined && fileName !== '') {
-        const params = new URLSearchParams({ path: fileName, case: 'true', regexp: 'false' });
-        if (funcName !== null) {
-            params.set('q', funcName);
-        }
-        const anchor = el('a', { href: `https://searchfox.org/mozilla-central/search?${params}` });
-        anchor.target = '_blank';
-        anchor.append(fragment);
-        return anchor;
-    }
-    return fragment;
-}
-
-/** A leak-stack description. `old/try.html:2299`. */
-function renderLeakDesc(desc: string): Node {
-    const fragment = document.createDocumentFragment();
-    const funcMatch = /^(JS Function - )(.+)$/.exec(desc);
-    if (funcMatch) {
-        fragment.append(el('span', { class: 'stack-desc', text: funcMatch[1]! }));
-        fragment.append(el('span', { class: 'stack-func', text: funcMatch[2]! }));
-        return fragment;
-    }
-    for (const part of desc.split(/((?:chrome|resource):\/\/[^\s]+)/)) {
-        if (/^(?:chrome|resource):\/\//.test(part)) {
-            fragment.append(renderJsFile(part, null));
-        } else {
-            fragment.append(el('span', { class: 'stack-desc', text: part }));
-        }
-    }
-    return fragment;
-}
-
-/** The `<pre class="assertion-stack">`. `old/try.html:2314`. */
-function renderStack(stack: string): HTMLElement {
-    const pre = el('pre', { class: 'assertion-stack' });
-    const lines = stack.split('\n');
-    for (const [index, line] of lines.entries()) {
-        if (index > 0) {
-            pre.append('\n');
-        }
-        // Leak stack: `name — description @  0xaddr`.
-        const leakMatch = /^(.+?) — (.+?) @ {2}(0x[0-9a-f]+)$/.exec(line);
-        if (leakMatch) {
-            pre.append(el('span', { class: 'stack-func', text: leakMatch[1]! }));
-            pre.append(el('span', { class: 'stack-sep', text: ' — ' }));
-            pre.append(renderLeakDesc(leakMatch[2]!));
-            pre.append(el('span', { class: 'stack-sep', text: ' @ ' }));
-            pre.append(el('span', { class: 'stack-addr', text: leakMatch[3]! }));
-            continue;
-        }
-        // Leak stack with no description: `name @  0xaddr`.
-        const leakSimple = /^(.+?) @ {2}(0x[0-9a-f]+)$/.exec(line);
-        if (leakSimple) {
-            pre.append(el('span', { class: 'stack-func', text: leakSimple[1]! }));
-            pre.append(el('span', { class: 'stack-sep', text: ' @ ' }));
-            pre.append(el('span', { class: 'stack-addr', text: leakSimple[2]! }));
-            continue;
-        }
-        // JS stack: `func @ file:line:col`.
-        const jsMatch = /^(.+?) @ (.+)$/.exec(line);
-        if (jsMatch) {
-            pre.append(el('span', { class: 'stack-func', text: jsMatch[1]! }));
-            pre.append(el('span', { class: 'stack-sep', text: ' @ ' }));
-            pre.append(renderJsFile(jsMatch[2]!, jsMatch[1]!));
-            continue;
-        }
-        pre.append(line);
-    }
-    return pre;
-}
 
 // --- the unblamed-jobs table ----------------------------------------------
 
@@ -2464,15 +2267,6 @@ function renderUnblamedGroupRow(group: UnblamedGroup): HTMLTableRowElement {
 function renderUnblamedJobRow(job: Job): HTMLTableRowElement {
     const platform = extractPlatform(job.jobName);
     const builds = extractBuildTypes(job.jobName);
-    const profilerUrl = getProfilerUrl({
-        taskId: job.taskId,
-        retryId: job.retryId,
-        jobName: job.jobName,
-    });
-    const thJobUrl =
-        `${TH_BASE}/jobs?repo=${state.repo}&selectedTaskRun=${job.taskId}.${job.retryId}` +
-        `&revision=${state.revision ?? ''}`;
-
     const row = el('tr', { class: 'detail-row visible' });
     row.append(el('td', { class: 'count-cell' }));
     row.append(
@@ -2493,11 +2287,9 @@ function renderUnblamedJobRow(job: Job): HTMLTableRowElement {
 
     const info = el('td', { class: 'test-info' });
     const header = el('div', { class: 'job-header' });
-    header.append(el('span', { class: 'job-name', text: job.jobName }));
-    const links = el('span', { class: 'job-links' });
-    links.append(link(profilerUrl, { text: 'Profile' }));
-    links.append(link(thJobUrl, { text: 'Treeherder' }));
-    header.append(' ', links);
+    // The job name opens `task.html`: the profile and the Treeherder job the
+    // links beside it used to offer are there.
+    header.append(link(taskPageUrl(job.taskId, job.retryId), { text: job.jobName, class: 'job-name' }));
     info.append(header);
 
     for (const line of job.cleanedSummary ?? []) {
@@ -2750,201 +2542,28 @@ Then investigate the cause: look at the markers around the failure (TestStatus/F
 // --- flakiness ------------------------------------------------------------
 
 /**
- * Creates the flakiness worker from the bundled source. `old/try.html:2581`.
- *
- * The source comes from `globalThis.__workers`, which `tools/build-pages.ts`
- * writes as a string constant ahead of this module's code. See
- * `site/try-flakiness-worker.ts` for why the old page's `.toString()` approach
- * cannot survive bundling.
- *
- * A missing entry throws rather than falling back to a module worker. Two
- * reasons, and the second is the one that decided it:
- *
- *  - There is nothing to fall back *for*. `site/try.html` carries
- *    `<script type="module" src="./try.ts">`, which no browser can load
- *    unbuilt, so a page reaching this line has necessarily been through the
- *    build and the entry is either there or the build is broken.
- *  - `new URL('./x.ts', import.meta.url)` puts an `import.meta` in the bundle,
- *    and `tools/build-pages.ts`'s parse guard — `new Function`, which is not a
- *    module scope — rejects it. That guard exists because the symptom of a
- *    mangled inline bundle is a blank dashboard, so working around it to keep a
- *    dev convenience would be trading a real check for an unreachable path.
- */
-function initFlakinessWorker(): Worker {
-    if (state.flakinessWorker !== null) {
-        return state.flakinessWorker;
-    }
-    const source = globalThis.__workers?.['try-flakiness-worker.ts'];
-    if (source === undefined) {
-        throw new Error(
-            'try-flakiness-worker.ts was not inlined by the build. The page cannot ' +
-                'fetch 21-day history without it; check the <!-- worker: --> directive ' +
-                'in site/try.html.'
-        );
-    }
-    const worker = new Worker(
-        URL.createObjectURL(new Blob([source], { type: 'application/javascript' }))
-    );
-    state.flakinessWorker = worker;
-    return worker;
-}
-
-/** One round trip to the flakiness worker. `old/try.html:2619`. */
-function processInWorker(
-    worker: Worker,
-    buffer: ArrayBuffer,
-    tests: readonly FlakinessRequest[]
-): Promise<WorkerResponse> {
-    return new Promise((resolve) => {
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
-            worker.removeEventListener('message', handler);
-            resolve(event.data);
-        };
-        worker.addEventListener('message', handler);
-        worker.postMessage({ buffer, tests }, [buffer]);
-    });
-}
-
-/**
- * Fills in the flakiness column, one bucket file at a time. `old/try.html:2632`.
- *
- * Sequential fetches with the next file's download overlapping the current
- * file's parse — a bucket file is ~3.5 MB and the parse is the slow half, so
- * the pipeline roughly halves the wall time without ever holding two 3.5 MB
- * buffers *and* two decoded files at once.
- *
- * Tests not found under their detected harness are retried under the other one,
- * because `detectHarness` cannot tell a mochitest-plain `test_foo.js` from an
- * xpcshell one (`lib/model/harness.ts` documents the hole). Anything still not
- * found gets a blank cell.
+ * Fills in the flakiness column. The fetching and the worker are
+ * `site/flakiness-fetch.ts`, shared with `task.html`.
  */
 async function fetchFlakinessData(tests: readonly FailingTest[]): Promise<void> {
-    const worker = initFlakinessWorker();
-    const requests = flakinessRequests(tests, stripChunkSuffix);
-    const testOrder = new Map(tests.map((test, index) => [test.path, index]));
-
-    const processChunks = async (
-        entries: readonly FlakinessRequest[],
-        harnessOf: (path: string) => string
-    ): Promise<FlakinessRequest[]> => {
-        const notFound: FlakinessRequest[] = [];
-        const sorted = groupRequestsByChunk(
-            entries,
-            testOrder,
-            (path) => `${harnessOf(path)}-${bucketFileSuffix(bucketIndexForPath(path))}`
-        );
-
-        let workerPromise: Promise<WorkerResponse> | null = null;
-        let workerTests: FlakinessRequest[] | null = null;
-
-        const drainWorker = async (): Promise<void> => {
-            if (workerPromise === null) {
-                return;
+    await fetchFlakiness(
+        flakinessRequests(tests, stripChunkSuffix),
+        tests.map((test) => test.path),
+        (path, data) => {
+            if (data !== null) {
+                state.flakiness.set(path, data);
             }
-            const pending = workerTests ?? [];
-            try {
-                const result = await workerPromise;
-                if (result.error !== undefined) {
-                    notFound.push(...pending);
-                } else {
-                    for (const answer of result.results ?? []) {
-                        applyFlakinessResult(answer, pending, notFound);
-                    }
-                }
-            } catch {
-                notFound.push(...pending);
-            }
-            workerPromise = null;
-            workerTests = null;
-        };
-
-        let pendingFetch: Promise<ArrayBuffer | null> | null = null;
-        const fetchChunk = (file: string): Promise<ArrayBuffer | null> =>
-            fetchData(`${file}.json`)
-                .then((response) => (response.ok ? response.arrayBuffer() : null))
-                .catch(() => null);
-
-        for (let i = 0; i < sorted.length; i++) {
-            const [chunkFile, chunkTests] = sorted[i]!;
-            const fetched = await (pendingFetch ?? fetchChunk(chunkFile));
-            pendingFetch = null;
-            if (fetched === null) {
-                notFound.push(...chunkTests);
-                continue;
-            }
-            await drainWorker();
-            workerTests = chunkTests;
-            workerPromise = processInWorker(worker, fetched, chunkTests);
-            // Start fetching the next chunk while the worker parses this one.
-            const next = sorted[i + 1];
-            if (next !== undefined) {
-                pendingFetch = fetchChunk(next[0]);
-            }
+            updateFlakinessDisplay(path, data);
         }
-        await drainWorker();
-        return notFound;
-    };
-
-    const notFound = await processChunks(requests, (path) => detectHarness(path));
-    if (notFound.length > 0) {
-        const stillNotFound = await processChunks(notFound, (path) =>
-            otherHarness(detectHarness(path))
-        );
-        for (const entry of stillNotFound) {
-            updateFlakinessDisplay(entry.path, null);
-        }
-    }
-
-    worker.terminate();
-    state.flakinessWorker = null;
+    );
 }
 
-/** Records one worker answer, or defers the test to the other harness. */
-function applyFlakinessResult(
-    answer: FlakinessResult,
-    pending: readonly FlakinessRequest[],
-    notFound: FlakinessRequest[]
-): void {
-    if (!answer.found) {
-        const request = pending.find((test) => test.path === answer.path);
-        if (request !== undefined) {
-            notFound.push(request);
-        }
-        return;
-    }
-    const data: FlakinessData = {
-        stats: answer.stats!,
-        hasMatchingMessage: answer.hasMatchingMessage === true,
-        configs: answer.configs ?? [],
-        totalDays: answer.totalDays ?? 0,
-    };
-    state.flakiness.set(answer.path, data);
-    updateFlakinessDisplay(answer.path, data);
-}
-
-/** `old/try.html:2848`. Paints one flakiness cell. */
+/** Paints one flakiness cell, if the row is on screen. */
 function updateFlakinessDisplay(testPath: string, data: FlakinessData | null): void {
     const cell = state.flakinessCells.get(testPath);
-    if (cell === undefined) {
-        return;
+    if (cell !== undefined) {
+        paintFlakinessCell(cell, testPath, data);
     }
-    const view = flakinessCell(data);
-    if (view === null) {
-        cell.replaceChildren();
-        cell.className = 'flakiness-cell';
-        cell.title = '';
-        return;
-    }
-    cell.className = view.className;
-    // The same URL the path links to, built by the shared `testPageUrl` — but
-    // not the shared link element: this anchor's text is a percentage and its
-    // title is the per-config breakdown, so only the destination is shared.
-    const anchor = link(testPageUrl(testPath), { title: view.tooltip });
-    if (view.hasMitten) {
-        anchor.append(mitten());
-    }
-    anchor.append(view.text);
-    cell.replaceChildren(anchor);
 }
 
 // --- the console API ------------------------------------------------------

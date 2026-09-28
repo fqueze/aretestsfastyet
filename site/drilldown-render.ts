@@ -95,22 +95,12 @@ import { occurrenceRows } from './drilldown-view.ts';
 // up to 22 unmigrated pages depend on, which the build copies next to the page.
 
 declare global {
-    /** `common-links.js:15` — the Firefox Profiler URL for a run. */
-    function getProfilerUrl(
-        instance: { taskId?: string; retryId?: string | number; jobName?: string },
-        testName?: string | null
-    ): string;
     /** `common-links.js:31` — the crash viewer URL, or `''` with no minidump. */
     function getCrashViewerUrl(crashInstance: {
         taskId: string;
         retryId: string | number;
         minidump?: string | null | undefined;
     }): string;
-    /** `common-links.js:43` — the Treeherder URL, or `null`. */
-    function getTreeherderJobUrl(
-        instance: { taskId: string; retryId: string | number },
-        currentData: unknown
-    ): string | null;
     /** `common-links.js:104` — the Searchfox URL for a test path. */
     function getSearchfoxUrl(testPath: string, message?: string | null): string;
     /** `common-links.js:126` — the Bugzilla filing URL. */
@@ -795,14 +785,25 @@ function renderSingleRow(
 function inlineLinksCell(links: readonly HTMLElement[], vocab: Vocabulary): HTMLElement {
     if (vocab.kind === 'crash') {
         const span = el('span', { class: 'view-links' });
-        span.append('View: ');
-        appendSpaced(span, links);
+        appendViewLinks(span, links);
         return el('td', { children: [span] });
     }
     const cell = el('td', { class: 'view-links' });
-    cell.append('View: ');
-    appendSpaced(cell, links);
+    appendViewLinks(cell, links);
     return cell;
+}
+
+/**
+ * `View: ` and the links, or nothing when there are none. The job name links
+ * to `task.html`, which carries the profile and the Treeherder job, so a page
+ * is left with only what that page does not — the crash viewer.
+ */
+function appendViewLinks(parent: HTMLElement, links: readonly HTMLElement[]): void {
+    if (links.length === 0) {
+        return;
+    }
+    parent.append('View: ');
+    appendSpaced(parent, links);
 }
 
 /**
@@ -837,8 +838,7 @@ export function renderOccurrenceTable(
         // single-occurrence cell, which they build differently. See
         // `inlineLinksCell`.
         const linksCell = el('td', { class: 'view-links' });
-        linksCell.append('View: ');
-        appendSpaced(linksCell, hooks.occurrenceLinks(occurrence, test.testName));
+        appendViewLinks(linksCell, hooks.occurrenceLinks(occurrence, test.testName));
 
         rows.push(
             el('tr', {

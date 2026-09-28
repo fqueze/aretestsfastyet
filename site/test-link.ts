@@ -47,6 +47,7 @@
  */
 
 import { el, externalLink } from './drilldown-render.ts';
+import { taskPageSearch } from './task-view.ts';
 
 declare global {
     /** `fetch-utils.js:41` — carries `?data-source=`/`?profiler=` onto a link. */
@@ -62,6 +63,20 @@ declare global {
  */
 export function testPageUrl(testPath: string): string {
     return withDevParams(`test.html?test=${encodeURIComponent(testPath)}`);
+}
+
+/**
+ * The `task.html` URL for one task run, with the dev params carried over.
+ *
+ * `test` names the row to highlight there: a path, or a bare file name.
+ * `retryId` is a string where the aggregates' link builders keep it as one.
+ */
+export function taskPageUrl(
+    taskId: string,
+    retryId: number | string,
+    test?: string | null
+): string {
+    return withDevParams(`task.html${taskPageSearch(taskId, Number(retryId), test)}`);
 }
 
 /**

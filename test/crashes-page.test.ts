@@ -465,11 +465,12 @@ test('expanding a test inserts an instance table, and closing removes only that'
 // 4. The links — the crashes page's hooks
 // =========================================================================
 
-test('a single-crash row links its job name at the crash viewer for its own dump', () => {
-    // `jobNameHref` is `getCrashViewerUrl(occurrence) || getProfilerUrl(…)`
-    // (`site/crashes.ts:267`). The expected URL is rebuilt here from the raw
-    // task ID and dump ID with the *real* `common-links.js`, so this compares
-    // two independent computations rather than echoing a stub.
+test('a single-crash row links its job name at task.html, and its Crash link at its own dump', () => {
+    // `jobNameHref` is the task page for the occurrence's run
+    // (`site/crashes.ts`); the crash viewer is the one link left beside it. The
+    // expected viewer URL is rebuilt from the raw task ID and dump ID with the
+    // *real* `common-links.js`, so this compares two independent computations
+    // rather than echoing a stub.
     const getCrashViewerUrl = (globalThis as unknown as {
         getCrashViewerUrl: (o: { taskId: string; retryId: string; minidump?: string | null }) => string;
     }).getCrashViewerUrl;
@@ -478,25 +479,21 @@ test('a single-crash row links its job name at the crash viewer for its own dump
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-crash'))) {
-            const anchor = single.querySelector('.crash-job-name a') as HTMLAnchorElement;
-            const href = anchor.getAttribute('href')!;
-            assert.ok(
-                href.startsWith('crash-viewer.html?url='),
-                `a dump-bearing occurrence opens the crash viewer, got ${href.slice(0, 40)}`
-            );
-            // The URL names this occurrence's own task, not another row's.
-            const taskId = decodeURIComponent(href).match(/\/task\/([^/]+)\//)![1]!;
-            assert.ok(
-                RAW.tables.taskIds.some((id) => id.startsWith(`${taskId}.`)),
-                'the task is one the file records'
-            );
+            const job = (single.querySelector('.crash-job-name a') as HTMLAnchorElement).getAttribute('href')!;
+            const match = /^task\.html\?task=([\w-]{22})\.(\d+)&test=/.exec(job);
+            assert.ok(match !== null, `the job name opens task.html, got ${job.slice(0, 40)}`);
+            const [, taskId, retryId] = match;
+            assert.ok(RAW.tables.taskIds.includes(`${taskId}.${retryId}`), 'the task is one the file records');
+
+            const crash = (single.querySelector('.view-links a') as HTMLAnchorElement).getAttribute('href')!;
             assert.equal(
-                href,
+                crash,
                 getCrashViewerUrl({
-                    taskId,
-                    retryId: decodeURIComponent(href).match(/\/runs\/(\d+)\//)![1]!,
-                    minidump: decodeURIComponent(href).match(/test_info\/([^/]+)\.json/)![1]!,
-                })
+                    taskId: taskId!,
+                    retryId: retryId!,
+                    minidump: decodeURIComponent(crash).match(/test_info\/([^/]+)\.json/)![1]!,
+                }),
+                'the Crash link is the same run’s dump'
             );
             checked++;
         }
@@ -537,12 +534,10 @@ test('clicking a single-crash row opens the crash viewer for that occurrence', (
                 );
                 assert.equal(target, '_blank');
                 // The row opens *its own* occurrence: the URL matches the one
-                // its job-name anchor points at.
+                // its Crash link points at.
                 assert.equal(
                     url,
-                    (single.querySelector('.crash-job-name a') as HTMLAnchorElement).getAttribute(
-                        'href'
-                    )
+                    (single.querySelector('.view-links a') as HTMLAnchorElement).getAttribute('href')
                 );
                 clicked++;
             }
@@ -555,17 +550,17 @@ test('clicking a single-crash row opens the crash viewer for that occurrence', (
     }
 });
 
-test('an occurrence"s links are Profile, Crash and Job, in that order', () => {
-    // `occurrenceLinks` (`site/crashes.ts:249`) — `renderCrashLinks` in element
-    // form. The order is upstream's and the Crash link is conditional on a
-    // dump, so the labels are asserted as a sequence.
+test('an occurrence"s only link is its Crash viewer; the job name has the rest', () => {
+    // `occurrenceLinks` (`site/crashes.ts`): the crash viewer, when there is a
+    // dump. The profile and the Treeherder job are on the task page the job
+    // name opens.
     let checked = 0;
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-crash'))) {
             const holder = single.querySelector('.view-links')!;
             const labels = [...holder.querySelectorAll('a')].map((a) => a.textContent);
-            assert.deepEqual(labels, ['Profile', 'Crash', 'Job'], 'every dumped occurrence');
+            assert.deepEqual(labels, ['Crash'], 'every dumped occurrence');
             for (const anchor of holder.querySelectorAll('a')) {
                 assert.equal((anchor as HTMLAnchorElement).target, '_blank');
             }

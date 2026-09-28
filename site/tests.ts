@@ -121,7 +121,7 @@ import {
     removeFollowing,
     searchBox,
 } from './drilldown-render.ts';
-import { testRowLink } from './test-link.ts';
+import { taskPageUrl, testRowLink } from './test-link.ts';
 import { CHART_COLOURS, withAlpha } from './chart-colours.ts';
 
 // Declared next to the calls rather than relied on from another `site/` file:
@@ -258,14 +258,6 @@ function chartJs(): ChartJs | undefined {
  * "what is left to fix here" with the wrong number.
  */
 let loaded: LoadedHarness[] = [];
-/**
- * The raw parsed file per harness, which `getTreeherderJobUrl` indexes itself.
- *
- * Keyed by harness because the run list has to hand `getTreeherderJobUrl` the
- * raw file the *row* came from — passing the other harness's would resolve the
- * task against the wrong `taskInfo` and produce a plausible, wrong link.
- */
-const rawByHarness = new Map<Harness, unknown>();
 /**
  * Which harnesses actually have tests under this path, for the heading.
  *
@@ -1589,9 +1581,8 @@ function runRows(test: WorklistRow, issue: TestIssue): HTMLElement[] {
     interface Run {
         date: string | null;
         jobName: string;
-        profileUrl: string;
+        taskUrl: string;
         crashUrl: string | null;
-        jobUrl: string | null;
     }
     const runs: Run[] = [];
 
@@ -1623,20 +1614,13 @@ function runRows(test: WorklistRow, issue: TestIssue): HTMLElement[] {
             runs.push({
                 date: run.day === null ? null : (dates[run.day] ?? null),
                 jobName,
-                profileUrl: getProfilerUrl(
-                    { taskId, retryId: String(retryId), jobName },
-                    test.fullPath
-                ),
+                taskUrl: taskPageUrl(taskId, retryId, test.fullPath),
                 // `getCrashViewerUrl` returns `''` with no minidump; `|| null`
                 // keeps the two cases one value.
                 crashUrl:
                     issue.type === 'CRASH'
                         ? getCrashViewerUrl({ taskId, retryId: String(retryId), minidump }) || null
                         : null,
-                jobUrl: getTreeherderJobUrl(
-                    { taskId, retryId: String(retryId) },
-                    rawByHarness.get(test.harness) ?? null
-                ),
             });
         }
     }
@@ -1651,18 +1635,15 @@ function runRows(test: WorklistRow, issue: TestIssue): HTMLElement[] {
         const showDate = run.date !== null && run.date !== lastDate;
         lastDate = run.date;
         const dateCell = el('td', { class: 'run-date', text: showDate ? run.date! : '' });
-        const mainUrl = run.crashUrl ?? run.profileUrl;
+        // The job name opens `task.html`, which has the profile and the
+        // Treeherder job; only the crash viewer is left beside it.
         const nameCell = el('td', {
             class: 'run-job-name',
-            children: [externalLink(mainUrl, run.jobName)],
+            children: [externalLink(run.taskUrl, run.jobName)],
         });
         const links = el('td', { class: 'view-links' });
-        links.append('View: ', externalLink(run.profileUrl, 'Profile'));
         if (run.crashUrl !== null) {
-            links.append(' ', externalLink(run.crashUrl, 'Crash'));
-        }
-        if (run.jobUrl !== null) {
-            links.append(' ', externalLink(run.jobUrl, 'Job'));
+            links.append('View: ', externalLink(run.crashUrl, 'Crash'));
         }
         return el('tr', { children: [dateCell, nameCell, links] });
     });
@@ -1812,7 +1793,6 @@ async function loadWindow(): Promise<void> {
                     return null;
                 }
                 const raw = (await response.json()) as IssuesFile;
-                rawByHarness.set(harness, raw);
                 const file = decodeIssues(raw);
                 const window: StitchWindow = { file, dates: windowDates(file) };
                 // The first window is also the oldest so far, and the list a
@@ -2176,7 +2156,6 @@ async function loadDetailedData(): Promise<void> {
                     if (entry === undefined) {
                         return;
                     }
-                    rawByHarness.set(harness, raw);
                     // Swapped in as *one window of the stitched timeline*, not
                     // over the top of it. Assigning `entry.file` directly threw
                     // away every backfilled window — the file went back to the

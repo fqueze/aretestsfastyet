@@ -376,6 +376,7 @@ import {
     removeFollowing,
     searchBox,
 } from './drilldown-render.ts';
+import { taskPageUrl } from './test-link.ts';
 
 // --- page state -----------------------------------------------------------
 
@@ -1029,36 +1030,18 @@ function toggleSub(sub: SubGroup, index: number, element: HTMLElement): void {
 
 /** The per-task table under an expanded sub-row. `renderInstances` (`:935`). */
 function renderInstances(sub: SubGroup, testName: string | null): HTMLElement {
-    const raw = data!.raw;
     const rows: HTMLElement[] = [];
 
     for (const { instance, showDate } of instanceRows(instancesOf(data!, sub))) {
-        const profilerUrl = getProfilerUrl(instance, testName);
-
-        const links: HTMLElement[] = [externalLink(profilerUrl, 'Profile')];
-        const jobUrl = getTreeherderJobUrl(instance, raw);
-        if (jobUrl !== null) {
-            links.push(externalLink(jobUrl, 'Job'));
-        }
-
+        // The job name is the whole of the links now: `task.html` carries the
+        // profile and the Treeherder job the `View:` cell used to.
         const jobCell = el('td', { class: 'failure-job-name' });
-        // Deliberately not an `externalLink`: upstream's job-name anchor here
-        // carries no `onclick="event.stopPropagation()"` (`:964`), unlike the
-        // two links in the next cell (`:957`, `:960`). The difference is
-        // unobservable on this page — the row's own listener returns early on an
-        // `A` target — but it is upstream's markup and is reproduced.
-        const anchor = el('a', { href: profilerUrl, text: instance.jobName });
+        const anchor = el('a', {
+            href: taskPageUrl(instance.taskId, instance.retryId, testName),
+            text: instance.jobName,
+        });
         anchor.target = '_blank';
         jobCell.append(anchor);
-
-        const linksCell = el('td', { class: 'view-links' });
-        linksCell.append('View: ');
-        links.forEach((link, i) => {
-            if (i > 0) {
-                linksCell.append(' ');
-            }
-            linksCell.append(link);
-        });
 
         rows.push(
             el('tr', {
@@ -1072,7 +1055,6 @@ function renderInstances(sub: SubGroup, testName: string | null): HTMLElement {
                         class: 'run-count',
                         text: instance.count > 1 ? `×${instance.count.toLocaleString()}` : '',
                     }),
-                    linksCell,
                 ],
             })
         );

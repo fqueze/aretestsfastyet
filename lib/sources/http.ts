@@ -287,3 +287,26 @@ export function taskArtifactName(
 export function taskDefinitionName(taskId: string): DataFileName {
     return { index: taskId, filename: '' };
 }
+
+/** Names a task's **status** — its runs and their states — for the same source. */
+export function taskStatusName(taskId: string): DataFileName {
+    return { index: taskId, filename: 'status' };
+}
+
+/**
+ * Names one page of a task run's artifact **listing**, for the same source.
+ *
+ * The listing is paginated: a response with a `continuationToken` has more,
+ * fetched by passing the token back.
+ */
+export function taskArtifactListName(
+    taskId: string,
+    retryId: number,
+    continuationToken?: string
+): DataFileName {
+    const query =
+        continuationToken === undefined
+            ? ''
+            : `?continuationToken=${encodeURIComponent(continuationToken)}`;
+    return { index: taskId, filename: `runs/${retryId}/artifacts${query}` };
+}

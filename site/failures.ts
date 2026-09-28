@@ -149,6 +149,7 @@ import {
     type Vocabulary,
     externalLink,
 } from './drilldown-render.ts';
+import { taskPageUrl } from './test-link.ts';
 import {
     FAILURE_NOUN,
     buildFailureGroups,
@@ -228,13 +229,6 @@ function rankMessages(
 
 // --- the page's hooks -----------------------------------------------------
 
-function treeherderUrl(occurrence: Occurrence): string | null {
-    if (page.rawData === null) {
-        return null;
-    }
-    return getTreeherderJobUrl(occurrence, page.rawData);
-}
-
 /**
  * The 🐛 bug-filing button for a test row, or `null`.
  *
@@ -287,24 +281,18 @@ const hooks: RenderHooks = {
     // is `text-overflow: ellipsis` and a long message is cut off.
     labelTitle: (key) => key,
 
-    occurrenceLinks(occurrence, testName) {
-        // Profile always, Job when the revision is known. No crash viewer: a
-        // failure has no minidump. `old/failures.html:801-805`.
-        const links = [externalLink(getProfilerUrl(occurrence, testName), 'Profile')];
-        const jobUrl = treeherderUrl(occurrence);
-        if (jobUrl !== null) {
-            links.push(externalLink(jobUrl, 'Job'));
-        }
-        return links;
+    occurrenceLinks() {
+        // None: the job name is the `task.html` link, which has the profile
+        // and the Treeherder job. A failure has no dump to link to.
+        return [];
     },
 
-    jobNameHref: (occurrence, testName) => getProfilerUrl(occurrence, testName),
+    jobNameHref: (occurrence, testName) => taskPageUrl(occurrence.taskId, occurrence.retryId, testName),
 
     testNameSuffix: (dirPath, test, key) => bugButton(`${dirPath}/${test.testName}`, key, test),
 
-    // A failure row always has a profiler URL, so unlike a crash row it is
-    // never inert. `old/failures.html:799`.
-    singleRowHref: (occurrence, testName) => getProfilerUrl(occurrence, testName),
+    // A failure row always has a task, so unlike a crash row it is never inert.
+    singleRowHref: (occurrence, testName) => taskPageUrl(occurrence.taskId, occurrence.retryId, testName),
 
     totalRunsOf: (dirPath, testName) =>
         page.historicalData === null

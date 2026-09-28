@@ -215,10 +215,9 @@ export class DrilldownController {
     private readonly spec: PageSpec;
 
     /**
-     * The raw parsed file, kept because three shared functions need it as-is.
+     * The raw parsed file, kept because two shared functions need it as-is.
      *
-     * `getTreeherderJobUrl`, `getTestTotalRuns` and `countDailyRunsForTests` all
-     * take the untyped JSON and index into `tables`/`taskInfo`/`testRuns`
+     * `getTestTotalRuns` and `countDailyRunsForTests` both take the untyped JSON and index into `tables`/`taskInfo`/`testRuns`
      * themselves. They are `common-links.js` and `common-charts.js`, which this
      * migration keeps, so the raw object has to survive alongside the decoded
      * one.

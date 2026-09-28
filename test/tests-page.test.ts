@@ -952,9 +952,10 @@ test('after the merge, an issue line expands to its runs with real links', async
             links.length > 0 && links.every((href) => href.includes('Nf_in0iDRkKntpbGFajFkw')),
             `the run's links point at its own task: ${JSON.stringify(links)}`
         );
-        assert.ok(
-            links.some((href) => href.includes('profiler')),
-            'a profile link, which is what the job name points at'
+        assert.deepEqual(
+            links,
+            [links.find((href) => href.startsWith('task.html?task=Nf_in0iDRkKntpbGFajFkw.0&test='))],
+            'the job name opens that run’s task.html, and is the only link'
         );
     } finally {
         page.restore();

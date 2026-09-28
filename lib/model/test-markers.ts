@@ -14,6 +14,7 @@
  * push — could call it rather than grow a copy.
  */
 
+import { uploadedProfileName } from '../links.ts';
 import { normalizeMessage } from './failure-message.ts';
 import { type MarkerMessage, type PartitionedMessages, partitionMarkerMessages } from './marker-messages.ts';
 import { type TestPathDropReason, describeTestPathDrop, normalizeTestPath } from './test-path.ts';
@@ -58,6 +59,28 @@ export interface TestTiming {
      * vocabularies up and says why the page's cannot simply be renamed.
      */
     isRerun: boolean;
+    /** When the execution started, in ms from the profile's `meta.startTime`. */
+    start: number;
+    /** How long it ran, in ms. `0` for a synthetic crash entry. */
+    duration: number;
+    /** The minidump a crash uploaded, when a `Crash` marker named one. */
+    minidump: string | null;
+    /**
+     * Every failure line logged inside this execution, in log order, each with
+     * the marker's stack when it has one — **not** deduplicated, unlike
+     * `messages`: two leak reports with one message and two different stacks
+     * are two leaks. The profile-upload notices are left out, as in `messages`.
+     */
+    details: MessageDetail[];
+}
+
+/** One `TestStatus` failure line, as `task.html` and `try.html` list them. */
+export interface MessageDetail {
+    message: string;
+    /** `FAIL` or `ERROR`. */
+    status: string;
+    /** The marker's stack, one frame per line, or `null`. */
+    stack: string | null;
 }
 
 /**
@@ -115,6 +138,9 @@ export function isStreamedProfile(bytes: Uint8Array): boolean {
 /** The marker table shape a Gecko profile's first thread has. */
 interface ProfileThread {
     stringArray?: string[];
+    stackTable?: { frame?: number[]; prefix?: (number | null)[] };
+    frameTable?: { func?: number[]; line?: (number | null)[] };
+    funcTable?: { name?: number[]; fileName?: (number | null)[] };
     markers?: {
         length?: number;
         name?: number[];
@@ -137,7 +163,51 @@ interface ProfileThread {
         } | null)[];
         startTime?: number[];
         endTime?: number[];
+        stack?: (number | null)[];
     };
+}
+
+/**
+ * A marker's stack as text, innermost frame first: `name @ file:line`.
+ *
+ * The same rendering as `resolveStack` in `site/try.ts`'s worker, which is the
+ * shape `try.html`'s stack colouring parses. Leak reports carry their
+ * `— description @  0xaddr` inside the function name, so they come out as
+ * that colouring expects too.
+ */
+function resolveStack(stackIndex: number | null | undefined, thread: ProfileThread): string | null {
+    const stackTable = thread.stackTable;
+    const frameTable = thread.frameTable;
+    const funcTable = thread.funcTable;
+    const strings = thread.stringArray ?? [];
+    if (
+        stackIndex === null ||
+        stackIndex === undefined ||
+        stackTable?.frame === undefined ||
+        frameTable?.func === undefined ||
+        funcTable?.name === undefined
+    ) {
+        return null;
+    }
+    const frames: string[] = [];
+    let index: number | null | undefined = stackIndex;
+    while (index !== null && index !== undefined && index >= 0) {
+        const frame: number = stackTable.frame[index]!;
+        const func: number = frameTable.func[frame]!;
+        let text = strings[funcTable.name[func]!] || '?';
+        const fileIndex = funcTable.fileName?.[func];
+        const file = fileIndex === null || fileIndex === undefined ? null : strings[fileIndex];
+        if (file) {
+            text += ` @ ${file}`;
+            const line = frameTable.line?.[frame];
+            if (line !== null && line !== undefined && line >= 0) {
+                text += `:${line}`;
+            }
+        }
+        frames.push(text);
+        index = stackTable.prefix?.[index];
+    }
+    return frames.length > 0 ? frames.join('\n') : null;
 }
 
 /**
@@ -159,6 +229,7 @@ interface TestStatusMarker {
     message: string;
     /** `FAIL` or `ERROR`, the marker's name in the string table. */
     statusName: string;
+    stack: string | null;
 }
 
 /**
@@ -173,6 +244,8 @@ export interface DroppedMarker {
     id: string;
     reason: TestPathDropReason;
     status: string;
+    /** The minidump a dropped `Crash` marker named, if any. Always `null` for `Test`. */
+    minidump: string | null;
 }
 
 /**
@@ -306,17 +379,21 @@ export function parseTestMarkers(
             time: startTime[i] ?? 0,
             message,
             statusName: stringArray[nameId] ?? 'FAIL',
+            stack: resolveStack(markers.stack?.[i], thread!),
         });
     }
     // Sorted by time, so the collect below yields harness log order.
     testStatusMarkers.sort((a, b) => a.time - b.time);
 
+    const markersInRange = (test: string, start: number, end: number): TestStatusMarker[] =>
+        testStatusMarkers.filter(
+            (marker) => marker.test === test && marker.time >= start && marker.time <= end
+        );
     const messagesInRange = (test: string, start: number, end: number): MarkerMessage[] =>
-        testStatusMarkers
-            .filter(
-                (marker) => marker.test === test && marker.time >= start && marker.time <= end
-            )
-            .map((marker) => ({ message: marker.message, status: marker.statusName }));
+        markersInRange(test, start, end).map((marker) => ({
+            message: marker.message,
+            status: marker.statusName,
+        }));
 
     const testStringId = stringArray.indexOf('test');
     const timings: TestTiming[] = [];
@@ -342,6 +419,7 @@ export function parseTestMarkers(
                     id: fullTestId,
                     reason: describeTestPathDrop(fullTestId),
                     status,
+                    minidump: null,
                 });
             }
             continue;
@@ -380,10 +458,19 @@ export function parseTestMarkers(
         //
         // All of them are kept, not just the first, with the `profile uploaded in
         // …` notices partitioned out so no caller has to spot a URL in the list.
+        let minidump: string | null = null;
+        let details: MessageDetail[] = [];
         let partitioned: PartitionedMessages = { messages: [], profileFilenames: [] };
         if (status.startsWith('FAIL') || status.startsWith('TIMEOUT') || status === 'ERROR') {
             partitioned = partitionMarkerMessages(messagesInRange(fullTestId, start, end));
             message = partitioned.messages[0] ?? message;
+            details = markersInRange(fullTestId, start, end)
+                .filter((marker) => uploadedProfileName(marker.message) === null)
+                .map((marker) => ({
+                    message: marker.message,
+                    status: marker.statusName,
+                    stack: marker.stack,
+                }));
         }
         if (status.startsWith('CRASH')) {
             // Claim the crash marker inside this test's range, so it is not
@@ -400,6 +487,7 @@ export function parseTestMarkers(
             if (matching !== undefined) {
                 matching.consumed = true;
                 message ??= normalizeMessage(matching.signature);
+                minidump = matching.minidump;
             }
         }
 
@@ -413,6 +501,10 @@ export function parseTestMarkers(
             taskId: job.taskId,
             retryId: job.retryId,
             isRerun: retryRanges.length > 0 && overlaps(start, end, retryRanges),
+            start,
+            duration: end - start,
+            minidump,
+            details,
         });
     }
 
@@ -436,6 +528,7 @@ export function parseTestMarkers(
                 id: crash.testPath,
                 reason: describeTestPathDrop(crash.testPath),
                 status: 'CRASH',
+                minidump: crash.minidump,
             });
             continue;
         }
@@ -451,6 +544,10 @@ export function parseTestMarkers(
             taskId: job.taskId,
             retryId: job.retryId,
             isRerun: false,
+            start: crash.start,
+            duration: 0,
+            minidump: crash.minidump,
+            details: [],
         });
     }
 

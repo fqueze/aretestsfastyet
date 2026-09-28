@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task</title>
+    <script src="fetch-utils.js"></script>
+    <script src="dashboards.js"></script>
+    <script defer src="shared.js"></script>
+    <link rel="icon" href="favicon-orange.svg">
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        h1#task-heading {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 20px;
+            line-height: 1.4;
+        }
+
+        .heading-label {
+            color: #555;
+            font-weight: normal;
+        }
+
+        /* `tests.html`'s editable folder, for the task ID. */
+        .heading-task-input {
+            font-family: monospace;
+            font-size: inherit;
+            font-weight: bold;
+            color: #222;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            background: transparent;
+            padding: 1px 4px;
+            width: 26ch;
+            max-width: 70vw;
+        }
+        .heading-task-input:hover {
+            border-color: #ddd;
+            background: #fbfbfb;
+        }
+        .heading-task-input:placeholder-shown {
+            border-color: #ccc;
+            background: white;
+            width: 44ch;
+        }
+        .heading-task-input::placeholder {
+            color: #bbb;
+            font-weight: normal;
+        }
+        .heading-task-input:focus {
+            border-color: #007bff;
+            background: white;
+            outline: none;
+        }
+
+        /* `try.html`'s `.treeherder-link`, beside the input. */
+        .header-links {
+            font-size: 13px;
+            font-weight: normal;
+            color: #555;
+        }
+        .header-links a {
+            color: #0060df;
+            text-decoration: none;
+        }
+        .header-links a:hover {
+            text-decoration: underline;
+        }
+
+        /* shared.css makes every <h2> a 🔗 permalink target with a pointer
+           cursor; these headings link nowhere. */
+        h2::before {
+            content: none;
+        }
+
+        .has-tooltip {
+            border-bottom: 1px dotted #999;
+            cursor: help;
+        }
+
+        h2 {
+            font-size: 18px;
+            margin: 24px 0 10px;
+            color: #333;
+            cursor: auto;
+        }
+
+        .mono, .test-path {
+            font-family: monospace;
+        }
+
+        .run-state {
+            font-size: 13px;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+            background: #eee;
+            color: #555;
+        }
+        .state-completed { background: #d4edda; color: #155724; }
+        .state-failed { background: #f8d7da; color: #721c24; }
+        .state-exception { background: #e8d4f8; color: #4a1872; }
+        .state-running, .state-pending { background: #fff3cd; color: #856404; }
+
+        #facts {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 3px 15px;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .fact-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .fact-value {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+        }
+
+        #summary {
+            font-size: 15px;
+            margin: 0 0 12px;
+        }
+
+        .section-note {
+            color: #666;
+            font-size: 14px;
+            margin: 8px 0;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+            background: #eee;
+            color: #555;
+        }
+        .status-FAIL { background: #fee; color: #c00; }
+        .status-TIMEOUT { background: #fff3e0; color: #e65100; }
+        .status-CRASH { background: #fce4ec; color: #b71c1c; }
+        .status-ERROR { background: #fff3e0; color: #e65100; }
+        .status-UNEXPECTED-PASS { background: #e8f5e9; color: #2e7d32; }
+        .status-PASS, .status-OK { background: #e8f5e9; color: #2e7d32; }
+        .status-SKIP { background: #f0f0f0; color: #777; }
+
+        /* The failures table, `try.html`'s. */
+        .failure-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            table-layout: fixed;
+        }
+        .failure-table th {
+            background: #f8f8f8;
+            padding: 8px 6px;
+            text-align: left;
+            font-weight: 600;
+            color: #555;
+            border-bottom: 2px solid #eee;
+            white-space: nowrap;
+        }
+        .failure-table td {
+            padding: 5px 6px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: top;
+        }
+        .failure-table tr.failure-row td {
+            border-bottom: none;
+        }
+        .count-cell {
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .count-cell.high { color: #d00; }
+        .count-cell.medium { color: #f60; }
+        .count-cell.low { color: #888; }
+        .test-info {
+            min-width: 0;
+        }
+        .test-path {
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .test-path a {
+            color: #0060df;
+            text-decoration: none;
+        }
+        .test-path a:hover {
+            text-decoration: underline;
+        }
+        .inline-message {
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .detail-row td {
+            background: #fafcff;
+            padding: 4px 6px;
+        }
+        .detail-row td:first-child {
+            box-shadow: inset 3px 0 0 #0060df;
+        }
+        .assertion-list {
+            margin: 4px 0 0 0;
+            padding: 0;
+            list-style: none;
+        }
+        .assertion-list li {
+            font-family: monospace;
+            font-size: 11px;
+            color: #666;
+            padding: 2px 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .assertion-list li.phase-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin: 8px 0 3px;
+            padding: 0;
+        }
+        .assertion-list li.phase-label:first-child {
+            margin-top: 0;
+        }
+        .assertion-list li.phase-label .chip {
+            padding: 1px 7px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #fff;
+        }
+        .assertion-list li.phase-label .profiler-cmd {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+        }
+        .assertion-list li.phase-body {
+            border-left: 3px solid;
+            padding-left: 8px;
+            margin-left: 1px;
+        }
+        li.phase-label.phase-initial .chip { background: #c77700; }
+        li.phase-body.phase-initial { border-left-color: #c77700; }
+        li.phase-label.phase-retry .chip { background: #8a3ffc; }
+        li.phase-body.phase-retry { border-left-color: #8a3ffc; }
+        .assertion-stack {
+            margin: 2px 0 4px 12px;
+            padding: 4px 8px;
+            background: #f5f5f5;
+            border-left: 2px solid #ccc;
+            font-size: 10px;
+            color: #555;
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.5;
+        }
+        .assertion-stack .stack-func { color: #1a1a1a; font-weight: 600; }
+        .assertion-stack .stack-file { color: #0060df; }
+        .assertion-stack .stack-line { color: #999; }
+        .assertion-stack .stack-sep { color: #999; }
+        .assertion-stack .stack-addr { color: #999; }
+        .assertion-stack .stack-desc { color: #666; }
+        .assertion-stack .stack-prefix { color: #999; }
+        .assertion-stack a { color: inherit; text-decoration: none; }
+        .assertion-stack a:hover { text-decoration: underline; }
+        .show-more-link {
+            font-size: 11px;
+            color: #0060df;
+            cursor: pointer;
+        }
+        .show-more-link:hover {
+            text-decoration: underline;
+        }
+        .crash-sig {
+            color: #b71c1c;
+        }
+        .repro-cell {
+            font-size: 14px;
+            white-space: nowrap;
+            text-align: right;
+        }
+        .copy-cmd {
+            cursor: pointer;
+            opacity: 0.4;
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            font-size: 14px;
+            vertical-align: middle;
+            margin-left: 2px;
+        }
+        .copy-cmd:hover {
+            opacity: 1;
+        }
+        a.profiler-cmd {
+            cursor: pointer;
+            opacity: 0.45;
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            vertical-align: middle;
+            margin-left: 2px;
+            text-decoration: none;
+            background-image: url("https://profiler.firefox.com/res/img/favicon.png");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 14px 14px;
+        }
+        .profiler-cmd:hover {
+            opacity: 1;
+        }
+
+        .clickable-row {
+            cursor: pointer;
+        }
+        .failure-table tr.failure-row:hover {
+            background: #fafafa;
+        }
+        .failure-table tr.failure-row.expanded {
+            background: #f0f8ff;
+        }
+        /* Open, the output below says it in full. */
+        .failure-row.expanded .inline-message {
+            display: none;
+        }
+
+        /* The 21-day flakiness column, `try.html`'s. */
+        .flakiness-cell {
+            text-align: right;
+            white-space: nowrap;
+        }
+        .flakiness-cell.flaky-new { color: #c00; }
+        .flakiness-cell.flaky-msg { color: #e65100; }
+        .flakiness-cell.flaky { color: #c00; }
+        .flakiness-cell.flaky-few-runs a {
+            border-bottom: 1px dotted currentColor;
+        }
+        .flakiness-cell a {
+            font-family: monospace;
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+            color: inherit;
+            text-decoration: none;
+        }
+        .flakiness-cell a:hover {
+            text-decoration: underline;
+        }
+        .mitten::before {
+            content: '';
+            display: inline-block;
+            width: 13px;
+            height: 13px;
+            vertical-align: middle;
+            margin-left: 4px;
+            margin-right: 4px;
+            background-color: #e65100;
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 448 512'%3E%3Cpath d='M352 384L64 384 5.4 178.9C1.8 166.4 0 153.4 0 140.3C0 62.8 62.8 0 140.3 0l3.4 0c66 0 123.5 44.9 139.5 108.9l31.4 125.8 17.6-20.1C344.8 200.2 362.9 192 382 192l2.8 0c34.9 0 63.3 28.3 63.3 63.3c0 15.9-6 31.2-16.8 42.9L352 384zM32 448c0-17.7 14.3-32 32-32l288 0c17.7 0 32 14.3 32 32l0 32c0 17.7-14.3 32-32 32L64 512c-17.7 0-32-14.3-32-32l0-32z'/%3E%3C/svg%3E");
+            mask-size: contain;
+            mask-repeat: no-repeat;
+        }
+        .failure-table th .mitten::before {
+            vertical-align: 0;
+            margin-right: 0;
+            background-color: #555;
+        }
+        .flakiness-cell .mitten::before {
+            vertical-align: -1px;
+            margin-left: -12px;
+            margin-right: 2px;
+        }
+
+        /* A long output is cut to about `DETAIL_LINES` lines, with a fade
+           saying there is more. */
+        .assertion-list.clamped {
+            max-height: 190px;
+            overflow: hidden;
+            -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent);
+            mask-image: linear-gradient(to bottom, black 75%, transparent);
+        }
+
+        /* The tests tree. */
+        /* Specific enough to beat `table.tests td`'s padding, so the row lines
+           up with the test names above it. */
+        table.tests tr.more-row td {
+            padding-left: 24px;
+            color: #0060df;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .more-row:hover td {
+            text-decoration: underline;
+        }
+        .manifest-row {
+            cursor: pointer;
+            background: #f8f8f8;
+        }
+        .manifest-row:hover {
+            background: #f0f0f0;
+        }
+        .manifest-name {
+            font-family: monospace;
+            font-weight: 600;
+            word-break: break-all;
+        }
+        .manifest-row .toggle {
+            color: #888;
+        }
+        .manifest-count {
+            color: #888;
+            font-weight: normal;
+        }
+        tr.test-row td.test-path {
+            padding-left: 24px;
+        }
+        /* The directory is context; the file name is what is read. */
+        .test-path a .path-directory {
+            color: #999;
+        }
+        .test-path a:visited {
+            color: #6f42c1;
+        }
+
+        .dropped-list {
+            font-size: 13px;
+            padding-left: 20px;
+        }
+
+        tr.highlight td {
+            background: #fff8e6 !important;
+        }
+        tr.highlight td:first-child {
+            box-shadow: inset 3px 0 0 #f0ad4e;
+        }
+
+        .test-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 14px;
+            flex-wrap: wrap;
+        }
+
+        #test-filter {
+            padding: 5px 8px;
+            width: 320px;
+        }
+
+        table.tests, table.artifact-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        table.tests th {
+            text-align: left;
+            background: #f5f5f5;
+            padding: 5px 8px;
+            position: sticky;
+            top: 0;
+        }
+
+        table.tests td, table.artifact-table td {
+            padding: 3px 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        table.artifact-table td.artifact-icon {
+            width: 22px;
+            padding-right: 0;
+        }
+
+        table.artifact-table td.num {
+            text-align: right;
+            white-space: nowrap;
+            color: #666;
+        }
+
+        table.tests td.test-path, table.artifact-table td.mono {
+            word-break: break-all;
+        }
+
+        table.tests .num, table.tests th.num {
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        /* `transition: none` overrides shared.css's `button { transition: all
+           0.3s }`, which faded the 📋 button in while the 🔍 link, not a
+           button, appeared at once. */
+        .action-button {
+            transition: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            opacity: 0;
+            text-decoration: none;
+            padding: 0 3px;
+        }
+
+        tr:hover .action-button {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="task-heading">
+            <span class="heading-label">Task:</span>
+            <input type="text" id="task-input" class="heading-task-input"
+                   autocomplete="off" spellcheck="false" aria-label="Task ID"
+                   placeholder="task ID, Treeherder job URL or Taskcluster URL"
+                   title="Type or paste a task ID, a Treeherder job URL or a Taskcluster task URL, then press Enter">
+            <span id="run-state"></span>
+            <span id="links" class="header-links"></span>
+        </h1>
+        <div id="form-error" class="error" hidden></div>
+        <div id="summary"><span id="status-text" class="status-text"></span></div>
+        <div id="results-error" class="error" hidden></div>
+
+        <div id="task-view">
+            <div id="header-error" class="error" hidden></div>
+            <div id="facts"></div>
+
+
+            <section id="failures" hidden></section>
+            <section id="dropped" hidden></section>
+
+            <section id="tests" hidden>
+                <h2>Tests</h2>
+                <div class="test-controls">
+                    <input id="test-filter" type="search" placeholder="Filter by path">
+                    <select id="outcome-select" aria-label="Outcome"></select>
+                    <label for="sort-select">Sort:</label>
+                    <select id="sort-select">
+                        <option value="order">Run order</option>
+                        <option value="duration">Slowest first</option>
+                        <option value="path">Path</option>
+                    </select>
+                    <span id="tests-shown" class="status-text"></span>
+                </div>
+                <table class="tests">
+                    <thead>
+                        <tr><th>Manifest / test</th><th>Status</th><th class="num">Runs</th><th class="num">Time</th></tr>
+                    </thead>
+                    <tbody id="tests-body"></tbody>
+                </table>
+            </section>
+
+            <section id="artifacts"></section>
+        </div>
+    </div>
+    <!-- worker: ./try-flakiness-worker.ts -->
+    <script type="module" src="./task-main.ts"></script>
+</body>
+</html>

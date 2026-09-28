@@ -73,42 +73,6 @@ export function crashRows(
 }
 
 /**
- * The links on one crash occurrence, in the order the page renders them.
- *
- * `renderCrashLinks` (`common-links.js:76`) builds the same list as a string of
- * markup; this returns the decisions so the renderer can build anchors and a
- * node test can assert on them without a DOM.
- *
- * `crash` is present only when the run uploaded a minidump — `getCrashViewerUrl`
- * returns `''` without one (`common-links.js:32`) — and `job` only when the file
- * can resolve the task to a revision, which `{harness}-issues-with-taskids.json`
- * can and `{harness}-issues.json` cannot.
- */
-export interface CrashLinks {
-    /** Always present. */
-    profile: true;
-    /** The crash viewer, when there is a dump to read. */
-    crash: boolean;
-    /** Treeherder, when the file records the revision. */
-    job: boolean;
-}
-
-/**
- * Which of the three links an occurrence gets.
- *
- * `treeherderAvailable` is passed in rather than computed because resolving it
- * means a `tables.taskIds.indexOf` scan through `getTreeherderJobUrl`, which is
- * the renderer's business and needs the raw file.
- */
-export function crashLinksOf(occurrence: Occurrence, treeherderAvailable: boolean): CrashLinks {
-    return {
-        profile: true,
-        crash: Boolean(occurrence.minidump),
-        job: treeherderAvailable,
-    };
-}
-
-/**
  * Whether a single-occurrence row opens the crash viewer when clicked.
  *
  * `old/crashes.html:650-655`: a `test-row single-crash` carries `data-crash-url`,
@@ -117,9 +81,9 @@ export function crashLinksOf(occurrence: Occurrence, treeherderAvailable: boolea
  * `if (crashUrl)` makes it inert. The row still looks clickable, because the
  * `cursor: pointer` is on `.crash-row`/`.test-row` in the stylesheet.
  *
- * This is the crashes page's counterpart to the failures page's inline
- * `onclick="window.open(profilerUrl)"`, and the two differ: a failure row always
- * has a profiler URL, so it is never inert.
+ * This is the crashes page's counterpart to the failures page's row click, and
+ * the two differ: a failure row always has a task page to open, so it is never
+ * inert.
  */
 export function singleCrashOpensViewer(occurrence: Occurrence): boolean {
     return Boolean(occurrence.minidump);

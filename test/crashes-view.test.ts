@@ -22,7 +22,6 @@ import type { Occurrence } from '../site/drilldown-view.ts';
 import {
     CRASH_NOUN,
     buildCrashGroups,
-    crashLinksOf,
     crashRows,
     singleCrashOpensViewer,
 } from '../site/crashes-view.ts';
@@ -166,24 +165,6 @@ const withDump: Occurrence = {
     minidump: 'DUMP-ID',
 };
 const withoutDump: Occurrence = { ...withDump, minidump: null };
-
-test('an occurrence gets a crash link only when a dump was uploaded', () => {
-    assert.deepEqual(crashLinksOf(withDump, true), { profile: true, crash: true, job: true });
-    assert.deepEqual(crashLinksOf(withoutDump, true), { profile: true, crash: false, job: true });
-    // `undefined` is "the group recorded no minidumps array at all", which is
-    // the same "nothing to fetch" as an explicit null.
-    assert.deepEqual(crashLinksOf({ ...withDump, minidump: undefined }, true), {
-        profile: true,
-        crash: false,
-        job: true,
-    });
-});
-
-test('the job link depends on the file being able to resolve a revision', () => {
-    assert.equal(crashLinksOf(withDump, false).job, false);
-    // The profile link is unconditional: it is built from the task ID alone.
-    assert.equal(crashLinksOf(withoutDump, false).profile, true);
-});
 
 test('a single-occurrence row is inert when there is no dump to open', () => {
     // Upstream writes `data-crash-url=""` and its handler's `if (crashUrl)`

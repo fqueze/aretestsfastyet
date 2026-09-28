@@ -48,24 +48,22 @@
  */
 
 import { parseTaskId } from '../../lib/formats/tables.ts';
-import { baseStatus, isFailureStatus } from '../../lib/model/try-jobs.ts';
+import { type DroppedMarker, parseTestMarkers } from '../../lib/model/test-markers.ts';
+import { resourceUsageProfileUrl } from '../../lib/links.ts';
 import {
-    type DroppedMarker,
-    type TestTiming,
-    isStreamedProfile,
-    parseTestMarkers,
-} from '../../lib/model/test-markers.ts';
-import {
-    resourceUsageProfileUrl,
-    testInfoArtifactUrl,
-    treeherderJobUrl,
-} from '../../lib/links.ts';
-import { taskArtifactName, taskDefinitionName } from '../../lib/sources/http.ts';
-import {
-    DataFetchError,
-    DataFileNotFoundError,
-    type DataSource,
-} from '../../lib/sources/source.ts';
+    type TaskDefinition,
+    type TaskFailure,
+    type TaskIdentity,
+    type TaskJson,
+    TaskProfileError,
+    attachProvenance,
+    nonFailures,
+    readTaskDefinition,
+    readTaskProfile,
+    summarize,
+    taskIdentity,
+} from '../../lib/query/task-summary.ts';
+import type { DataSource } from '../../lib/sources/source.ts';
 import { type OptionSpecs, type ParsedArgs, boolOption } from '../args.ts';
 import { type CommandContext, emit, progress, warn } from '../context.ts';
 import { goneError, upstreamError, usageError } from '../errors.ts';
@@ -116,86 +114,6 @@ export const TASK_OPTIONS: OptionSpecs = {
         describe: 'Also list the tests that passed or were skipped, not just the failures.',
     },
 };
-
-/** One failing test in this job, aggregated over its executions. */
-export interface TaskFailure {
-    path: string;
-    /**
-     * Failing **executions** — what the rows are ranked on, as `try` ranks.
-     *
-     * The harness reruns a test that fails, so one job run holds several
-     * executions of it and a test that failed twice here is a worse failure
-     * than one that failed once.
-     */
-    failureCount: number;
-    /** Every execution of it in this job, failing or not. */
-    executionCount: number;
-    /** The distinct **base** statuses seen, sorted — `FAIL`, not `FAIL-PARALLEL`. */
-    statuses: string[];
-    /** True when the harness reran it in-job and it passed. */
-    passedOnRerun: boolean;
-    /** Only failed under parallel execution. */
-    parallelOnly: boolean;
-    /** One message per failing execution, most common first. */
-    messages: string[];
-    /** Every message the failing executions logged, with a count each. */
-    allMessages: { message: string; count: number }[];
-    /** The per-test profiles the harness uploaded for it, if any. */
-    testProfiles?: string[];
-}
-
-/** One test that did not fail, under `--passed`. */
-export interface TaskOutcome {
-    path: string;
-    /** The distinct base statuses, sorted. */
-    statuses: string[];
-    executionCount: number;
-}
-
-/** The `--json` shape. */
-export interface TaskJson {
-    taskId: string;
-    retryId: number;
-    /** The Treeherder job name, or `null` when the task definition was unreadable. */
-    jobName: string | null;
-    /** The repository the task ran on, or `null`. */
-    project: string | null;
-    /** The revision it was pushed as, or `null`. */
-    revision: string | null;
-    /** The Treeherder job view, or `null` when the identity is incomplete. */
-    treeherderUrl: string | null;
-    /** The profile every row was read out of. */
-    profileUrl: string;
-    /** Distinct tests the profile recorded, failing or not. */
-    testCount: number;
-    /**
-     * Executions recorded — `Test` markers, after the path normalization.
-     *
-     * Exceeds `testCount`, and **not by the reruns**: that arithmetic was the
-     * bug this field's comment used to assert. One test can execute twice in a
-     * job for reasons that have nothing to do with the harness rerunning it,
-     * the common one being that it is listed in two manifests and
-     * `normalizeTestPath` strips the `manifest.toml:` prefix that told them
-     * apart. Measured on task `KDqOl_b-QeKPlA6J6BaM_A`: 1,478 executions over
-     * 1,153 tests is 325 extra, of which **7** are reruns — the other 318 are
-     * pairs like `PASS-PARALLEL, PASS-PARALLEL` for one test under
-     * `xpcshell.toml` and `xpcshell-remote.toml`.
-     */
-    executionCount: number;
-    /**
-     * Executions the harness ran as its in-job retry — `TestTiming.isRerun`.
-     *
-     * Counted, never derived. It is the one intermittency signal a single job
-     * produces, so it is carried as its own number rather than left to a
-     * subtraction that answers a different question.
-     */
-    rerunCount: number;
-    /** Distinct tests by how they ended: keyed on the base status. */
-    statusCounts: Record<string, number>;
-    failures: TaskFailure[];
-    /** Populated only under `--passed` and `--json`; the non-failing tests. */
-    passed?: TaskOutcome[];
-}
 
 /** Runs the command. */
 export async function runTask(context: CommandContext, args: ParsedArgs): Promise<void> {
@@ -286,19 +204,6 @@ export async function runTask(context: CommandContext, args: ParsedArgs): Promis
 
 // --- reading the task -----------------------------------------------------
 
-/** What the task definition says about the job, as far as it could be read. */
-interface TaskIdentity {
-    jobName: string | null;
-    project: string | null;
-    revision: string | null;
-}
-
-/** The fields this command reads out of a Taskcluster task definition. */
-interface TaskDefinition {
-    metadata?: { name?: string; source?: string };
-    tags?: { label?: string; project?: string };
-}
-
 /**
  * The job's name, repository and revision, or as much of them as loads.
  *
@@ -315,8 +220,7 @@ async function fetchIdentity(
 ): Promise<TaskIdentity> {
     let definition: TaskDefinition;
     try {
-        const bytes = await source.fetch(taskDefinitionName(taskId));
-        definition = JSON.parse(new TextDecoder().decode(bytes)) as TaskDefinition;
+        definition = await readTaskDefinition(source, taskId);
     } catch {
         warn(
             context,
@@ -325,14 +229,7 @@ async function fetchIdentity(
         );
         return { jobName: null, project: null, revision: null };
     }
-    return {
-        // `metadata.name` and `tags.label` are the same string on every gecko
-        // test task measured; the tag is the fallback rather than the source
-        // because `metadata.name` is the field Taskcluster documents.
-        jobName: definition.metadata?.name ?? definition.tags?.label ?? null,
-        project: definition.tags?.project ?? null,
-        revision: revisionOf(definition.metadata?.source),
-    };
+    return taskIdentity(definition);
 }
 
 /**
@@ -359,20 +256,6 @@ function reportDropped(context: CommandContext, dropped: readonly DroppedMarker[
 }
 
 /**
- * The revision out of a task's `metadata.source`.
- *
- * The field is the hg URL of the file the task was generated from —
- * `https://hg.mozilla.org/integration/autoland/file/<rev>/taskcluster/kinds/test`
- * — so the revision is the segment after `file/`. Read from there rather than
- * from the Treeherder link in `metadata.description`, which is prose and only
- * present on some kinds.
- */
-function revisionOf(source: string | undefined): string | null {
-    const match = /\/file\/([0-9a-f]{12,40})\//.exec(source ?? '');
-    return match?.[1] ?? null;
-}
-
-/**
  * The job's resource-usage profile, with `crash`'s exit-code split.
  *
  * **404 is exit 4**, and this is the command where that matters most:
@@ -393,285 +276,56 @@ async function fetchProfile(
     retryId: number,
     url: string
 ): Promise<unknown> {
-    let bytes: Uint8Array;
     try {
-        bytes = await source.fetch(
-            taskArtifactName(taskId, retryId, 'public/test_info/profile_resource-usage.json')
-        );
+        return await readTaskProfile(source, taskId, retryId);
     } catch (error) {
-        if (error instanceof DataFileNotFoundError) {
-            throw goneError(
-                `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is ` +
-                    `not there.`,
-                'Taskcluster expires task artifacts after about a month, so this is permanent ' +
-                    'and retrying will not help. Check the retry number — `.0` is assumed — and ' +
-                    'get a current task ID from `fx-tests test <path> --task-ids`. A job that is ' +
-                    'not a test job never uploads one.'
-            );
+        if (!(error instanceof TaskProfileError)) {
+            throw error;
         }
-        if (error instanceof DataFetchError && error.status === 400) {
-            // Not exit 3, and not exit 4. Measured 2026-09-03: the queue
-            // answers **400** for a task ID that is not a well-formed one —
-            // `ZZZZZZZZZZZZZZZZZZZZZZ` and `AAAAAAAAAAAAAAAAAAAAAA` both do,
-            // while a real task with no such run answers 404. So a 400 is the
-            // caller's typo, and calling it transient would send them into a
-            // retry loop over a string that will never be a task.
-            throw usageError(
-                `"${taskId}" is not a task ID Taskcluster will accept (HTTP 400).`,
-                'A task ID is 22 URL-safe base64 characters. The `.<retryId>` suffix is ' +
-                    'optional and defaults to .0. Get one from `fx-tests test <path> ' +
-                    '--task-ids`, `fx-tests try <rev> --task-ids`, or the `selectedTaskRun` ' +
-                    'parameter of a Treeherder job URL.'
-            );
-        }
-        if (error instanceof DataFetchError) {
-            throw upstreamError(
-                `could not fetch ${url}: ${error.message}`,
-                error.status === 403
-                    ? 'A 403 here is usually a malformed artifact path rather than an expired ' +
-                      'artifact, which answers 404. Retrying may work.'
-                    : 'This looks transient — retrying may work.'
-            );
-        }
-        throw error;
-    }
-    if (isStreamedProfile(bytes)) {
-        throw upstreamError(
-            `task ${taskId}.${retryId} was killed for exceeding its maximum duration, so its ` +
-                `profile is a partial stream rather than a finished document and this tool ` +
-                `does not read that format.`,
-            'The job never got to write a profile, so there are no per-test results to read. ' +
-                'Its duration is the problem to look at; the log is on Treeherder.'
-        );
-    }
-    try {
-        return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-    } catch (error) {
-        throw upstreamError(
-            `the profile of task ${taskId}.${retryId} is not valid JSON: ` +
-                `${(error as Error).message}`,
-            `Re-run with --no-cache in case a truncated copy was cached; the artifact is ${url}.`
-        );
-    }
-}
-
-// --- aggregating one job's markers ---------------------------------------
-
-/** Groups the job's executions into one entry per failing test. */
-function summarize(
-    taskId: string,
-    retryId: number,
-    identity: TaskIdentity,
-    profileUrl: string,
-    timings: readonly TestTiming[]
-): TaskJson {
-    interface Accumulator {
-        path: string;
-        failureCount: number;
-        executionCount: number;
-        /** The failing statuses only — what a FAILED row prints. */
-        statuses: Set<string>;
-        /**
-         * Every status, failing or not — what the header's per-test outcome
-         * breakdown counts. Kept apart from `statuses` because a row that
-         * failed and was then rescued must not print `FAIL, PASS`, while the
-         * header must still count it under both.
-         */
-        allStatuses: Set<string>;
-        modes: Set<string>;
-        passedOnRerun: boolean;
-        messages: Map<string, number>;
-        otherMessages: Map<string, number>;
-        profileFilenames: string[];
-    }
-    const byTest = new Map<string, Accumulator>();
-    const entryFor = (path: string): Accumulator => {
-        let entry = byTest.get(path);
-        if (entry === undefined) {
-            entry = {
-                path,
-                failureCount: 0,
-                executionCount: 0,
-                statuses: new Set(),
-                allStatuses: new Set(),
-                modes: new Set(),
-                passedOnRerun: false,
-                messages: new Map(),
-                otherMessages: new Map(),
-                profileFilenames: [],
-            };
-            byTest.set(path, entry);
-        }
-        return entry;
-    };
-
-    for (const timing of timings) {
-        const entry = entryFor(timing.path);
-        entry.executionCount++;
-        entry.allStatuses.add(baseStatus(timing.status));
-        if (isFailureStatus(timing.status)) {
-            entry.failureCount++;
-            // The BASE status, as `try` records it: `FAIL-PARALLEL` and
-            // `FAIL-SEQUENTIAL` are one verdict in two phases, and this set
-            // answers "what happened". The phase lands in `modes`, which
-            // `parallelOnly` reads.
-            //
-            // Failing statuses only, again as `try`. Adding the PASS of a
-            // successful rerun here made every rescued row read `FAIL, PASS`,
-            // which states the outcome twice and contradicts itself — the
-            // rerun is what `passedOnRerun` is for, and it says so in words.
-            entry.statuses.add(baseStatus(timing.status));
-            entry.modes.add(/-(PARALLEL|SEQUENTIAL)$/.exec(timing.status)?.[1] ?? 'UNRECORDED');
-            if (timing.message !== null) {
-                entry.messages.set(
-                    timing.message,
-                    (entry.messages.get(timing.message) ?? 0) + 1
+        switch (error.problem) {
+            case 'missing':
+                throw goneError(
+                    `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is ` +
+                        `not there.`,
+                    'Taskcluster expires task artifacts after about a month, so this is permanent ' +
+                        'and retrying will not help. Check the retry number — `.0` is assumed — and ' +
+                        'get a current task ID from `fx-tests test <path> --task-ids`. A job that is ' +
+                        'not a test job never uploads one.'
                 );
-            }
-            for (const message of timing.messages) {
-                entry.otherMessages.set(
-                    message,
-                    (entry.otherMessages.get(message) ?? 0) + 1
+            case 'not-a-task':
+                // Not exit 3, and not exit 4: a 400 is the caller's typo, and
+                // calling it transient would send them into a retry loop over
+                // a string that will never be a task. `readTaskProfile` has
+                // the measurement.
+                throw usageError(
+                    `"${taskId}" is not a task ID Taskcluster will accept (HTTP 400).`,
+                    'A task ID is 22 URL-safe base64 characters. The `.<retryId>` suffix is ' +
+                        'optional and defaults to .0. Get one from `fx-tests test <path> ' +
+                        '--task-ids`, `fx-tests try <rev> --task-ids`, or the `selectedTaskRun` ' +
+                        'parameter of a Treeherder job URL.'
                 );
-            }
-            for (const filename of timing.profileFilenames) {
-                if (!entry.profileFilenames.includes(filename)) {
-                    entry.profileFilenames.push(filename);
-                }
-            }
-        } else if (timing.isRerun && timing.status.startsWith('PASS')) {
-            // The harness reran it inside this job and it went green. Within
-            // one job this is the same signal `try` calls `passedOnRerun`, and
-            // it is the one fact a single task *can* state about intermittency.
-            entry.passedOnRerun = true;
+            case 'streamed':
+                throw upstreamError(
+                    `task ${taskId}.${retryId} was killed for exceeding its maximum duration, so its ` +
+                        `profile is a partial stream rather than a finished document and this tool ` +
+                        `does not read that format.`,
+                    'The job never got to write a profile, so there are no per-test results to read. ' +
+                        'Its duration is the problem to look at; the log is on Treeherder.'
+                );
+            case 'invalid-json':
+                throw upstreamError(
+                    `the profile of task ${taskId}.${retryId} is not valid JSON: ${error.message}`,
+                    `Re-run with --no-cache in case a truncated copy was cached; the artifact is ${url}.`
+                );
+            case 'fetch':
+                throw upstreamError(
+                    `could not fetch ${url}: ${error.message}`,
+                    error.status === 403
+                        ? 'A 403 here is usually a malformed artifact path rather than an expired ' +
+                          'artifact, which answers 404. Retrying may work.'
+                        : 'This looks transient — retrying may work.'
+                );
         }
-    }
-
-    // Distinct tests by outcome. Base statuses, and a test that ended more than
-    // one way — failed, then passed on rerun — is counted under each, so these
-    // do not partition `testCount` and the renderer does not present them as
-    // though they did.
-    const statusCounts: Record<string, number> = {};
-    for (const entry of byTest.values()) {
-        for (const status of entry.allStatuses) {
-            statusCounts[status] = (statusCounts[status] ?? 0) + 1;
-        }
-    }
-
-    const failures: TaskFailure[] = [];
-    for (const entry of byTest.values()) {
-        if (entry.failureCount === 0) {
-            continue;
-        }
-        const failure: TaskFailure = {
-            path: entry.path,
-            failureCount: entry.failureCount,
-            executionCount: entry.executionCount,
-            statuses: [...entry.statuses].sort(),
-            passedOnRerun: entry.passedOnRerun,
-            parallelOnly: entry.modes.size === 1 && entry.modes.has('PARALLEL'),
-            messages: [...entry.messages]
-                .sort((a, b) => b[1] - a[1])
-                .map(([message]) => message),
-            allMessages: [...entry.otherMessages]
-                .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-                .map(([message, count]) => ({ message, count })),
-        };
-        failures.push(failure);
-    }
-
-    return {
-        taskId,
-        retryId,
-        jobName: identity.jobName,
-        project: identity.project,
-        revision: identity.revision,
-        treeherderUrl:
-            identity.project !== null && identity.revision !== null
-                ? treeherderJobUrl(identity.project, identity.revision, taskId, retryId)
-                : null,
-        profileUrl,
-        testCount: byTest.size,
-        executionCount: timings.length,
-        rerunCount: timings.filter((timing) => timing.isRerun).length,
-        statusCounts,
-        // `try`'s default sort, and its deterministic tie-break: failing
-        // executions descending, then the path, so two runs over one warm cache
-        // produce the same bytes.
-        failures: failures.sort(
-            (a, b) => b.failureCount - a.failureCount || a.path.localeCompare(b.path)
-        ),
-    };
-}
-
-/** The tests that did not fail, for `--passed`. */
-function nonFailures(
-    timings: readonly TestTiming[],
-    failures: readonly TaskFailure[]
-): TaskOutcome[] {
-    const failing = new Set(failures.map((failure) => failure.path));
-    const byPath = new Map<string, { statuses: Set<string>; executionCount: number }>();
-    for (const timing of timings) {
-        if (failing.has(timing.path)) {
-            continue;
-        }
-        let entry = byPath.get(timing.path);
-        if (entry === undefined) {
-            entry = { statuses: new Set(), executionCount: 0 };
-            byPath.set(timing.path, entry);
-        }
-        entry.statuses.add(baseStatus(timing.status));
-        entry.executionCount++;
-    }
-    return [...byPath]
-        .map(([path, entry]) => ({
-            path,
-            statuses: [...entry.statuses].sort(),
-            executionCount: entry.executionCount,
-        }))
-        .sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/**
- * Fills in each failing row's per-test profile URLs.
- *
- * Always full URLs, whatever the text renderer does with them: `--json` must not
- * make a machine consumer join a base and a filename back together.
- * `profileLines()` is what shortens them to filenames for a terminal.
- *
- * Only the per-test ones: the job's own resource-usage profile is a property of
- * the task rather than of a row, so it is in the header and in `profileUrl`.
- * `try` repeats it per row because a row there spans several tasks; here it
- * would be the same URL on every line.
- */
-function attachProvenance(
-    failures: readonly TaskFailure[],
-    timings: readonly TestTiming[],
-    taskId: string,
-    retryId: number
-): void {
-    const byPath = new Map<string, string[]>();
-    for (const timing of timings) {
-        if (!isFailureStatus(timing.status)) {
-            continue;
-        }
-        const list = byPath.get(timing.path) ?? [];
-        for (const filename of timing.profileFilenames) {
-            // Every profile the executions uploaded, not the first: an in-job
-            // rerun adds a `-2`-suffixed one and comparing the two is what the
-            // list is for.
-            if (!list.includes(filename)) {
-                list.push(filename);
-            }
-        }
-        byPath.set(timing.path, list);
-    }
-    for (const failure of failures) {
-        // The task run is the command's argument, not something to look up per
-        // row: every timing here came out of the one profile.
-        failure.testProfiles = (byPath.get(failure.path) ?? []).map((filename) =>
-            testInfoArtifactUrl(taskId, retryId, filename)
-        );
     }
 }
 
