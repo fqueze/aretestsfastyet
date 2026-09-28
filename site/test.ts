@@ -184,6 +184,7 @@ import {
     formatCount,
     issueFilterNotice,
     runtimeTitleFor,
+    variantLabel,
 } from './test-view.ts';
 
 // --- the shared scripts, as they are ------------------------------------
@@ -555,7 +556,7 @@ function renderJobTable(s: PageState): HTMLElement | null {
         const tr = el('tr');
         tr.append(
             el('td', {
-                text: row.variant,
+                text: variantLabel(row.variant, s.view.harness),
                 attrs: { style: 'font-family: monospace; font-size: 12px;' },
             })
         );
@@ -747,10 +748,16 @@ function handleDayClick(s: PageState, dayIndex: number, event: MouseEvent): void
 function renderRuntimePanel(panel: RuntimePanel | null): HTMLElement {
     const content = el('div', { id: 'runtime-panel-content' });
     fillRuntimePanel(content, panel);
-    return el('div', {
-        class: 'section runtime-panel',
-        children: [el('h2', { text: 'Run Times' }), content],
+    // Collapsed by default, which only takes effect on a phone (`test.html`'s
+    // narrow-screen rules): there the panel sits under the job table rather
+    // than beside it, and matters less than everything above it.
+    const heading = el('h2', { text: 'Run Times' });
+    const shell = el('div', {
+        class: 'section runtime-panel collapsed',
+        children: [heading, content],
     });
+    heading.addEventListener('click', () => shell.classList.toggle('collapsed'));
+    return shell;
 }
 
 /** Fills the panel, or says there is no duration data. */
@@ -2057,7 +2064,13 @@ function updateIssueListFilter(s: PageState): void {
     if (notice === null) {
         return;
     }
-    const text = issueFilterNotice(visibleCount, s.issueRows.length, selection, s.view.rates);
+    const text = issueFilterNotice(
+        visibleCount,
+        s.issueRows.length,
+        selection,
+        s.view.rates,
+        s.view.harness
+    );
     if (text === null) {
         notice.style.display = 'none';
     } else {
@@ -2117,7 +2130,7 @@ function updateRuntimeForSelection(s: PageState): void {
     }
     fillRuntimePanel(
         panel,
-        buildRuntimePanel(runtimeTitleFor(cells), combined, {
+        buildRuntimePanel(runtimeTitleFor(cells, s.view.harness), combined, {
             overallRange: s.overallRange,
             overallBins: s.overallBins,
         })

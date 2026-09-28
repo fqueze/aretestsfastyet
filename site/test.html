@@ -533,6 +533,81 @@
             font-weight: normal;
             margin-left: 12px;
         }
+
+        /* Phones. The job table and the runtime panel side by side leave the
+           table a few pixels wide, and it is the most important thing on the
+           page, so the panel moves under it, collapsed until its heading is
+           tapped. */
+        @media (max-width: 600px) {
+            .section {
+                padding: 14px 12px;
+            }
+            /* One line per number, label left and value right, as try.html's
+               summary does on a phone. */
+            .summary-stats {
+                flex-direction: column;
+                gap: 0;
+                padding: 0;
+            }
+            .summary-stat {
+                flex-direction: row-reverse;
+                justify-content: space-between;
+                align-items: baseline;
+                min-width: 0;
+                padding: 6px 12px;
+            }
+            .summary-stat + .summary-stat {
+                border-top: 1px solid #eee;
+            }
+            .summary-stat-value {
+                font-size: 17px;
+            }
+            .summary-stat-label {
+                font-size: 14px;
+                text-transform: none;
+                margin-top: 0;
+            }
+            /* Edge to edge: the body's side padding is width the boxes need. */
+            .test-header,
+            .summary-stats,
+            .section {
+                margin-left: -6px;
+                margin-right: -6px;
+                border-radius: 0;
+            }
+            .test-header h1 {
+                overflow-wrap: anywhere;
+            }
+            .runtime-layout {
+                flex-direction: column;
+                gap: 0;
+                align-items: stretch;
+            }
+            .runtime-layout > .section:first-child {
+                margin-bottom: 20px;
+            }
+            .runtime-panel {
+                width: auto;
+                position: static;
+            }
+            .runtime-panel h2 {
+                cursor: pointer;
+                margin: 0;
+            }
+            .runtime-panel h2::after {
+                content: ' ▾';
+                color: #888;
+            }
+            .runtime-panel.collapsed h2::after {
+                content: ' ▸';
+            }
+            .runtime-panel:not(.collapsed) h2 {
+                margin-bottom: 15px;
+            }
+            .runtime-panel.collapsed #runtime-panel-content {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>

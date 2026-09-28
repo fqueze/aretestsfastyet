@@ -76,6 +76,7 @@ import {
     runtimeTitleFor,
     splitCellKey,
     summaryStats,
+    variantLabel,
 } from '../site/test-view.ts';
 
 const FIXTURES = new URL('./fixtures/', import.meta.url);
@@ -1456,33 +1457,33 @@ test('the filter notice collapses dates to a range past three, and cells past on
         skips: 0,
     }));
 
-    assert.equal(issueFilterNotice(3, 7, { days: new Set(), cells: new Set() }, rates), null);
+    assert.equal(issueFilterNotice(3, 7, { days: new Set(), cells: new Set() }, rates, 'xpcshell'), null);
 
     assert.equal(
-        issueFilterNotice(2, 7, { days: new Set([0]), cells: new Set() }, rates),
+        issueFilterNotice(2, 7, { days: new Set([0]), cells: new Set() }, rates, 'xpcshell'),
         '— 2 of 7 shown (2026-07-14)'
     );
     assert.equal(
-        issueFilterNotice(2, 7, { days: new Set([0, 1, 2]), cells: new Set() }, rates),
+        issueFilterNotice(2, 7, { days: new Set([0, 1, 2]), cells: new Set() }, rates, 'xpcshell'),
         '— 2 of 7 shown (2026-07-14, 2026-07-15, 2026-07-16)'
     );
     // Four is one too many: it becomes a range with an en dash.
     assert.equal(
-        issueFilterNotice(2, 7, { days: new Set([0, 1, 2, 3]), cells: new Set() }, rates),
+        issueFilterNotice(2, 7, { days: new Set([0, 1, 2, 3]), cells: new Set() }, rates, 'xpcshell'),
         '— 2 of 7 shown (2026-07-14 – 2026-07-17)'
     );
     // One cell is named; several are counted.
     assert.equal(
-        issueFilterNotice(1, 7, { days: new Set(), cells: new Set(['opt-xpcshell|linux-64']) }, rates),
-        '— 1 of 7 shown (opt-xpcshell on linux-64)'
+        issueFilterNotice(1, 7, { days: new Set(), cells: new Set(['opt-xpcshell|linux-64']) }, rates, 'xpcshell'),
+        '— 1 of 7 shown (opt on linux-64)'
     );
     assert.equal(
-        issueFilterNotice(1, 7, { days: new Set(), cells: new Set(['a|x', 'b|y']) }, rates),
+        issueFilterNotice(1, 7, { days: new Set(), cells: new Set(['a|x', 'b|y']) }, rates, 'xpcshell'),
         '— 1 of 7 shown (2 jobs)'
     );
     // Both, in day-then-cell order.
     assert.equal(
-        issueFilterNotice(1, 7, { days: new Set([0]), cells: new Set(['a|x']) }, rates),
+        issueFilterNotice(1, 7, { days: new Set([0]), cells: new Set(['a|x']) }, rates, 'xpcshell'),
         '— 1 of 7 shown (2026-07-14, a on x)'
     );
 });
@@ -1620,10 +1621,30 @@ test('durations are collected only from passing runs, and split by cell', () => 
 
 test('the runtime panel names one cell and counts several', () => {
     // `old/test.html:2424`. Six job names do not fit in a 420px header.
-    assert.equal(runtimeTitleFor(new Set()), 'Overall');
-    assert.equal(runtimeTitleFor(new Set(['opt-xpcshell|linux-64'])), 'opt-xpcshell on linux-64');
-    assert.equal(runtimeTitleFor(new Set(['a|x', 'b|y'])), '2 selected cells');
-    assert.equal(runtimeTitleFor(new Set(['a|x', 'b|y', 'c|z'])), '3 selected cells');
+    assert.equal(runtimeTitleFor(new Set(), 'xpcshell'), 'Overall');
+    assert.equal(runtimeTitleFor(new Set(['opt-xpcshell|linux-64']), 'xpcshell'), 'opt on linux-64');
+    assert.equal(runtimeTitleFor(new Set(['a|x', 'b|y']), 'xpcshell'), '2 selected cells');
+    assert.equal(runtimeTitleFor(new Set(['a|x', 'b|y', 'c|z']), 'xpcshell'), '3 selected cells');
+});
+
+test('a variant label drops the harness the page header already names', () => {
+    assert.equal(variantLabel('opt-xpcshell', 'xpcshell'), 'opt');
+    assert.equal(variantLabel('debug-xpcshell-msix', 'xpcshell'), 'debug msix');
+    assert.equal(variantLabel('artifact-debug-xpcshell', 'xpcshell'), 'artifact-debug');
+    assert.equal(variantLabel('opt-mochitest-browser-chrome', 'mochitest'), 'opt browser-chrome');
+    assert.equal(
+        variantLabel('debug-mochitest-browser-chrome-no-nv', 'mochitest'),
+        'debug browser-chrome-no-nv'
+    );
+    // Only the page's own harness, and only as a whole word.
+    assert.equal(variantLabel('opt-xpcshell', 'mochitest'), 'opt-xpcshell');
+    assert.equal(variantLabel('opt-test-verify', 'mochitest'), 'opt-test-verify');
+    assert.equal(variantLabel('xpcshell', 'xpcshell'), 'xpcshell');
+    // The runtime title and the filter notice use the same label.
+    assert.equal(
+        runtimeTitleFor(new Set(['opt-mochitest-plain|linux-64']), 'mochitest'),
+        'opt plain on linux-64'
+    );
 });
 
 test('the runtime panel lists the six figures in order, or nothing at all', () => {

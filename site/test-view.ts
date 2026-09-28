@@ -596,6 +596,24 @@ export function displayVariantOf(mappings: DisplayMappings, jobName: string): st
     return variant;
 }
 
+/**
+ * A job variant as the page labels it, without the harness the page header
+ * already names: `opt-mochitest-browser-chrome` is `opt browser-chrome` on a
+ * mochitest's page, `debug-xpcshell-msix` is `debug msix` on an xpcshell test's.
+ * The space, not a dash, where the harness was, so the label does not read as
+ * a job name. A variant without the harness in it is returned unchanged.
+ */
+export function variantLabel(variant: string, harness: string): string {
+    const parts = variant.split('-');
+    const at = parts.indexOf(harness);
+    if (at === -1) {
+        return variant;
+    }
+    return [parts.slice(0, at).join('-'), parts.slice(at + 1).join('-')]
+        .filter((part) => part !== '')
+        .join(' ') || variant;
+}
+
 /** The column a job name is drawn in. */
 export function displayPlatformOf(mappings: DisplayMappings, jobName: string): string {
     const dp = extractDetailedPlatform(jobName);
@@ -1533,7 +1551,8 @@ export function issueFilterNotice(
     visibleCount: number,
     totalCount: number,
     selection: Selection,
-    rates: readonly DailyRate[]
+    rates: readonly DailyRate[],
+    harness: string
 ): string | null {
     if (selection.days.size === 0 && selection.cells.size === 0) {
         return null;
@@ -1556,7 +1575,7 @@ export function issueFilterNotice(
         if (selection.cells.size === 1) {
             const [key] = selection.cells;
             const { variant, platform } = splitCellKey(key!);
-            parts.push(`${variant} on ${platform}`);
+            parts.push(`${variantLabel(variant, harness)} on ${platform}`);
         } else {
             parts.push(`${selection.cells.size} jobs`);
         }
@@ -1852,14 +1871,14 @@ export function buildRuntimePanel(
  * `updateRuntimeForSelection` (`old/test.html:2424`). One cell is named; several
  * are counted, because six job names do not fit in a 420px panel header.
  */
-export function runtimeTitleFor(cells: ReadonlySet<string>): string {
+export function runtimeTitleFor(cells: ReadonlySet<string>, harness: string): string {
     if (cells.size === 0) {
         return 'Overall';
     }
     if (cells.size === 1) {
         const [key] = cells;
         const { variant, platform } = splitCellKey(key!);
-        return `${variant} on ${platform}`;
+        return `${variantLabel(variant, harness)} on ${platform}`;
     }
     return `${cells.size} selected cells`;
 }
