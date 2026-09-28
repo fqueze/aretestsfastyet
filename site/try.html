@@ -803,6 +803,253 @@
             font-size: 10px;
             margin-left: 16px;
         }
+
+        /* Touch screens have no hover, so the hover-revealed 📋 and 🔍
+           buttons would never show. */
+        @media (hover: none) {
+            .action-button {
+                opacity: 1;
+            }
+        }
+
+        /* The plain-text version of an expanded row's cells; phones only. */
+        .row-facts {
+            display: none;
+        }
+
+        /* Phones. The fixed column widths above leave the Test column a few
+           pixels wide on a narrow screen, so each row becomes two lines
+           instead: the test (or job) across the full width, then the count,
+           status, flakiness and icons under it. */
+        @media (max-width: 600px) {
+            /* Edge to edge: the body's side padding is width the boxes need. */
+            .controls,
+            .summary-cards {
+                margin-left: -6px;
+                margin-right: -6px;
+                border-radius: 0;
+            }
+            /* The label and the box on one line; the two buttons under the
+               box, only while it has focus. */
+            .revision-input {
+                row-gap: 6px;
+            }
+            .load-group {
+                flex: 1 1 0;
+                flex-wrap: wrap;
+                min-width: 0;
+            }
+            #status:empty {
+                display: none;
+            }
+            #status,
+            #treeherder-link-container {
+                flex: 1 0 100%;
+            }
+            .load-group:not(:focus-within) button {
+                display: none;
+            }
+            .load-group:not(:focus-within) input {
+                border-radius: 4px;
+            }
+            .revision-input input {
+                flex: 1 0 100%;
+                width: auto;
+                min-width: 0;
+                box-sizing: border-box;
+                /* Fits a 40-character hash on a 393px-wide phone. */
+                font-size: 12px;
+            }
+            .load-group input {
+                border-radius: 4px 4px 0 0;
+            }
+            .load-group button {
+                flex: 1 1 0;
+                border-top-width: 0;
+            }
+            .load-group button:first-of-type {
+                border-left-width: 1px;
+                border-radius: 0 0 0 4px;
+            }
+            .load-group button:last-child {
+                border-radius: 0 0 4px 0;
+            }
+            #filter-container {
+                flex: 1 0 100%;
+            }
+            .search-container {
+                display: block;
+            }
+            .search-container input {
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            /* One box, a line per number. */
+            .summary-cards {
+                flex-direction: column;
+                gap: 0;
+                background: white;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                overflow: hidden;
+            }
+            .summary-card {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                min-width: 0;
+                padding: 6px 12px;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            .summary-card + .summary-card {
+                border-top: 1px solid #eee;
+            }
+            .summary-card .label {
+                margin-bottom: 0;
+                font-size: 14px;
+            }
+            .summary-card .value {
+                font-size: 17px;
+            }
+            .summary-actions {
+                margin-left: 0;
+            }
+
+            .failure-table,
+            .failure-table thead,
+            .failure-table tbody {
+                display: block;
+            }
+            /* Edge to edge: the body's side padding is width a path needs. */
+            .failure-table {
+                width: calc(100% + 12px);
+                margin: 0 -6px;
+                border-radius: 0;
+            }
+            .failure-table tr,
+            .failure-table tr.detail-row.visible {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: baseline;
+                column-gap: 10px;
+                row-gap: 2px;
+                padding: 6px 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            /* `!important` to beat the inline widths `try.ts` sets on the
+               headers. */
+            .failure-table th,
+            .failure-table td {
+                width: auto !important;
+                padding: 0;
+                border-bottom: none;
+            }
+            /* The header keeps only the sort controls; the labels of the
+               others would name columns that no longer exist. */
+            .failure-table thead tr {
+                background: #f8f8f8;
+                border-bottom: 2px solid #eee;
+                column-gap: 18px;
+            }
+            .failure-table thead tr::before {
+                content: 'Sort by';
+                color: #888;
+                font-size: 13px;
+            }
+            .failure-table th {
+                background: none;
+            }
+            .failure-table th.no-sort {
+                display: none;
+            }
+            /* A table with nothing to sort by has no header at all. */
+            .failure-table thead:not(:has(th:not(.no-sort))) {
+                display: none;
+            }
+            .failure-table td:empty {
+                display: none;
+            }
+            .failure-table td.test-info {
+                order: -1;
+                flex: 1 0 100%;
+                min-width: 0;
+            }
+            /* A collapsed test row: the path on one line, directories
+               abbreviated to a letter, and without the 📋 and 🔍 buttons or
+               the OS and Build cells — `1/1` means nothing without its column
+               header. Expanding the row brings all of it back, spelled out. */
+            .clickable-row:not(.expanded) .test-path {
+                display: block;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .clickable-row:not(.expanded) .test-path a[data-file] {
+                font-size: 0;
+            }
+            .clickable-row:not(.expanded) .test-path a[data-file]::before {
+                content: attr(data-dirs);
+                font-size: 13px;
+                color: #999;
+            }
+            .clickable-row:not(.expanded) .test-path a[data-file]::after {
+                content: attr(data-file);
+                font-size: 13px;
+            }
+            /* The author as initials, in grey without the dash. */
+            .revisions-list .rev-author {
+                font-size: 0;
+                white-space: nowrap;
+            }
+            .revisions-list .rev-author::after {
+                content: ' ' attr(data-initials);
+                font-size: 12px;
+            }
+            .clickable-row:not(.expanded) .action-button {
+                display: none;
+            }
+            .clickable-row:has(> .flakiness-cell) > .badges-cell {
+                display: none;
+            }
+            .failure-table td.row-facts {
+                display: block;
+                flex: 1 0 100%;
+                margin-top: 4px;
+                font-size: 12px;
+                color: #555;
+            }
+            .row-facts .fact + .fact {
+                margin-top: 6px;
+            }
+            .row-facts .fact:empty {
+                display: none;
+            }
+            .failure-table td.no-failures {
+                flex: 1 0 100%;
+                padding: 20px 0;
+            }
+            .repro-cell {
+                margin-left: auto;
+            }
+            /* The negative margin hangs the mitten into the column's left
+               padding, which is gone here. */
+            .flakiness-cell .mitten::before {
+                margin-left: 0;
+            }
+            .failure-table tr.detail-row.visible {
+                background: #fafcff;
+                box-shadow: inset 3px 0 0 #0060df;
+                padding-left: 12px;
+            }
+            /* A job's badges above its long list of failures, not after it. */
+            .failure-table .detail-row td.test-info {
+                order: 0;
+            }
+            .detail-row td:first-child {
+                box-shadow: none;
+            }
+        }
     </style>
 </head>
 <body>

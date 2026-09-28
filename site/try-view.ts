@@ -78,6 +78,7 @@ import {
 import {
     HISTORY_DAYS,
     type FlakinessData,
+    dayCount,
     flakinessTooltip,
     formatFailRate,
     pickHeadlineRate,
@@ -882,6 +883,20 @@ export function coversAll(values: readonly string[], global: ReadonlySet<string>
     return values.length === global.size && values.every((value) => global.has(value));
 }
 
+// --- the abbreviated test path --------------------------------------------
+
+/**
+ * `toolkit/mozapps/update/test.js` as `t/m/u/` and `test.js`: every directory
+ * cut to its first letter, the file name kept whole — apart, so the page can
+ * tell the two apart visually. What a collapsed row shows on a
+ * phone, where the full path would take two or three lines.
+ */
+export function abbreviatePath(path: string): { dirs: string; file: string } {
+    const parts = path.split('/');
+    const file = parts.pop()!;
+    return { dirs: parts.map((dir) => `${dir.slice(0, 1)}/`).join(''), file };
+}
+
 // --- the run-count tooltip ------------------------------------------------
 
 /** English pluralisation, upstream's one-liner. `old/try.html:1797`. */
@@ -1020,6 +1035,91 @@ export function flakinessCell(data: FlakinessData | null): FlakinessCell | null 
         hasMitten: hasMatchingMessage,
         tooltip: flakinessTooltip(stats, configs, headline, hasMatchingMessage, totalDays),
     };
+}
+
+// --- an expanded row, spelled out -----------------------------------------
+
+/**
+ * What a row's `10/17` and `1/1` cells mean, as two short lines: how it
+ * failed, and where. Shown under an expanded row on a phone, where those cells
+ * lose their column headers and their tooltips cannot be hovered. The tooltips
+ * say more; these are what fits. `flakinessFact` is the third line.
+ */
+export function rowFacts(
+    test: FailingTest,
+    globalPlatforms: ReadonlySet<string>,
+    globalBuildTypes: ReadonlySet<string>,
+): string[] {
+    const { failedTwice, passedOnRetry, failedOnce, passed, notAnalyzed } = test.outcomes;
+    const jobs = failedTwice + passedOnRetry + failedOnce + passed + notAnalyzed;
+    const outcomes = [
+        failedTwice && `${failedTwice} failed again on retry`,
+        passedOnRetry && `${passedOnRetry} passed on retry`,
+        failedOnce && `${failedOnce} not retried`,
+        passed && `${passed} passed`,
+        notAnalyzed && `${notAnalyzed} not analyzed`,
+    ].filter(Boolean);
+    const failures = test.instances.length;
+    const runs =
+        test.totalRuns > 0
+            ? `Failed ${failures} of ${test.totalRuns} runs`
+            : `Failed ${failures} time${s(failures)}`;
+    const lines = [
+        jobs > 0 ? `${runs}, in ${jobs} job${s(jobs)}: ${outcomes.join(', ')}` : runs,
+    ];
+
+    const platforms = coversAll(test.sortedPlatforms, globalPlatforms);
+    const builds = coversAll(test.sortedBuildTypes, globalBuildTypes);
+    const configs = (values: readonly string[], all: boolean, total: number, noun: string): string =>
+        values.join(', ') + (all ? '' : ` (${values.length} of ${total} ${noun})`);
+    lines.push(
+        (platforms && builds ? 'On every OS and build tested: ' : 'On ') +
+            configs(test.sortedPlatforms, platforms, globalPlatforms.size, 'OSes') +
+            ' · ' +
+            configs(test.sortedBuildTypes, builds, globalBuildTypes.size, 'builds')
+    );
+    return lines;
+}
+
+/**
+ * The flakiness cell as one sentence: the short form of `flakinessTooltip`.
+ * `null` while the history is still loading (`undefined`); `data === null` is
+ * a test with no history at all.
+ */
+export function flakinessFact(data: FlakinessData | null | undefined): string | null {
+    if (data === undefined) {
+        return null;
+    }
+    if (data === null) {
+        return 'No history for this test';
+    }
+    const { stats, configs, hasMatchingMessage, totalDays } = data;
+    const days = `${totalDays || HISTORY_DAYS} days`;
+    const failCount = stats.failCount + stats.crashCount + stats.timeoutCount;
+    if (failCount === 0) {
+        return `New: passed all ${stats.runCount} runs over the last ${days}`;
+    }
+    if (!hasMatchingMessage) {
+        const overall = formatFailRate((failCount / stats.runCount) * 100);
+        return `This failure looks new (any failure: ${overall} over ${days})`;
+    }
+    const headline = pickHeadlineRate(stats, configs);
+    if (headline.scope === 'config') {
+        const span = headline.recent === true ? dayCount(headline.days) : `the last ${days}`;
+        const job = (headline.jobName ?? '').replace(/^test-/, '');
+        return `Already fails this way ${formatFailRate(headline.rate)} of the time on ${job}, over ${span}`;
+    }
+    return `Already fails this way ${formatFailRate(headline.rate)} of the time, over the last ${days}`;
+}
+
+/** `Florian Quèze <fq@…>` as `FQ`: a commit author where a line has no room. */
+export function initials(author: string): string {
+    return author
+        .replace(/ <[^>]+>$/, '')
+        .split(/\s+/)
+        .filter((word) => word !== '')
+        .map((word) => word.slice(0, 1).toUpperCase())
+        .join('');
 }
 
 // --- the unblamed-jobs table ----------------------------------------------

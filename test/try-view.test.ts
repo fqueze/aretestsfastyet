@@ -50,6 +50,7 @@ import {
     type Job,
     type Timing,
     MIN_RECENT_RUNS,
+    abbreviatePath,
     aggregateFailures,
     baseStatus,
     cleanFailureSummary,
@@ -65,6 +66,7 @@ import {
     filterTests,
     findUploadedProfile,
     flakinessCell,
+    flakinessFact,
     flakinessRequests,
     flakinessTooltip,
     formatFailRate,
@@ -73,6 +75,7 @@ import {
     groupUnblamedJobs,
     hgRepoPath,
     initialSort,
+    initials,
     instanceMessages,
     isFailureStatus,
     isTestJob,
@@ -85,6 +88,7 @@ import {
     planRevisionList,
     pushLogUrl,
     readUrlState,
+    rowFacts,
     runCountTooltip,
     runKeyOf,
     selectTryJobs,
@@ -2066,5 +2070,55 @@ test('a commit without the trailer gets no Phabricator link', () => {
     assert.equal(
         phabricatorRevision('Explain that Differential Revision: https://x/D2 is a trailer.'),
         null
+    );
+});
+
+// --- the phone view -------------------------------------------------------
+
+test('abbreviatePath cuts each directory to a letter and keeps the file name', () => {
+    assert.deepEqual(abbreviatePath('toolkit/mozapps/update/tests/languagePackUpdates.js'), {
+        dirs: 't/m/u/t/',
+        file: 'languagePackUpdates.js',
+    });
+    assert.deepEqual(abbreviatePath('test_top.js'), { dirs: '', file: 'test_top.js' });
+});
+
+test('initials drop the e-mail address', () => {
+    assert.equal(initials('Florian Quèze <fqueze@mozilla.com>'), 'FQ');
+    assert.equal(initials('reviewbot'), 'R');
+});
+
+test('rowFacts spells out the run count and the configurations; flakinessFact the history', () => {
+    const row: FailingTest = {
+        ...FAILURES.tests[0]!,
+        instances: new Array(10).fill(FAILURES.tests[0]!.instances[0]),
+        totalRuns: 17,
+        outcomes: { failedTwice: 3, passedOnRetry: 0, failedOnce: 0, passed: 0, notAnalyzed: 7 },
+        sortedPlatforms: ['mac'],
+        sortedBuildTypes: ['opt'],
+    };
+    const configs = [config('test-macosx1500-aarch64/debug-xpcshell', { runs: 137, fails: 58, sameMsg: 58 })];
+    const history = { stats: stats({ runs: 6054, fails: 254 }), hasMatchingMessage: true, configs, totalDays: 21 };
+    assert.deepEqual(rowFacts(row, new Set(['mac']), new Set(['debug', 'opt'])), [
+        'Failed 10 of 17 runs, in 10 jobs: 3 failed again on retry, 7 not analyzed',
+        'On mac · opt (1 of 2 builds)',
+    ]);
+    assert.equal(
+        rowFacts(row, new Set(['mac']), new Set(['opt']))[1],
+        'On every OS and build tested: mac · opt'
+    );
+    assert.match(flakinessFact(history)!, /^Already fails this way 42\.3% of the time on macosx1500-aarch64\/debug-xpcshell, over /);
+    assert.equal(flakinessFact(undefined), null, 'still loading');
+});
+
+test('flakinessFact covers no history, a new test and a new message', () => {
+    assert.equal(flakinessFact(null), 'No history for this test');
+    assert.equal(
+        flakinessFact({ stats: stats({ runs: 5000 }), hasMatchingMessage: false, configs: [], totalDays: 21 }),
+        'New: passed all 5000 runs over the last 21 days'
+    );
+    assert.equal(
+        flakinessFact({ stats: stats({ runs: 200, fails: 10 }), hasMatchingMessage: false, configs: [], totalDays: 21 }),
+        'This failure looks new (any failure: 5.0% over 21 days)'
     );
 });

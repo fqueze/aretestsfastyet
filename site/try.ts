@@ -233,6 +233,7 @@ import {
     type Timing,
     type UnblamedGroup,
     type UploadedProfile,
+    abbreviatePath,
     aggregateFailures,
     baseStatus,
     cleanFailureSummary,
@@ -245,11 +246,13 @@ import {
     extractUploadedProfileName,
     findUploadedProfile,
     filterTests,
+    flakinessFact,
     flakinessRequests,
     formatForPrompt,
     groupUnblamedJobs,
     hgRepoPath,
     initialSort,
+    initials,
     instanceMessages,
     instanceUploadedProfile,
     isFailureStatus,
@@ -262,6 +265,7 @@ import {
     planRevisionList,
     pushLogUrl,
     readUrlState,
+    rowFacts,
     runCountTooltip,
     runKeyOf,
     selectTryJobs,
@@ -1117,6 +1121,12 @@ function markLoadMode(): void {
 
 /** `old/try.html:1286`. The whole load, from a revision string to a rendered page. */
 async function loadRevision(): Promise<void> {
+    // On a phone the buttons only show while the box has focus (`try.html`):
+    // blurring puts them and the on-screen keyboard away once a load starts,
+    // including the one a URL starts on an `autofocus` box.
+    if (window.matchMedia('(max-width: 600px)').matches) {
+        requireInput('revision-input').blur();
+    }
     const { revision, repo } = extractRevision(requireInput('revision-input').value);
     if (!revision) {
         setStatus('Please enter a revision.', true);
@@ -1374,6 +1384,8 @@ function revisionList(
                 class: 'rev-author',
                 title: rev.author,
                 text: ` — ${rev.author.replace(/ <[^>]+>$/, '')}`,
+                // What a phone shows instead (`try.html`).
+                attrs: { 'data-initials': initials(rev.author) },
             })
         );
         list.append(row);
@@ -1749,11 +1761,14 @@ function renderTestRow(test: FailingTest, showJobCount: boolean): HTMLTableRowEl
     // the moment the path stopped expanding the row. It names both actions, so
     // the row's behaviour is still discoverable from the thing that no longer
     // does it.
-    pathSpan.append(
-        ...testRowLink(test.path, {
-            title: 'See history — or click elsewhere in the row to see details',
-        })
-    );
+    const [pathLink, ...pathButtons] = testRowLink(test.path, {
+        title: 'See history — or click elsewhere in the row to see details',
+    });
+    // What a collapsed row shows instead of the path on a phone (`try.html`).
+    const short = abbreviatePath(test.path);
+    pathLink.dataset['dirs'] = short.dirs;
+    pathLink.dataset['file'] = short.file;
+    pathSpan.append(pathLink, ...pathButtons);
     info.append(pathSpan);
     if (test.commonMessage !== undefined) {
         info.append(
@@ -1767,7 +1782,27 @@ function renderTestRow(test: FailingTest, showJobCount: boolean): HTMLTableRowEl
     row.append(info);
 
     row.append(renderActionsCell(test));
+    if (state.expandedTests.has(test.path)) {
+        row.append(renderRowFacts(test));
+    }
     return row;
+}
+
+/**
+ * An expanded row's cells spelled out, a line each (`rowFacts`). Only shown on
+ * a phone (`try.html`), where those cells have no column header above them and
+ * their tooltips cannot be hovered.
+ */
+function renderRowFacts(test: FailingTest): HTMLTableCellElement {
+    const failures = state.failures!;
+    const cell = el('td', { class: 'row-facts' });
+    for (const line of rowFacts(test, failures.globalPlatforms, failures.globalBuildTypes)) {
+        cell.append(el('div', { class: 'fact', text: line }));
+    }
+    // Filled in again by `updateFlakinessDisplay` when the history arrives.
+    const flakiness = state.flakiness.has(test.path) ? state.flakiness.get(test.path) : undefined;
+    cell.append(el('div', { class: 'fact fact-flakiness', text: flakinessFact(flakiness) ?? '' }));
+    return cell;
 }
 
 /** The OS / Build cell: badges, or `N/N` when every config is covered. */
@@ -2563,6 +2598,10 @@ function updateFlakinessDisplay(testPath: string, data: FlakinessData | null): v
     const cell = state.flakinessCells.get(testPath);
     if (cell !== undefined) {
         paintFlakinessCell(cell, testPath, data);
+        const fact = cell.parentElement?.querySelector('.fact-flakiness');
+        if (fact) {
+            fact.textContent = flakinessFact(data) ?? '';
+        }
     }
 }
 
@@ -2678,6 +2717,14 @@ document.addEventListener('DOMContentLoaded', () => {
     requireElement('load-all-btn').addEventListener('click', () => {
         void load(true);
     });
+    // Keep the focus in the box when a button is pressed. On a phone the
+    // buttons only show while the box has focus (`try.html`), so a press that
+    // moved it would hide the button before its click landed.
+    for (const id of ['load-btn', 'load-all-btn']) {
+        requireElement(id).addEventListener('mousedown', (event) => {
+            event.preventDefault();
+        });
+    }
 
     if (url.rev !== null) {
         const prefix = url.repo !== 'try' ? `${url.repo}:` : '';
