@@ -231,6 +231,59 @@ a.dash-menu-item:hover .dash-menu-title {
     padding-top: 9px;
 }
 
+/* On a phone the fixed button covers the page's heading, and hover does not
+   exist, so the menu becomes a row of small links at the foot of the page —
+   where dashboards.js already appends it. */
+@media (max-width: 600px) {
+    .dash-menu {
+        position: static;
+        margin-top: 32px;
+        padding-top: 12px;
+        border-top: 1px solid #ddd;
+        font-size: 13px;
+    }
+    .dash-menu::before {
+        content: 'Other dashboards';
+        display: block;
+        color: #777;
+        margin-bottom: 4px;
+    }
+    .dash-menu-panel {
+        position: static;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        min-width: 0;
+        max-width: none;
+        max-height: none;
+        background: none;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        column-gap: 14px;
+        row-gap: 2px;
+    }
+    .dash-menu-item,
+    .dash-menu-all {
+        display: inline;
+        padding: 0;
+        margin: 0;
+        border: none;
+    }
+    .dash-menu-title {
+        display: inline;
+        font-weight: normal;
+    }
+    .dash-menu-trigger,
+    .dash-menu-current,
+    .dash-menu-desc {
+        display: none;
+    }
+}
+
 /* Full dashboard listing (help.html), via renderDashboardList(). */
 .dash-list {
     display: flex;
