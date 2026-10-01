@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Test Time</title>
+    <script src="shared.js"></script>
+    <script src="fetch-utils.js"></script>
+    <script src="dashboards.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+
+.summary {
+  background: white;
+  padding: 15px 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  margin-bottom: 15px;
+  display: flex;
+  gap: 30px;
+  flex-wrap: wrap;
+}
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+}
+.summary-stat .value {
+  font-size: 22px;
+  font-weight: bold;
+  color: #333;
+}
+.summary-stat .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #888;
+  margin-top: 2px;
+}
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+  min-height: 34px;
+}
+.pool-table-wrapper {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  overflow-x: auto;
+}
+@media (max-width: 1024px) {
+  .pool-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+.pool-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.pool-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border-bottom: 2px solid #ddd;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #666;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.pool-table th.num {
+  text-align: right;
+}
+.pool-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.pool-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pool-table td.pool-name {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 12px;
+}
+.pool-table tr:hover {
+  background: #fafafa;
+}
+.pool-table tr.all-tasks-row {
+  font-weight: bold;
+  background: #f0f4ff;
+}
+.pool-table tr.all-tasks-row:hover {
+  background: #e8eeff;
+}
+.pool-table tr.all-tasks-row td {
+  border-bottom: 2px solid #ddd;
+}
+
+.sort-button { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-transform: inherit; cursor: pointer; }
+.test-group { cursor: pointer; }
+.group-toggle { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: bold; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.test-child .pool-name { padding-left: 32px; }
+.controls label { font-size: 13px; color: #666; }
+.runtime-chart { display: flex; align-items: center; gap: 8px; width: 160px; }
+.runtime-track { flex: 1; height: 10px; background: #e8eef6; border-radius: 2px; overflow: hidden; }
+.runtime-bar { display: block; height: 100%; background: #0060df; }
+.runtime-percentage { width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+#test-search { width: 240px; max-width: 100%; padding: 5px 8px; }
+.activity-cell { padding: 0 0 0 8px !important; width: 280px; min-width: 280px; }
+.activity-container { display: flex; align-items: center; gap: 6px; }
+.activity-graph { display: flex; flex-direction: column; flex: 1; width: 0; min-width: 0; }
+.activity-track { display: block; width: 100%; height: 36px; box-sizing: border-box; background: #f8f9fa; border: 1px solid #ddd; cursor: crosshair; }
+.profiler-btn { flex-shrink: 0; margin-right: 6px; padding: 3px 8px; background: #0060df; color: white; border: none; border-radius: 3px; font-size: 11px; }
+.profiler-btn:hover { background: #003eaa; }
+.profiler-btn:disabled { cursor: wait; opacity: 0.6; }
+.controls select { max-width: 100%; }
+#status { font-size: 13px; color: #888; }
+#status:empty { display: none; }
+.methodology { margin-top: 16px; font-size: 13px; color: #666; line-height: 1.6; }
+.methodology summary { cursor: pointer; }
+.resolution-trigger { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 180px; color: inherit; text-decoration: none; font-variant-numeric: tabular-nums; }
+.resolution-bar { display: flex; flex: 1; height: 14px; border-radius: 3px; overflow: hidden; background: #eee; }
+.resolution-bar span { flex-basis: 0; }
+.resolution-tooltip { position: fixed; z-index: 10; padding: 10px 14px; background: white; color: #222; box-shadow: 0 2px 12px #0003; border: 1px solid #ccc; border-radius: 4px; text-align: left; font-size: 13px; font-weight: normal; line-height: 1.8; }
+.resolution-tooltip[hidden] { display: none; }
+.resolution-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; }
+.resolution-tooltip a { color: #0060df; text-decoration: underline; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Performance Test Time</h1>
+    <div id="summary" class="summary" aria-live="polite">
+        <div class="summary-stat"><span id="summary-date" class="value">—</span><span class="label">UTC</span></div>
+        <div class="summary-stat"><span id="summary-configs" class="value">—</span><span class="label">Job configurations</span></div>
+        <div class="summary-stat"><span id="summary-runs" class="value">—</span><span class="label">Total runs</span></div>
+        <div class="summary-stat"><span id="summary-hours" class="value">—</span><span class="label">Worker-hours</span></div>
+    </div>
+    <div class="controls">
+        <label>UTC date <select id="date" disabled></select></label>
+        <label>Project <select id="project" disabled><option value="">All projects</option></select></label>
+        <label>Worker pool <select id="pool" disabled></select></label>
+    </div>
+    <p id="status" role="status">Loading available dates…</p>
+    <div id="error" class="error" role="alert" style="display:none"></div>
+    <div class="controls">
+        <label>Search tests <input type="search" id="test-search" placeholder="Filter job configurations…" disabled></label>
+    </div>
+    <div id="results"></div>
+    <details class="methodology">
+        <summary>About these measurements</summary>
+        <p>Includes Browsertime, Raptor, Talos, AWSY, mozperftest and Mochitest Speedometer jobs,
+        including comparison browsers, failed runs and retries. Build and queue time are excluded.</p>
+        <p>Worker-hours sum each run’s wall-clock time within the selected UTC day;
+        parallel runs add together. Runs crossing midnight contribute only their overlap with that day.
+        This measures whole jobs (including setup and cleanup), rather than benchmark timings or CPU time.
+        Pools use the actual Taskcluster provisioner/worker-type IDs. Each row is a performance-test job configuration, with all its runs combined.
+        Search matches job configurations and aggregate names, ignoring case. Totals reflect matching tests. Shares remain relative to all tests in the selected worker pool and project, or all pools when All is selected. Configurations default to descending worker-hours. Click any column header except Activity to sort; click again to reverse.
+        Select All in the Worker pool dropdown to combine matching configurations across pools.
+        Tests are grouped by family. Click a group to expand its full job configurations,
+        sorted within their group using the selected column. Parent rows combine runtime and deduplicate bug IDs;
+        child rows break down the same totals and are not added to them again.
+        Activity shows peak simultaneous running jobs in five-minute buckets over the UTC day.
+        Each row is scaled to its own peak, shown in the Peak running column; hover for bucket counts.
+        The total row combines all configurations. Queue time is not plotted.</p>
+        <p>Bugs count distinct bugs linked to Perfherder regression alerts created in the cached 365-day window,
+        excluding improvements but retaining all regression triage statuses. This window applies to alert creation, not bug creation.
+        Resolutions uses cached Bugzilla resolutions from STMO query 128286, a daily-refreshed copy of the Performance Regression Tracker source limited to bugs created in the past 365 days. Hover for the full
+        breakdown, then click a category’s count to open just those bugs in Bugzilla. Duplicate is separate from Fixed.
+        Unknown means resolution data is loading, unavailable, or the bug is absent from that query. The column sorts by total bug count.
+        Exact job labels are mapped to signatures from up to three latest successful runs within 21 days;
+        retired signatures may be missing. Counts describe those signatures’ history, not the historical
+        worker pool. The yearly window does not move with the selected worker date. Aggregate and total
+        rows deduplicate bug IDs. Unmapped jobs show “—”; hover over counts for coverage details.</p>
+    </details>
+</div>
+<script src="task-timeline-profiler.js"></script>
+<script type="module" src="./performance-main.ts"></script>
+</body>
+</html>

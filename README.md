@@ -59,6 +59,8 @@ ones:
   **XPCShell Jobs** (`xpcshell-jobs.html`), **Manifest Runtimes**
   (`manifests.html`), **Worker Pools** (`workers.html`) — job- and
   infrastructure-level timing views.
+- **Performance Test Time** (`performance-tests.html`) — daily worker-hours by
+  worker pool and job configuration, with date and project filters.
 
 A number of older or more specialized dashboards (Perma-Fails, Variant Impact,
 Errors & Warnings, Resource Usage, and others) are listed under "Less
@@ -148,3 +150,39 @@ written to emit; `FORMATS.md` records what the index was actually serving, from
 validating every file the index publishes. It lags less, and where the two
 disagree it is the one to trust — it exists because several documented claims
 turned out not to hold.
+
+### Performance dashboard data sources
+
+`site/performance-tests.html` is built by `npm run pages` into
+`dist-site/performance-tests.html`. Its entry point is `site/performance-main.ts`,
+with the controller in `site/performance.ts`, DOM-free calculations in
+`site/performance-view.ts`, and STMO loading and resolution bars in
+`site/performance-alerts.ts`. Like the other migrated pages, it must be built
+before previewing; serve `dist-site/` after building and assembling the site.
+The dashboard uses its own `task-timeline-profiler.js` sibling asset, copied
+from the worker dashboard’s profiler implementation. `workers.html` is unchanged.
+
+The dashboard reads daily runtime data from the existing CI worker-data
+artifacts and joins two cached STMO results in the browser:
+
+- [127887](https://sql.telemetry.mozilla.org/queries/127887) maps exact job and
+  repository names to bugs using signatures from up to three successful runs in
+  the last 21 days. It refreshes daily at 04:15 UTC. The browser unions
+  `regression_bug_ids`, excluding improvement-only associations. The 365-day
+  window applies to alert creation, independently of the selected runtime date.
+- [128286](https://sql.telemetry.mozilla.org/queries/128286) provides cached Bugzilla
+  resolutions for `perf-alert` bugs created in the past 365 days. It refreshes
+  daily at 07:15 UTC. Bugs missing from this source appear as Unknown, including
+  older bugs linked to newer alerts. Duplicate remains separate from Fixed.
+
+Query definitions and schedules are maintained in STMO at the links above.
+Changes to this repository do not deploy or refresh those queries. Query 128977
+was an experiment and is not used by the dashboard.
+
+`performance-alerts-source.json` contains the query-specific read-only results
+keys intentionally used by the browser, never an account API key. Both queries
+are currently owned by dpalmeiro@mozilla.com. Preserve their schedules and update
+this configuration if ownership or query IDs change. Retired or unsampled
+signatures can be absent, and bug attribution does not establish which worker
+pool a historical regression ran on. Resolution fetch failures appear as Unknown;
+mapping failures appear as an em dash, not zero.
