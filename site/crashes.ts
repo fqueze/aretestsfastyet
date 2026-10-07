@@ -161,8 +161,8 @@ import {
     type Vocabulary,
     externalLink,
 } from './drilldown-render.ts';
-import { taskPageUrl } from './test-link.ts';
 import { CRASH_NOUN, buildCrashGroups, crashRows, singleCrashOpensViewer } from './crashes-view.ts';
+import { taskPageUrl } from './test-link.ts';
 
 /** The class names and labels this page uses. See `Vocabulary`. */
 const VOCAB: Vocabulary = {
@@ -187,11 +187,11 @@ const VOCAB: Vocabulary = {
  * `groups`, `historicalData`, `isHistoricalMode`, `expandedSignature`, the two
  * expansion sets, `currentSort`, `rowsByKey`, `renderedRows` — is the
  * controller's, because the failures page kept the identical set under different
- * names. What this file reads back off it is `historicalData`, for the shared
- * scripts that index into the untyped JSON themselves.
+ * names. What this file reads back off it is `rawData` and `historicalData`, for
+ * the three shared scripts that index into the untyped JSON themselves.
  *
  * Declared before `SPEC` and constructed at the bottom of the file: the hooks
- * and the chart walks below read `page.historicalData`, and
+ * and the chart walks below read `page.rawData` and `page.historicalData`, and
  * `SPEC` names those functions, so one of the two has to come first. A `const`
  * assigned at the end is the ordering that lets every function below read as
  * ordinary top-level code.
@@ -229,6 +229,20 @@ function rankSignatures(
 
 // --- the page's hooks -----------------------------------------------------
 
+/**
+ * The Treeherder link for an occurrence, or `null`.
+ *
+ * `getTreeherderJobUrl` needs the raw file and does an `indexOf` over
+ * `tables.taskIds` for every call, which is why the renderer asks for the
+ * answer rather than computing it.
+ */
+function treeherderUrl(occurrence: Occurrence): string | null {
+    if (page.rawData === null) {
+        return null;
+    }
+    return getTreeherderJobUrl(occurrence, page.rawData);
+}
+
 const hooks: RenderHooks = {
     // A crash signature is plain text. `old/crashes.html:585`, which passes it
     // through `escapeHtml`.
@@ -237,11 +251,20 @@ const hooks: RenderHooks = {
     // whose messages are truncated with an ellipsis and need one.
     labelTitle: () => undefined,
 
-    occurrenceLinks(occurrence) {
-        // Only the crash viewer: the job name is the `task.html` link, which
-        // has the profile and the Treeherder job.
+    occurrenceLinks(occurrence, testName) {
+        // `renderCrashLinks` (`common-links.js:76`) in element form: Profile
+        // always, Crash when a dump was uploaded, Job when the revision is
+        // known.
+        const links = [externalLink(getProfilerUrl(occurrence, testName), 'Profile')];
         const crashUrl = getCrashViewerUrl(occurrence);
-        return crashUrl ? [externalLink(crashUrl, 'Crash')] : [];
+        if (crashUrl) {
+            links.push(externalLink(crashUrl, 'Crash'));
+        }
+        const jobUrl = treeherderUrl(occurrence);
+        if (jobUrl !== null) {
+            links.push(externalLink(jobUrl, 'Job'));
+        }
+        return links;
     },
 
     // The task page, which lists this run's crashes with their dumps.

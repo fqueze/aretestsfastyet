@@ -1914,6 +1914,11 @@ function renderJobDetailRow(
 ): HTMLTableRowElement {
     const platform = extractPlatform(job.jobName);
     const builds = extractBuildTypes(job.jobName);
+    const profilerUrl = getProfilerUrl(
+        { taskId: job.taskId, retryId: job.retryId, jobName: job.jobName },
+        test.path.split('/').pop()
+    );
+
     const jobStatuses = new Set<string>();
     for (const instance of job.instances) {
         jobStatuses.add(baseStatus(instance.status));
@@ -1953,8 +1958,6 @@ function renderJobDetailRow(
 
     const info = el('td', { class: 'test-info' });
     const header = el('div', { class: 'job-header' });
-    // The job name opens `task.html`, which has the profile and the Treeherder
-    // job; only the crash viewer is left beside it.
     header.append(plainLink(taskPageUrl(job.taskId, job.retryId, test.path), job.jobName, 'job-name'));
 
     // A test that fails is rerun in the harness's "retry" phase. Split the
@@ -1976,6 +1979,7 @@ function renderJobDetailRow(
     }
 
     const links = el('span', { class: 'job-links' });
+    links.append(plainLink(profilerUrl, 'Profile'));
     const crashUrls = new Set<string>();
     for (const instance of job.instances) {
         if (instance.minidump !== undefined) {
@@ -1993,9 +1997,8 @@ function renderJobDetailRow(
             links.append(plainLink(crashUrl, 'Crash'));
         }
     }
-    if (links.childNodes.length > 0) {
-        header.append(' ', links);
-    }
+    links.append(plainLink(treeherderJobLink(job), 'Job'));
+    header.append(' ', links);
     info.append(header);
 
     info.append(...renderAssertionList(test, { showRuns, initialInstances, retryInstances, passedOnRetry, jobKey }));
@@ -2003,6 +2006,14 @@ function renderJobDetailRow(
     row.append(info);
     row.append(el('td'));
     return row;
+}
+
+/** The Treeherder job view for one task run of this push. */
+function treeherderJobLink(job: { taskId: string; retryId: number }): string {
+    return (
+        `${TH_BASE}/jobs?repo=${state.repo}&selectedTaskRun=${job.taskId}.${job.retryId}` +
+        `&revision=${state.revision ?? ''}`
+    );
 }
 
 /**
@@ -2322,9 +2333,15 @@ function renderUnblamedJobRow(job: Job): HTMLTableRowElement {
 
     const info = el('td', { class: 'test-info' });
     const header = el('div', { class: 'job-header' });
-    // The job name opens `task.html`: the profile and the Treeherder job the
-    // links beside it used to offer are there.
     header.append(link(taskPageUrl(job.taskId, job.retryId), { text: job.jobName, class: 'job-name' }));
+    const links = el('span', { class: 'job-links' });
+    links.append(
+        link(getProfilerUrl({ taskId: job.taskId, retryId: job.retryId, jobName: job.jobName }), {
+            text: 'Profile',
+        })
+    );
+    links.append(link(treeherderJobLink(job), { text: 'Job' }));
+    header.append(' ', links);
     info.append(header);
 
     for (const line of job.cleanedSummary ?? []) {

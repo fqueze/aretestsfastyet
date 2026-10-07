@@ -2184,9 +2184,12 @@ test('expanding a failure message lists its jobs, and makes no request', async (
                 (row.querySelector('.job-name')?.textContent ?? '').length > 0,
                 'each job is named'
             );
-            // Every job offers at least one way out — its name to task.html, a
-            // job link, or the push when the task id is the sentinel.
-            assert.ok(row.querySelectorAll('a').length > 0, 'each job links somewhere');
+            // Every job offers at least one way out — a job link, or the push
+            // when the task id is the sentinel.
+            assert.ok(
+                row.querySelectorAll('.job-links a').length > 0,
+                'each job links somewhere'
+            );
         }
 
         // Clicking again collapses it, still without a request.
@@ -2252,8 +2255,8 @@ test('a job link points at the run the annotation is in, or is absent', async ()
     // carries only `task_id`, and a task whose first run ended in `exception` is
     // retried — so the annotated failure is in run 1 and a link built on a
     // guessed run 0 fetches the wrong artifact or none. The page resolves the
-    // run through `runIdsOfJobs` rather than assuming, and does not link the
-    // job name to task.html for a job Treeherder would not answer for.
+    // run through `runIdsOfJobs` rather than assuming, and omits the profile
+    // link for a job Treeherder would not answer for.
     const { page } = await startPage('job-links');
     try {
         clickRow(page, DRILL_BUG);
@@ -2266,39 +2269,37 @@ test('a job link points at the run the annotation is in, or is absent', async ()
 
         const rows = [...page.document.querySelectorAll(`#panel-${DRILL_BUG} .job-row`)];
         assert.ok(rows.length > 0);
-        let sawTask = 0;
+        let sawProfile = 0;
         for (const row of rows) {
-            for (const href of [...row.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '')) {
-                // Never the sentinel: a link on screen addresses something real.
-                assert.ok(!href.includes(UNKNOWN_TASK_ID), `no sentinel in ${href}`);
+            const hrefs = [...row.querySelectorAll('.job-links a')].map((a) =>
+                a.getAttribute('href')
+            );
+            for (const href of hrefs) {
+                // Never the sentinel, and never a bare `runs/` with nothing in
+                // it: a link on screen addresses something real.
+                assert.ok(!(href ?? '').includes(UNKNOWN_TASK_ID), `no sentinel in ${href}`);
+                assert.doesNotMatch(href!, /runs%2F(?!\d)/, `a run index is present in ${href}`);
             }
-            const task = row.querySelector('a.job-name')?.getAttribute('href');
-            if (task !== undefined && task !== null) {
-                sawTask++;
+            const profile = hrefs.find((href) => href!.includes('profiler.firefox.com'));
+            if (profile !== undefined) {
+                sawProfile++;
                 // The run the fixture recorded for this job, not 0 by default.
-                const parsed = /^task\.html\?task=([\w-]+)\.(\d+)$/.exec(task);
-                assert.ok(parsed !== null, `the job name opens a task run: ${task}`);
+                const parsed = /task%2F([^%]+)%2Fruns%2F(\d+)/.exec(profile ?? '');
+                assert.ok(parsed !== null, `the profile URL names a task and a run: ${profile}`);
                 // `runIds` is keyed by **job** id, so the expected run is
                 // looked up through the occurrence that carries this task.
                 const occurrence = (raw.failuresbybug[String(DRILL_BUG)] ?? []).find(
-                    (entry) => entry.task_id === parsed[1]
+                    (row) => row.task_id === parsed[1]
                 );
                 assert.ok(occurrence !== undefined, `the fixture records task ${parsed[1]}`);
                 assert.equal(
                     Number(parsed[2]),
                     raw.runIds[String(occurrence.job_id)],
-                    `the task link uses the recorded run for job ${occurrence.job_id}`
-                );
-                assert.equal(row.querySelectorAll('.job-links a').length, 0, 'and nothing beside it');
-            } else {
-                // No run index: a plain name, and Treeherder or the push beside it.
-                assert.deepEqual(
-                    [...row.querySelectorAll('.job-links a')].map((a) => a.textContent).filter((t) => t !== 'Job' && t !== 'Push'),
-                    []
+                    `the profile link uses the recorded run for job ${occurrence.job_id}`
                 );
             }
         }
-        assert.ok(sawTask > 0, 'some job name opened task.html');
+        assert.ok(sawProfile > 0, 'some job offered a profile link');
     } finally {
         page.restore();
     }

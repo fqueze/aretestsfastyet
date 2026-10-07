@@ -198,6 +198,11 @@ declare global {
     function linkifyFailureMessage(message: string, testPath: string): string;
     /** `common-ui.js:488` — sorts runs newest first and adds `dateHtml`. */
     function prepareRunsForDisplay(runs: { date: string | null; dateHtml?: string }[]): void;
+    /** `common-links.js:43` — the Treeherder URL for one job. */
+    function getTreeherderJobUrl(
+        instance: { taskId: string; retryId: string },
+        data: unknown
+    ): string | null;
     /** `common-links.js:126` — the Bugzilla filing URL for a failure. */
     function getBugzillaUrl(options: {
         testPath: string;
@@ -226,6 +231,8 @@ declare global {
     function withDevParams(url: string): string;
     /** `shared.js:3` — recolours the favicon. */
     function setFavicon(color: string): void;
+    /** `shared.js:32` — the profiler front end to link to. */
+    function getProfilerOrigin(): string;
     /** Chart.js, loaded from a CDN on demand. */
     const Chart: ChartConstructor;
 }
@@ -985,7 +992,9 @@ interface RunInfo {
     date: string | null;
     dateHtml?: string;
     taskLink: string;
+    profileLink: string;
     crashLink: string | null;
+    treeherderLink: string | null;
 }
 
 /**
@@ -1060,8 +1069,6 @@ function renderIssueRuns(s: PageState, issue: Issue, container: HTMLElement): vo
         dateCell.innerHTML = run.dateHtml ?? '<td class="run-date"></td>';
         tr.append(...dateCell.content.childNodes);
 
-        // The job name opens `task.html`, which has the profile and the
-        // Treeherder job; only the crash viewer is left beside it.
         tr.append(
             el('td', {
                 class: 'run-job-name',
@@ -1074,13 +1081,22 @@ function renderIssueRuns(s: PageState, issue: Issue, container: HTMLElement): vo
             })
         );
 
-        const viewCell = el('td', { class: 'view-links' });
+        const links: Node[] = [];
+        const push = (text: string, href: string): void => {
+            if (links.length > 0) {
+                links.push(document.createTextNode(' '));
+            }
+            links.push(el('a', { text, attrs: { href, target: '_blank' } }));
+        };
+        push('Profile', run.profileLink);
         if (run.crashLink !== null) {
-            viewCell.append(
-                document.createTextNode('View: '),
-                el('a', { text: 'Crash', attrs: { href: run.crashLink, target: '_blank' } })
-            );
+            push('Crash', run.crashLink);
         }
+        if (run.treeherderLink !== null) {
+            push('Job', run.treeherderLink);
+        }
+        const viewCell = el('td', { class: 'view-links' });
+        viewCell.append(document.createTextNode('View: '), ...links);
         tr.append(viewCell);
         table.append(tr);
     }
@@ -1150,6 +1166,16 @@ function buildRunInfo(
     const { taskId, retryId } = parseTaskId(rawTaskId);
 
     const date = dateOfDay(s.raw.metadata.startTime, day);
+    const profileUrl =
+        `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}` +
+        `/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+    const profileName = `${jobName} (${rawTaskId})`;
+    const testName = s.testPath.split('/').pop() ?? s.testPath;
+    const profileLink =
+        `${getProfilerOrigin()}/from-url/${encodeURIComponent(profileUrl)}` +
+        `?profileName=${encodeURIComponent(profileName)}` +
+        `&markerSearch=${encodeURIComponent(testName)}`;
+
     let crashLink: string | null = null;
     if (issueType === 'CRASH' && minidump !== null && minidump !== undefined) {
         const jsonUrl =
@@ -1162,7 +1188,9 @@ function buildRunInfo(
         jobName,
         date,
         taskLink: taskPageUrl(taskId, retryId, s.testPath),
+        profileLink,
         crashLink,
+        treeherderLink: getTreeherderJobUrl({ taskId, retryId: String(retryId) }, s.raw),
     };
 }
 

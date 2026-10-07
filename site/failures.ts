@@ -149,7 +149,6 @@ import {
     type Vocabulary,
     externalLink,
 } from './drilldown-render.ts';
-import { taskPageUrl } from './test-link.ts';
 import {
     FAILURE_NOUN,
     buildFailureGroups,
@@ -158,6 +157,7 @@ import {
     messageLink,
     mostFrequentTestPath,
 } from './failures-view.ts';
+import { taskPageUrl } from './test-link.ts';
 
 // --- the one shared-script global this page uses and `drilldown-render` does
 // not ------------------------------------------------------------------------
@@ -229,6 +229,13 @@ function rankMessages(
 
 // --- the page's hooks -----------------------------------------------------
 
+function treeherderUrl(occurrence: Occurrence): string | null {
+    if (page.rawData === null) {
+        return null;
+    }
+    return getTreeherderJobUrl(occurrence, page.rawData);
+}
+
 /**
  * The 🐛 bug-filing button for a test row, or `null`.
  *
@@ -281,10 +288,15 @@ const hooks: RenderHooks = {
     // is `text-overflow: ellipsis` and a long message is cut off.
     labelTitle: (key) => key,
 
-    occurrenceLinks() {
-        // None: the job name is the `task.html` link, which has the profile
-        // and the Treeherder job. A failure has no dump to link to.
-        return [];
+    occurrenceLinks(occurrence, testName) {
+        // Profile always, Job when the revision is known. No crash viewer: a
+        // failure has no minidump. `old/failures.html:801-805`.
+        const links = [externalLink(getProfilerUrl(occurrence, testName), 'Profile')];
+        const jobUrl = treeherderUrl(occurrence);
+        if (jobUrl !== null) {
+            links.push(externalLink(jobUrl, 'Job'));
+        }
+        return links;
     },
 
     jobNameHref: (occurrence, testName) => taskPageUrl(occurrence.taskId, occurrence.retryId, testName),

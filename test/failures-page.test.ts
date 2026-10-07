@@ -27,7 +27,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { setupPage, fixture, shape, shapes } from './dom-harness.ts';
+import { setupPage, fixture, shape, shapes, pathTo } from './dom-harness.ts';
 import type { IssuesWithTaskIdsFile } from '../lib/formats/issues.ts';
 
 // --- ground truth ---------------------------------------------------------
@@ -585,8 +585,10 @@ test('the failures page puts view-links on the td, with no span', () => {
                 null,
                 'and there is no span wrapper — that is the crashes page'
             );
-            // Empty: the job name in the cell before it opens task.html.
-            assert.equal(cells[2]!.textContent, '');
+            assert.equal(
+                pathTo(single, single.querySelector('.view-links a')!),
+                'table.inline-instance > tbody > tr > td.view-links > a'
+            );
             checked++;
         }
         row.click();
@@ -594,16 +596,17 @@ test('the failures page puts view-links on the td, with no span', () => {
     assert.ok(checked > 0, `${checked} inline cells were checked`);
 });
 
-test('an occurrence gets no View links, and never a Crash link', () => {
-    // `occurrenceLinks` (`site/failures.ts`): the job name is the task.html
-    // link, which has the profile and the Treeherder job, and a failure has no
-    // minidump for the crash viewer the crashes page leaves in this position.
+test('an occurrence gets Profile and Job, and never a Crash link', () => {
+    // `occurrenceLinks` (`site/failures.ts:280`): no crash viewer, because a
+    // failure has no minidump. The crashes page emits three links at the same
+    // position, so the absent one is a real distinction.
     let checked = 0;
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-failure'))) {
             const labels = [...single.querySelectorAll('.view-links a')].map((a) => a.textContent);
-            assert.deepEqual(labels, []);
+            assert.deepEqual(labels, ['Profile', 'Job']);
+            assert.equal(labels.includes('Crash'), false);
             assert.equal(single.querySelector('a[href^="crash-viewer.html"]'), null);
             checked++;
         }

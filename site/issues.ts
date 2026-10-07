@@ -1353,7 +1353,9 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
         date: string | null;
         jobName: string;
         taskUrl: string;
+        profileUrl: string;
         crashUrl: string | null;
+        jobUrl: string | null;
     }
     const runs: Run[] = [];
 
@@ -1383,6 +1385,10 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
                 date: run.day === null ? null : dayLabel(startTime, run.day),
                 jobName,
                 taskUrl: taskPageUrl(taskId, retryId, test.fullPath),
+                profileUrl: getProfilerUrl(
+                    { taskId, retryId: String(retryId), jobName },
+                    test.fullPath
+                ),
                 // `getCrashViewerUrl` returns `''` with no minidump
                 // (`common-links.js:32`), which is upstream's own guard at
                 // `:3208` written a second way; `|| null` keeps the two cases
@@ -1392,6 +1398,7 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
                         ? getCrashViewerUrl({ taskId, retryId: String(retryId), minidump }) ||
                           null
                         : null,
+                jobUrl: getTreeherderJobUrl({ taskId, retryId: String(retryId) }, rawData),
             });
         }
     }
@@ -1410,18 +1417,22 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
         lastDate = run.date;
         const dateCell = el('td', { class: 'run-date', text: showDate ? run.date! : '' });
 
-        // The job name links to the crash viewer for a crash and to the
-        // profiler otherwise (`:3236-3237`).
-        // The job name opens `task.html`, which has the profile and the
-        // Treeherder job; only the crash viewer is left beside it.
+        // The job name opens `task.html`; the profile, crash viewer and
+        // Treeherder job stay beside it.
         const nameCell = el('td', {
             class: 'run-job-name',
             children: [externalLink(run.taskUrl, run.jobName)],
         });
+
         const links = el('td', { class: 'view-links' });
+        links.append('View: ', externalLink(run.profileUrl, 'Profile'));
         if (run.crashUrl !== null) {
-            links.append('View: ', externalLink(run.crashUrl, 'Crash'));
+            links.append(' ', externalLink(run.crashUrl, 'Crash'));
         }
+        if (run.jobUrl !== null) {
+            links.append(' ', externalLink(run.jobUrl, 'Job'));
+        }
+
         return el('tr', { children: [dateCell, nameCell, links] });
     });
 }

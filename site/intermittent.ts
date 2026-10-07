@@ -197,7 +197,13 @@ import {
     writeUrlState,
     zeroDayKinds,
 } from './intermittent-view.ts';
-import { treeherderJobUrl, treeherderPushUrl } from '../lib/links.ts';
+import {
+    profilerFrontEndUrl,
+    resolveProfilerOrigin,
+    resourceUsageProfileUrl,
+    treeherderJobUrl,
+    treeherderPushUrl,
+} from '../lib/links.ts';
 import { el, externalLink } from './drilldown-render.ts';
 import { taskPageUrl, testRowLink } from './test-link.ts';
 
@@ -373,6 +379,17 @@ const JOB_LIST_ROWS = 12;
 
 /** Which job lists the reader has asked to see in full, by the same key. */
 const expandedJobLists = new Set<string>();
+
+/**
+ * The profiler origin, from this page's own `?profiler=` parameter.
+ *
+ * `lib/` must not read `window`, so the override is resolved here and passed in
+ * — the seam `profilerFrontEndUrl` documents. Read once at module scope because
+ * it cannot change without a reload.
+ */
+const profilerOrigin = resolveProfilerOrigin(
+    new URLSearchParams(window.location.search).get('profiler')
+);
 
 /**
  * An expanded bug's tallies **and** the jobs behind each failure message.
@@ -1271,14 +1288,19 @@ function itemElement(
 }
 
 /**
- * The jobs that logged one failure message, each linked out.
+ * The jobs that logged one failure message, each with its links out.
  *
- * - The **job name** opens `task.html` when the run index resolved: it has
- *   the profile and the Treeherder job the `View:` links used to. `runId` is
- *   `null` when `/api/jobs/` did not answer for the job, and a task run is
- *   addressed by `runs/<n>`, so a guessed 0 could be the wrong run.
- * - **Job**, beside a plain name, when there is a task id but no run index —
- *   Treeherder resolves the run itself.
+ * Follows `site/issues.ts`'s `View: Profile | Job` idiom rather than inventing
+ * one. What differs is which links can honestly be offered:
+ *
+ * - **Profile** only when the run index resolved. `runId` is `null` when
+ *   `/api/jobs/` did not answer for the job, and a resource-usage artifact is
+ *   addressed by `runs/<n>` — so a guessed 0 links to the wrong run's artifact
+ *   or to nothing. Omitted rather than guessed.
+ * - **Job** whenever there is a real task id, built from `tree`, `revision` and
+ *   `taskId.runId` through the shared `treeherderJobUrl`. This data carries all
+ *   three directly, so unlike `common-links.js:43` there is no data file to
+ *   index into.
  * - **Push** as the fallback when the task id is the `UNKNOWN_TASK_ID`
  *   sentinel: the revision is still known, so the push is a correct link where
  *   the job is not addressable.
@@ -1293,21 +1315,42 @@ function jobListElement(jobs: readonly OccurrenceJob[], key: string): HTMLElemen
     const shown = expandedJobLists.has(key) ? jobs : jobs.slice(0, JOB_LIST_ROWS);
     for (const job of shown) {
         const meta = `${job.platform} ${job.buildType}`;
-        const links = el('span', { class: 'job-links' });
+        // The name opens `task.html` when the run index resolved, since a
+        // task run is addressed by it; a plain name otherwise.
         let name: HTMLElement;
         if (job.taskId !== null && job.runId !== null) {
             name = externalLink(taskPageUrl(job.taskId, job.runId), job.jobName, 'job-name');
             name.title = job.machineName;
         } else {
             name = el('span', { class: 'job-name', text: job.jobName, title: job.machineName });
+        }
+        const links = el('span', { class: 'job-links' });
+        if (job.taskId !== null && job.runId !== null) {
             links.append(
                 'View: ',
-                job.taskId !== null
-                    ? externalLink(treeherderJobUrl(job.tree, job.revision, job.taskId, 0), 'Job')
-                    : // No addressable task, so the push rather than a URL
-                      // containing the sentinel. Named "Push" and not "Job",
-                      // because it is not the job.
-                      externalLink(treeherderPushUrl(job.tree, job.revision), 'Push')
+                externalLink(
+                    profilerFrontEndUrl(resourceUsageProfileUrl(job.taskId, job.runId), {
+                        profileName: `${job.jobName} (${job.taskId}.${job.runId})`,
+                        origin: profilerOrigin,
+                    }),
+                    'Profile'
+                )
+            );
+        }
+        if (job.taskId !== null) {
+            links.append(
+                links.childNodes.length === 0 ? 'View: ' : ' ',
+                externalLink(
+                    treeherderJobUrl(job.tree, job.revision, job.taskId, job.runId ?? 0),
+                    'Job'
+                )
+            );
+        } else {
+            // No addressable task, so the push rather than a URL containing the
+            // sentinel. Named "Push" and not "Job", because it is not the job.
+            links.append(
+                'View: ',
+                externalLink(treeherderPushUrl(job.tree, job.revision), 'Push')
             );
         }
         list.append(

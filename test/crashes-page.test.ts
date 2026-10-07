@@ -485,7 +485,7 @@ test('a single-crash row links its job name at task.html, and its Crash link at 
             const [, taskId, retryId] = match;
             assert.ok(RAW.tables.taskIds.includes(`${taskId}.${retryId}`), 'the task is one the file records');
 
-            const crash = (single.querySelector('.view-links a') as HTMLAnchorElement).getAttribute('href')!;
+            const crash = (single.querySelector('.view-links a[href^="crash-viewer.html"]') as HTMLAnchorElement).getAttribute('href')!;
             assert.equal(
                 crash,
                 getCrashViewerUrl({
@@ -537,7 +537,7 @@ test('clicking a single-crash row opens the crash viewer for that occurrence', (
                 // its Crash link points at.
                 assert.equal(
                     url,
-                    (single.querySelector('.view-links a') as HTMLAnchorElement).getAttribute('href')
+                    (single.querySelector('.view-links a[href^="crash-viewer.html"]') as HTMLAnchorElement).getAttribute('href')
                 );
                 clicked++;
             }
@@ -550,17 +550,17 @@ test('clicking a single-crash row opens the crash viewer for that occurrence', (
     }
 });
 
-test('an occurrence"s only link is its Crash viewer; the job name has the rest', () => {
-    // `occurrenceLinks` (`site/crashes.ts`): the crash viewer, when there is a
-    // dump. The profile and the Treeherder job are on the task page the job
-    // name opens.
+test('an occurrence"s links are Profile, Crash and Job, in that order', () => {
+    // `occurrenceLinks` (`site/crashes.ts:249`) — `renderCrashLinks` in element
+    // form. The order is upstream's and the Crash link is conditional on a
+    // dump, so the labels are asserted as a sequence.
     let checked = 0;
     for (const row of dataRows()) {
         row.click();
         for (const single of subtreeOf(row).filter((e) => e.classList.contains('single-crash'))) {
             const holder = single.querySelector('.view-links')!;
             const labels = [...holder.querySelectorAll('a')].map((a) => a.textContent);
-            assert.deepEqual(labels, ['Crash'], 'every dumped occurrence');
+            assert.deepEqual(labels, ['Profile', 'Crash', 'Job'], 'every dumped occurrence');
             for (const anchor of holder.querySelectorAll('a')) {
                 assert.equal((anchor as HTMLAnchorElement).target, '_blank');
             }

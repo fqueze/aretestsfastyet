@@ -1391,14 +1391,13 @@ test('clicking a failure message lists its runs, once the detailed file is in', 
         }
         assert.deepEqual(dates, expectedDates);
 
-        // And every row links out through its job name, to that run's
-        // task.html; a failure has no crash viewer to put beside it.
+        // And every row links out: a profile for each, and a Job link because
+        // the fixture carries the commit ids `getTreeherderJobUrl` needs.
         for (const row of rows) {
-            assert.match(
-                row.querySelector('.run-job-name a')!.getAttribute('href')!,
-                /^task\.html\?task=[\w-]{22}\.\d+&test=/
+            const links = [...row.querySelectorAll('.view-links a')].map(
+                (link) => link.textContent
             );
-            assert.equal(row.querySelectorAll('.view-links a').length, 0, 'and nothing beside it');
+            assert.deepEqual(links, ['Profile', 'Job'], 'each run offers a profile and a job');
         }
     } finally {
         page.restore();

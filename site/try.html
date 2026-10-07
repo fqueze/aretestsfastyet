@@ -364,11 +364,16 @@
             background: #fafcff;
         }
 
+        /* Baseline, not center: the monospace job name and the links beside it
+           have different line boxes, so centring them misaligns the text. */
         .job-header {
             display: flex;
             gap: 6px;
-            align-items: center;
+            align-items: baseline;
             flex-wrap: wrap;
+        }
+        .job-header > .profiler-cmd {
+            align-self: center;
         }
         .job-name {
             font-family: monospace;
@@ -384,11 +389,15 @@
         a.job-name:hover {
             text-decoration: underline;
         }
+        /* The same gap between the links as between the job name and them. */
+        .job-links {
+            display: flex;
+            gap: 6px;
+            font-size: 12px;
+        }
         .job-links a {
             color: #0060df;
             text-decoration: none;
-            font-size: 12px;
-            margin-right: 8px;
         }
         .job-links a:hover {
             text-decoration: underline;
