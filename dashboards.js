@@ -169,8 +169,8 @@ const DASHBOARDS = [
             'Job Speed was used to tune the per-job-type multipliers — e.g. debug builds run ' +
             'slower than opt, and Windows slower than Linux.' },
     { file: 'resource-use.html', tier: 2, title: 'Resource Usage',
-      desc: 'XPCShell per-job CPU usage; finds CPU-bound vs single-threaded jobs.',
-      long: 'XPCShell per-job resource usage. Built to find jobs that already saturate all ' +
+      desc: 'Per-job CPU usage of XPCShell and Mochitest jobs; finds CPU-bound vs single-threaded jobs.',
+      long: 'Per-job resource usage of XPCShell and Mochitest jobs. Built to find jobs that already saturate all ' +
             'the CPU cores they are given — candidates for machines with more cores, since ' +
             'they parallelize well — and, at the other end, jobs spending too much time on a ' +
             'single thread that would be worth profiling to fix.' },

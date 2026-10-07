@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>XPCShell Resource Usage Dashboard</title>
+    <script src="dashboards.js"></script>
+    <link rel="stylesheet" href="shared.css">
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -31,6 +33,10 @@
             align-items: center;
             flex-wrap: wrap;
             justify-content: space-between;
+            /* Already inside the .header card; undo shared.css's own card. */
+            padding: 0;
+            margin-bottom: 0;
+            box-shadow: none;
         }
 
         .controls-left {
@@ -251,6 +257,7 @@
 
     <script src="fetch-utils.js"></script>
     <script src="shared.js"></script>
+    <script src="common-ui.js"></script>
     <script>
         let currentData = null;
         let expandedGroups = new Set();
@@ -793,6 +800,8 @@
                 renderTable();
             });
         });
+
+        initHarnessSwitcher('Resource Usage Dashboard');
 
         // Load data on page load
         loadDates();
