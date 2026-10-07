@@ -114,13 +114,6 @@ const DASHBOARDS = [
             'can see how long you will typically wait for results and how well dynamic ' +
             'chunking is balancing work across chunks.' },
 
-    { file: 'reviewbot.html', tier: 1, title: 'Reviewbot CI Timing',
-      desc: 'End-to-end timing and volume of Reviewbot CI pushes on mozilla-try.',
-      long: 'Per-push end-to-end duration, per-task pending and running times, and daily ' +
-            'task/push volumes for the Reviewbot CI pipeline on mozilla-try. Use it to ' +
-            'track how long reviewbot pushes take end-to-end, spot deadline-exceeded ' +
-            'pushes, and understand which task kinds dominate the pipeline.' },
-
     // --- Tier 2: less frequently used (not yet promoted, or older / specialized). help.html only. ---
     { file: 'perma-fails.html', tier: 2, title: 'Perma-Fails',
       desc: 'Tests failing ~100% of the time on a given job configuration.',
@@ -180,6 +173,12 @@ const DASHBOARDS = [
             'rather than per-test trends. Used (with Job Speed) to choose test timeouts: the ' +
             'histogram shape informed the overall default timeout that keeps most tests ' +
             'passing, before Job Speed tuned the per-job-type multipliers.' },
+    { file: 'reviewbot.html', tier: 2, title: 'Reviewbot CI Timing',
+      desc: 'End-to-end timing and volume of Reviewbot CI pushes on mozilla-try.',
+      long: 'Per-push end-to-end duration, per-task pending and running times, and daily ' +
+            'task/push volumes for the Reviewbot CI pipeline on mozilla-try. Use it to ' +
+            'track how long reviewbot pushes take end-to-end, spot deadline-exceeded ' +
+            'pushes, and understand which task kinds dominate the pipeline.' },
     { file: 'sp3-noise.html', tier: 2, title: 'Speedometer 3 Noise',
       desc: 'Per-subtest run-to-run noise in the Speedometer 3 benchmark.',
       long: 'Run-to-run measurement noise in the Speedometer 3 benchmark, charting each ' +
