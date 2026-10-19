@@ -16,6 +16,17 @@ let loadVersion = 0;
 const expandedPerformanceGroups = new Set();
 let performanceSort: {key: SortKey; descending: boolean} = { key: 'runtime', descending: true };
 
+let activityTooltipElement: HTMLElement | null = null;
+function activityTooltip() {
+    if (!activityTooltipElement) {
+        activityTooltipElement = document.createElement('div');
+        activityTooltipElement.className = 'activity-tooltip';
+        activityTooltipElement.hidden = true;
+        document.body.appendChild(activityTooltipElement);
+    }
+    return activityTooltipElement;
+}
+
 function performanceActivityGraph(buckets: number[], name: string) {
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
@@ -32,20 +43,24 @@ function performanceActivityGraph(buckets: number[], name: string) {
         line.setAttribute('stroke', '#ddd');
         svg.appendChild(line);
     }
-    buckets.forEach((count, index) => {
-        // Transparent full-height hit targets also give useful tooltips for idle periods.
-        const group = document.createElementNS(ns, 'g');
-        const title = document.createElementNS(ns, 'title');
-        const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-        title.textContent = `${time(index * 5)}–${time((index + 1) * 5)} UTC: peak ${count} running jobs`;
-        group.appendChild(title);
-        for (const [height, fill] of [[36, 'transparent'], [count / peak * 35, 'rgba(0,96,223,0.6)']] as const) {
-            const rect = document.createElementNS(ns, 'rect');
-            for (const [key, value] of Object.entries({ x: index, y: 36 - height, width: 1, height, fill })) rect.setAttribute(key, String(value));
-            group.appendChild(rect);
-        }
-        svg.appendChild(group);
+    // One path for all buckets and one shared tooltip: a node per bucket made
+    // each row over a thousand elements.
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', buckets.map((count, index) => count ?
+        `M${index} 36V${36 - count / peak * 35}h1V36z` : '').join(''));
+    path.setAttribute('fill', 'rgba(0,96,223,0.6)');
+    svg.appendChild(path);
+    const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    svg.addEventListener('mousemove', event => {
+        const rect = svg.getBoundingClientRect();
+        const index = Math.min(buckets.length - 1, Math.max(0, Math.floor((event.clientX - rect.left) / rect.width * buckets.length)));
+        const tooltip = activityTooltip();
+        tooltip.textContent = `${time(index * 5)}–${time((index + 1) * 5)} UTC: peak ${buckets[index]} running jobs`;
+        tooltip.hidden = false;
+        tooltip.style.left = `${Math.min(event.clientX + 12, window.innerWidth - tooltip.offsetWidth - 8)}px`;
+        tooltip.style.top = `${event.clientY + 16}px`;
     });
+    svg.addEventListener('mouseleave', () => { activityTooltip().hidden = true; });
     return svg;
 }
 
@@ -192,6 +207,7 @@ function performanceTable(groups: PerformanceGroup[], heading: string, total: nu
 }
 
 function clearPerformanceResults() {
+    if (activityTooltipElement) activityTooltipElement.hidden = true;
     const results = element<HTMLElement>('results');
     clearPerformanceAlertCells();
     results.replaceChildren();
