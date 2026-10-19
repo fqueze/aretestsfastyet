@@ -1,5 +1,5 @@
 import type { PerformanceRun } from './performance-view.ts';
-import { errorMessage } from './performance-dom.ts';
+import { element, errorMessage } from './performance-dom.ts';
 
 interface BugMapping {
     repository: string; job_label: string; regression_bug_ids: number[];
@@ -47,20 +47,47 @@ export function countPerformanceAlerts(runs: Pick<PerformanceRun, 'project' | 'l
     }
     return { bugIds: [...ids].sort((a, b) => a - b), total: ids.size, mapped, configurations: keys.size };
 }
+// Every job label (in any repository) each bug is linked to, built once per index.
+const bugLabelsCache = new WeakMap<MappingIndex, Map<number, Set<string>>>();
+function bugLabels(index: MappingIndex) {
+    let labels = bugLabelsCache.get(index);
+    if (!labels) {
+        labels = new Map();
+        for (const mapping of index.values()) {
+            for (const id of mapping.regression_bug_ids) {
+                if (!labels.has(id)) labels.set(id, new Set());
+                labels.get(id)!.add(mapping.job_label);
+            }
+        }
+        bugLabelsCache.set(index, labels);
+    }
+    return labels;
+}
+
+// Bugs that no job outside these runs' labels is linked to.
+export function exclusivePerformanceBugs(runs: Pick<PerformanceRun, 'label'>[], bugIds: number[], index: MappingIndex) {
+    const own = new Set(runs.map(run => run.label));
+    const labels = bugLabels(index);
+    return bugIds.filter(id => [...labels.get(id) ?? []].every(label => own.has(label)));
+}
+
 export const performanceAlertsState: {
     status: 'loading' | 'ready' | 'error'; index: MappingIndex | null;
     error: string; windowStart: string; generatedAt: string;
 } = { status: 'loading', index: null, error: '', windowStart: '', generatedAt: '' };
-export const performanceAlertCells: { runs: PerformanceRun[]; totalCell: HTMLTableCellElement }[] = [];
+export const performanceAlertCells: { runs: PerformanceRun[]; totalCell: HTMLTableCellElement; runtimeShare: number }[] = [];
+// The runs of the selected pool and project, the denominator of each bug share.
+export const performanceAlertPoolRuns: PerformanceRun[] = [];
 export function clearPerformanceAlertCells() { performanceAlertCells.length = 0; }
 
 const BUG_RESOLUTIONS = [
-    ['Fixed', '#2a78d6'], ["Won’t fix", '#eb6834'], ['Invalid', '#1baf7a'],
-    ['Duplicate', '#eda100'], ['Works for me', '#4a3aa7'], ['Other', '#e87ba4'],
-    ['Open', '#008300'], ['Unknown', '#c5c5c5'],
+    ['Fixed', '#2e9e44'], ["Won’t fix", '#eb6834'], ['Invalid', '#d7264c'],
+    ['Duplicate', '#9b6bd6'], ['Works for me', '#e3b505'], ['Other', '#e87ba4'],
+    ['Open', '#2a78d6'], ['Unknown', '#c5c5c5'],
 ] as const;
 type Resolution = typeof BUG_RESOLUTIONS[number][0];
 const bugResolutions = new Map<number, Resolution>();
+let hideOpenTooltip: (() => void) | null = null;
 
 function bugResolution(bug: Bug): Resolution {
     if (!bug || typeof bug.resolution !== 'string') return 'Unknown';
@@ -87,8 +114,27 @@ async function loadBugResolutions(url: string) {
     }
 }
 
+// A bug count linking to those bugs in Bugzilla; a plain 0 when there are none.
+function bugListLink(ids: number[]): Node {
+    if (!ids.length) return document.createTextNode('0');
+    const link = document.createElement('a');
+    link.textContent = ids.length.toLocaleString();
+    const url = new URL('https://bugzilla.mozilla.org/buglist.cgi');
+    url.searchParams.set('bug_id', ids.join(','));
+    link.href = url.href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    return link;
+}
+
 export function updatePerformanceAlertCells() {
-    for (const { runs, totalCell } of performanceAlertCells) {
+    const isFixed = (id: number) => bugResolutions.get(id) === 'Fixed';
+    const poolBugs = performanceAlertsState.index && performanceAlertCells.length
+        ? countPerformanceAlerts(performanceAlertPoolRuns, performanceAlertsState.index).bugIds : [];
+    const bugTotal = poolBugs.length;
+    const fixedTotal = poolBugs.filter(isFixed).length;
+    const percent = (part: number, whole: number) => `${whole ? (100 * part / whole).toFixed(1) : '0.0'}%`;
+    for (const { runs, totalCell, runtimeShare } of performanceAlertCells) {
         if (performanceAlertsState.status !== 'ready') {
             totalCell.textContent = performanceAlertsState.status === 'loading' ? '…' : '—';
             totalCell.title = performanceAlertsState.status === 'loading' ? 'Loading bugs' : performanceAlertsState.error;
@@ -113,28 +159,39 @@ export function updatePerformanceAlertCells() {
         const popup = document.createElement('div');
         popup.className = 'resolution-tooltip';
         popup.hidden = true;
+        const fixedIds = counts.bugIds.filter(isFixed);
+        const fixed = fixedIds.length;
+        const exclusive = exclusivePerformanceBugs(runs, counts.bugIds, performanceAlertsState.index!);
+        const summary = document.createElement('div');
+        summary.className = 'resolution-summary';
+        for (const parts of [
+            [`Runtime share on ${element<HTMLSelectElement>('date').value}: ${runtimeShare.toFixed(1)}%`],
+            ['Bugs from alerts in the past 365 days: ', bugListLink(counts.bugIds), ` of ${bugTotal.toLocaleString()} (${percent(counts.total, bugTotal)})`],
+            ['Fixed bugs: ', bugListLink(fixedIds), ` of ${fixedTotal.toLocaleString()} (${percent(fixed, fixedTotal)})`],
+            ['Only found by this test: ', bugListLink(exclusive), ' (', bugListLink(exclusive.filter(isFixed)), ' fixed)'],
+        ]) {
+            const line = document.createElement('div');
+            line.append(...parts);
+            summary.appendChild(line);
+        }
+        popup.appendChild(summary);
         for (const [name, color] of BUG_RESOLUTIONS) {
             const ids = counts.bugIds.filter(id => (bugResolutions.get(id) || 'Unknown') === name);
+            if (!ids.length) continue;
             const line = document.createElement('div');
             const swatch = document.createElement('span');
             swatch.className = 'resolution-swatch';
             swatch.style.backgroundColor = color;
             const text = document.createElement('span');
             text.textContent = `${name}: `;
-            const number = document.createElement('a');
-            number.textContent = String(ids.length);
-            if (ids.length) {
-                const url = new URL('https://bugzilla.mozilla.org/buglist.cgi');
-                url.searchParams.set('bug_id', ids.join(','));
-                number.href = url.href;
-                number.target = '_blank';
-                number.rel = 'noopener noreferrer';
-                number.setAttribute('aria-label', `${name}: ${ids.length} bugs`);
-            }
-            line.append(swatch, text, number);
+            line.append(swatch, text, bugListLink(ids));
+            if (name === 'Fixed') line.append(` (${percent(fixed, counts.total)})`);
             popup.appendChild(line);
         }
         const show = () => {
+            // A mouseleave can be missed while the window is inactive.
+            if (hideOpenTooltip !== hide) hideOpenTooltip?.();
+            hideOpenTooltip = hide;
             popup.hidden = false;
             const rect = trigger.getBoundingClientRect();
             popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8))}px`;

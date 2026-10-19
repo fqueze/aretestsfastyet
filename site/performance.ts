@@ -2,7 +2,7 @@ import { decodePerformanceTasks, performanceAggregate, performanceGroups, perfor
     performanceProfilerSeries, performanceGroupName, performanceMarkerSearch, sortPerformanceGroups,
     type PerformanceRun, type PerformanceGroup, type WorkerData, type ProfileTask } from './performance-view.ts';
 import { performanceAlertsState, countPerformanceAlerts, performanceAlertCells,
-    clearPerformanceAlertCells, updatePerformanceAlertCells, loadPerformanceAlerts } from './performance-alerts.ts';
+    clearPerformanceAlertCells, updatePerformanceAlertCells, performanceAlertPoolRuns, loadPerformanceAlerts } from './performance-alerts.ts';
 import { element, errorMessage } from './performance-dom.ts';
 
 declare function fetchFromCI(indexName: string, filename: string): Promise<Response>;
@@ -64,6 +64,24 @@ function performanceActivityGraph(buckets: number[], name: string) {
     return svg;
 }
 
+function shareChart(share: number, label: string) {
+    const chart = document.createElement('div');
+    chart.className = 'runtime-chart';
+    chart.setAttribute('aria-label', label);
+    const track = document.createElement('span');
+    track.className = 'runtime-track';
+    track.setAttribute('aria-hidden', 'true');
+    const bar = document.createElement('span');
+    bar.className = 'runtime-bar';
+    bar.style.width = `${share}%`;
+    track.appendChild(bar);
+    const percentage = document.createElement('span');
+    percentage.className = 'runtime-percentage';
+    percentage.textContent = `${share.toFixed(1)}%`;
+    chart.append(track, percentage);
+    return chart;
+}
+
 function groupBugCount(group: PerformanceGroup): number | null {
     if (!performanceAlertsState.index) return null;
     const counts = countPerformanceAlerts(group.intervals, performanceAlertsState.index);
@@ -76,7 +94,7 @@ function performanceTable(groups: PerformanceGroup[], heading: string, total: nu
     const table = document.createElement('table');
     table.className = 'pool-table';
     const head = table.createTHead().insertRow();
-    for (const [label, key] of [[heading, 'name'], ['Runtime share', 'runtime'], ['Runs', 'runs'], ['Resolutions', 'alerts'], ['Peak running', 'peak'], ['Activity (UTC)', null]] as const) {
+    for (const [label, key] of [[heading, 'name'], ['Runtime share', 'runtime'], ['Bugs found', 'alerts'], ['Runs', 'runs'], ['Peak running', 'peak'], ['Activity (UTC)', null]] as const) {
         const th = document.createElement('th');
         th.scope = 'col';
         if (label !== heading && label !== 'Activity (UTC)') th.className = 'num';
@@ -145,27 +163,13 @@ function performanceTable(groups: PerformanceGroup[], heading: string, total: nu
         const runtime = row.insertCell();
         runtime.className = 'runtime-cell';
         runtime.title = `${hours} worker-hours`;
-        const runtimeChart = document.createElement('div');
-        runtimeChart.className = 'runtime-chart';
-        runtimeChart.setAttribute('aria-label', `${share.toFixed(1)}% of runtime, ${hours} worker-hours`);
-        const track = document.createElement('span');
-        track.className = 'runtime-track';
-        track.setAttribute('aria-hidden', 'true');
-        const bar = document.createElement('span');
-        bar.className = 'runtime-bar';
-        bar.style.width = `${share}%`;
-        track.appendChild(bar);
-        const percentage = document.createElement('span');
-        percentage.className = 'runtime-percentage';
-        percentage.textContent = `${share.toFixed(1)}%`;
-        runtimeChart.append(track, percentage);
-        runtime.appendChild(runtimeChart);
+        runtime.appendChild(shareChart(share, `${share.toFixed(1)}% of runtime, ${hours} worker-hours`));
+        const totalCell = row.insertCell();
+        totalCell.className = 'resolution-cell';
+        performanceAlertCells.push({ runs: group.intervals, totalCell, runtimeShare: share });
         const runs = row.insertCell();
         runs.className = 'num';
         runs.textContent = group.runs.toLocaleString();
-        const totalCell = row.insertCell();
-        totalCell.className = 'resolution-cell';
-        performanceAlertCells.push({ runs: group.intervals, totalCell });
         const buckets = performanceActivity(group.intervals, dayStart);
         const peak = row.insertCell();
         peak.className = 'num';
@@ -254,6 +258,7 @@ function renderPerformance() {
     element<HTMLElement>('summary-hours').textContent = (total / 3600000).toLocaleString(undefined, { maximumFractionDigits: 2 });
     element<HTMLElement>('status').textContent = rows.length ? '' : query ? 'No tests match your search.' : 'No performance-test runs for this date and project.';
     if (!rows.length) return;
+    performanceAlertPoolRuns.splice(0, Infinity, ...poolRows);
     results.appendChild(performanceTable(groups, 'Job configuration', poolRows.reduce((sum, row) => sum + row.milliseconds, 0)));
 }
 
