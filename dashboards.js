@@ -98,12 +98,6 @@ const DASHBOARDS = [
       long: 'Utilization of the CI worker pools over time — how fully each pool’s capacity ' +
             'is being used. Useful for spotting pools that are saturated (a source of queue ' +
             'and wait delays) or, conversely, over-provisioned.' },
-    { file: 'performance-tests.html', tier: 1, title: 'Performance Test Time', featured: true,
-      desc: 'Worker-hours spent on performance tests, by worker pool and job configuration.',
-      long: 'Daily worker time for Browsertime, Raptor, Talos, AWSY, mozperftest and ' +
-            'Mochitest Speedometer jobs, grouped by worker pool and job configuration. ' +
-            'Choose a worker pool, UTC date and project to see which tests consume the most worker-hours. ' +
-            'Includes failed runs and retries, with time clipped to the selected day.' },
     { file: 'builds.html', tier: 1, title: 'Build Times', featured: true,
       desc: 'Firefox build job durations by platform.',
       long: 'Firefox build-job durations over time, broken down by platform and build type, ' +
@@ -194,6 +188,12 @@ const DASHBOARDS = [
       desc: 'Profiler overhead on Speedometer 3, for the profiler team.',
       long: 'Measures the overhead the Firefox profiler adds to Speedometer 3 runs, meant ' +
             'for the profiler team to benchmark the profiler.' },
+    { file: 'performance-tests.html', tier: 2, title: 'Performance Test Time',
+      desc: 'Worker-hours spent on performance tests, by worker pool and job configuration.',
+      long: 'Daily worker time for Browsertime, Raptor, Talos, AWSY, mozperftest and ' +
+            'Mochitest Speedometer jobs, grouped by worker pool and job configuration. ' +
+            'Choose a worker pool, UTC date and project to see which tests consume the most worker-hours. ' +
+            'Includes failed runs and retries, with time clipped to the selected day.' },
 ];
 
 // Basename of the page currently being viewed (e.g. "errors.html").

@@ -8,7 +8,10 @@ interface BugMapping {
 type MappingIndex = Map<string, BugMapping>;
 interface Bug { id: number; resolution?: string | null }
 interface QueryResult<T> { query_result?: { data?: { rows?: T[] } } }
-interface SourceConfig { results_url: string; resolutions_results_url: string }
+// STMO query 127887: regression bug IDs per job label and repository.
+const BUG_MAPPING_URL = 'https://sql.telemetry.mozilla.org/api/queries/127887/results.json?api_key=NwMRBaDDKmfnCcnXmcZbJt0Bw8haOT9USrTFat3f';
+// STMO query 128286: Bugzilla resolutions of perf-alert bugs.
+const RESOLUTIONS_URL = 'https://sql.telemetry.mozilla.org/api/queries/128286/results.json?api_key=6QHGJletDNYiwIl8M0F1fN3GhZynhqFnb1Z0MZ8D';
 
 export function indexPerformanceAlerts(rows: unknown): MappingIndex {
     if (!Array.isArray(rows) || !rows.length) throw new Error('Bug results are empty');
@@ -170,10 +173,7 @@ export async function loadPerformanceAlerts(onReady: () => void) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
     try {
-        const configResponse = await fetch('./performance-alerts-source.json', { signal: controller.signal });
-        if (!configResponse.ok) throw new Error(`Alert configuration: HTTP ${configResponse.status}`);
-        const config = await configResponse.json() as SourceConfig;
-        const response = await fetch(config.results_url, { signal: controller.signal });
+        const response = await fetch(BUG_MAPPING_URL, { signal: controller.signal });
         if (!response.ok) throw new Error(`Alert results: HTTP ${response.status}`);
         const result = await response.json() as QueryResult<unknown>;
         const rows = result.query_result?.data?.rows;
@@ -181,7 +181,7 @@ export async function loadPerformanceAlerts(onReady: () => void) {
         performanceAlertsState.status = 'ready';
         performanceAlertsState.windowStart = performanceAlertsState.index.values().next().value!.window_start;
         performanceAlertsState.generatedAt = performanceAlertsState.index.values().next().value!.generated_at;
-        loadBugResolutions(config.resolutions_results_url);
+        loadBugResolutions(RESOLUTIONS_URL);
     } catch (error) {
         performanceAlertsState.status = 'error';
         performanceAlertsState.error = `Bug counts unavailable: ${errorMessage(error)}`;
