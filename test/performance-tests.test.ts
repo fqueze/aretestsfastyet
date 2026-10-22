@@ -186,3 +186,114 @@ test('column sorting orders numeric values and names while leaving unknown bug c
     assert.deepEqual(names('alerts', true), ['*opt-talos-z*', '*opt-talos-a*']);
     assert.deepEqual(names('alerts', false), ['*opt-talos-z*', '*opt-talos-a*']);
 });
+
+const { indexPerformanceBugResults } = await import('../site/performance-regressions.ts');
+const bugRow = (ids: number[], resolution = 'FIXED', label = 'test-linux/opt-browsertime-tp6') => ({
+    repository: 'autoland', job_label: label, resolution, bug_count: ids.length, bug_ids: JSON.stringify(ids),
+});
+
+test('cached bug rows merge resolutions and retain IDs for cross-job deduplication', () => {
+    const { index, resolutions } = indexPerformanceBugResults([
+        bugRow([42, 43]), bugRow([44], 'DUPLICATE'), bugRow([42], 'FIXED', 'test-macos/opt-browsertime-tp6'),
+        bugRow([45], ''),
+    ]);
+    assert.deepEqual([...index.values()].map(row => row.regression_bug_ids), [[42, 43, 44, 45], [42]]);
+    assert.equal(resolutions.size, 4);
+    assert.equal(resolutions.get(44), 'DUPLICATE');
+    assert.equal(resolutions.get(45), '');
+    assert.equal(indexPerformanceBugResults([]).index.size, 0);
+});
+
+test('malformed cached results fail instead of displaying misleading bug counts', () => {
+    for (const rows of [undefined, {}, [null], [bugRow([0])], [bugRow([42, 42])],
+        [{ ...bugRow([42]), bug_count: 2 }], [{ ...bugRow([42]), bug_ids: 'invalid JSON' }],
+        [{ ...bugRow([42]), resolution: null }], [bugRow([42]), bugRow([42], 'WONTFIX')]]) {
+        assert.throws(() => indexPerformanceBugResults(rows));
+    }
+});
+
+const loaderBundle = await build({
+    stdin: { contents: "export * from './site/performance-data.ts';", resolveDir: process.cwd() },
+    bundle: true, write: false, format: 'iife', globalName: 'performanceData', platform: 'browser',
+});
+Object.assign(context, { AbortController, TextDecoder, setTimeout, clearTimeout });
+vm.runInContext(loaderBundle.outputFiles[0]!.text, context);
+
+test('day cache avoids repeat downloads and decoding, including after a reload', async () => {
+    const stored = new Map();
+    let requests = 0;
+    let decodes = 0;
+    const create = () => context.performanceData.createPerformanceDataLoader(
+        (_data: unknown, date: string) => { decodes++; return [{ date }]; },
+        async (key: string) => stored.get(key),
+        async (key: string, rows: unknown) => { stored.set(key, rows); },
+        async () => { requests++; return new Response('{}'); },
+    );
+    const load = create();
+    const a = await load('https://example.org/run1/a.json', '2026-10-20', () => {});
+    await load('https://example.org/run1/b.json', '2026-10-19', () => {});
+    assert.equal(await load('https://example.org/run1/a.json', '2026-10-20', () => {}), a);
+    assert.equal(await create()('https://example.org/run1/a.json', '2026-10-20', () => {}), a);
+    assert.equal(requests, 2);
+    assert.equal(decodes, 2);
+    // Regenerated artifacts for the same date must invalidate the cache.
+    await load('https://example.org/run2/a.json', '2026-10-20', () => {});
+    assert.equal(requests, 3);
+});
+
+test('switching days cancels the obsolete request and does not cache it', async () => {
+    let oldSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const firstStarted = new Promise<void>(resolve => { started = resolve; });
+    const saved: string[] = [];
+    const load = context.performanceData.createPerformanceDataLoader(
+        () => [], async () => undefined, async (key: string) => { saved.push(key); },
+        async (url: string, { signal }: { signal: AbortSignal }) => {
+            if (url.endsWith('b.json')) return new Response('{}');
+            oldSignal = signal;
+            started();
+            return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+        },
+    );
+    const a = load('https://example.org/a.json', '2026-10-20', () => {});
+    const cancelled = assert.rejects(a, { name: 'AbortError' });
+    await firstStarted;
+    await load('https://example.org/b.json', '2026-10-19', () => {});
+    await cancelled;
+    assert.equal(oldSignal?.aborted, true);
+    assert.deepEqual(saved, ['https://example.org/b.json#2026-10-19']);
+});
+
+const alertsBundle = await build({
+    stdin: { contents: "export * from './site/performance-alerts.ts';", resolveDir: process.cwd() },
+    bundle: true, write: false, format: 'iife', globalName: 'performanceAlerts', platform: 'browser',
+});
+
+test('bug loader uses one cached result and rejects stale or missing refresh timestamps', async () => {
+    for (const hours of [1, 47, 49, null]) {
+        const requests: string[] = [];
+        const sandbox = vm.createContext({ AbortController, setTimeout, clearTimeout,
+            fetch: async (url: string) => {
+                requests.push(url);
+                return new Response(JSON.stringify({ query_result: {
+                    retrieved_at: hours === null ? undefined : new Date(Date.now() - hours * 3600000).toISOString(),
+                    data: { rows: [bugRow([42])] },
+                } }));
+            },
+        });
+        vm.runInContext(alertsBundle.outputFiles[0]!.text, sandbox);
+        let completed = false;
+        await sandbox.performanceAlerts.loadPerformanceAlerts(() => { completed = true; });
+        assert.equal(completed, true);
+        assert.equal(requests.length, 1);
+        assert.equal(new URL(requests[0]!).hostname, 'sql.telemetry.mozilla.org');
+        const state = sandbox.performanceAlerts.performanceAlertsState;
+        assert.equal(state.status, hours !== null && hours < 48 ? 'ready' : 'error');
+        if (state.status === 'error') {
+            assert.match(state.error, /stale/);
+            assert.equal(state.index, null);
+        } else {
+            assert.equal(state.index.size, 1);
+        }
+    }
+});

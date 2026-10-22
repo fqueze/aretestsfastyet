@@ -1,9 +1,10 @@
-import { decodePerformanceTasks, performanceAggregate, performanceGroups, performanceActivity,
+import { performanceAggregate, performanceGroups, performanceActivity,
     performanceProfilerSeries, performanceGroupName, performanceMarkerSearch, sortPerformanceGroups,
-    type PerformanceRun, type PerformanceGroup, type WorkerData, type ProfileTask } from './performance-view.ts';
+    type PerformanceRun, type PerformanceGroup, type ProfileTask } from './performance-view.ts';
 import { performanceAlertsState, countPerformanceAlerts, performanceAlertCells,
     clearPerformanceAlertCells, updatePerformanceAlertCells, performanceAlertPoolRuns, loadPerformanceAlerts } from './performance-alerts.ts';
 import { element, errorMessage } from './performance-dom.ts';
+import { createPerformanceDataLoader } from './performance-data.ts';
 
 declare function fetchFromCI(indexName: string, filename: string): Promise<Response>;
 declare function openTaskTimelineInProfiler(tasks: (ProfileTask & {aggregate: string})[], title: string,
@@ -13,6 +14,8 @@ interface TableGroup extends PerformanceGroup { key?: string; parent?: boolean; 
 type SortKey = 'name' | 'runtime' | 'runs' | 'alerts' | 'peak';
 let performanceRows: PerformanceRun[] = [];
 let loadVersion = 0;
+let taskArtifactBase = '';
+const loadTaskRows = createPerformanceDataLoader();
 const expandedPerformanceGroups = new Set();
 let performanceSort: {key: SortKey; descending: boolean} = { key: 'runtime', descending: true };
 
@@ -99,7 +102,7 @@ function performanceTable(groups: PerformanceGroup[], heading: string, total: nu
         th.scope = 'col';
         if (label !== heading && label !== 'Activity (UTC)') th.className = 'num';
         if (label === 'Activity (UTC)') th.title = 'Peak running jobs in five-minute buckets; each row is scaled to its own peak.';
-        if (key === 'alerts') th.title = 'Number of distinct bugs linked to regression alerts created for this test in the past 365 days.';
+        if (key === 'alerts') th.title = 'Number of distinct bugs created in the cached 365-day window whose regression tables include this test.';
 
         if (key) {
             th.setAttribute('aria-sort', performanceSort.key === key ? (performanceSort.descending ? 'descending' : 'ascending') : 'none');
@@ -274,11 +277,18 @@ async function loadPerformanceDate() {
     element<HTMLElement>('error').style.display = 'none';
     element<HTMLElement>('status').textContent = `Loading task data for ${date}…`;
     try {
-        const response = await fetchFromCI('worker-data', `workers-${date}-tasks.json`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json() as WorkerData;
+        const rows = await loadTaskRows(new URL(`workers-${date}-tasks.json`, taskArtifactBase).href, date, (text, downloading) => {
+            if (version !== loadVersion) return;
+            const status = element<HTMLElement>('status');
+            status.textContent = text;
+            if (downloading) {
+                const progress = document.createElement('progress');
+                progress.setAttribute('aria-label', 'Downloading task data');
+                status.append(progress);
+            }
+        });
         if (version !== loadVersion) return;
-        performanceRows = decodePerformanceTasks(data, date);
+        performanceRows = rows;
         const previous = project.value || new URLSearchParams(location.search).get('project') || '';
         project.replaceChildren(new Option('All projects', ''));
         [...new Set(performanceRows.map(row => row.project))].sort()
@@ -309,6 +319,7 @@ export async function start() {
     try {
         const response = await fetchFromCI('worker-data', 'index.json');
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        taskArtifactBase = new URL('.', response.url).href;
         const index = await response.json() as {dates?: string[]};
         const dates = [...new Set(index.dates || [])].sort().reverse();
         if (!dates.length) throw new Error('No dates available');
