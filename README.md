@@ -74,12 +74,12 @@ index at runtime — there is no server. The data is produced by
 in mozilla-central, which queries Firefox CI and writes the compact,
 table-encoded JSON files the dashboards consume.
 
-The repository holds the pages in three places:
+The repository holds the pages in two places:
 
 - **the root** — the 17 pages that have not been migrated, plus `docs.html`.
   **These have no build step**: they are served exactly as they appear in the
   tree, and editing a page and reloading it is the whole loop.
-- **[`site/`](site/)** — the 9 pages that have been migrated onto the shared
+- **[`site/`](site/)** — the pages that have been migrated onto the shared
   library in `lib/`, so that they can `import` typed and tested code instead of
   carrying another copy of it inline. `npm run pages` builds them into
   self-contained HTML in `dist-site/` (gitignored), one file per page with its
@@ -90,8 +90,6 @@ The repository holds the pages in three places:
   the tree: its entry point is a `.ts` file, which a server labels
   `video/mp2t`, so the browser refuses the module outright. Editing one means
   re-running `npm run pages` and loading the built copy from `dist-site/`.
-- **`old/`** — the 9 superseded root pages the migrated ones replace, kept for
-  comparison until the new ones have been trusted.
 
 The command-line tool below shares that toolchain — TypeScript, a bundler and a
 test suite — across `cli/`, `lib/`, `test/` and `tools/`. See

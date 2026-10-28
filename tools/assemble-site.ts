@@ -1,25 +1,9 @@
 /**
  * Assembles the publishable site out of the built pages and the repository.
  *
- * `npm run pages` builds the nine migrated pages in `site/` and copies the
- * assets *they* reference. That is not the site: seventeen pages were never
- * migrated, and the nine they replace are kept under `old/` as an escape hatch.
- * This step merges the three into one tree — see `docs/DEPLOY.md` §2.
- *
- * ## The layout, and why it is not the repository's layout
- *
- * | | repository | published |
- * | --- | --- | --- |
- * | root | 17 unmigrated | 9 built + 17 unmigrated |
- * | `old/` | 9 superseded | all 26 + assets + data |
- *
- * The divergence is deliberate and it is the one thing here that is easy to get
- * wrong. Every inter-page link on this site is **relative** — `dashboards.js`
- * is a flat list of bare filenames, and `old/index.html` links `green.html`
- * directly in its markup. So a page served from `old/` links to `old/`. If
- * `old/` held only the nine superseded pages, every link from one of them to an
- * unmigrated page would 404. The seventeen are therefore published twice, once
- * at each root, and the two trees are each self-consistent.
+ * `npm run pages` builds the migrated pages in `site/` and copies the assets
+ * *they* reference. That is not the site: the other pages were never migrated.
+ * This step merges the two into one tree — see `docs/DEPLOY.md` §2.
  *
  * ## Why the file lists are derived and not written down
  *
@@ -29,14 +13,13 @@
  *
  * - the unmigrated pages are *whatever `*.html` is at the repository root* —
  *   which is exactly the unmigrated set, because migrating a page moves it into
- *   `site/` and superseding one moves it into `old/`. That invariant is the
+ *   `site/`. That invariant is the
  *   assumption this rests on, and `checkArtifact` re-derives the counts from
  *   the same directories rather than comparing against a number.
  * - the assets are found by `findSiblingAssets`, the scanner the page build
- *   already uses, run over the unmigrated and superseded pages. Their set is
- *   *not* the built pages' set — the old pages need `common-charts.js` and
- *   `common-data-view.css`, the unmigrated ones need `favicon-screenshots.svg`,
- *   and `tools/build-pages.ts` copies none of the three.
+ *   already uses, run over the unmigrated pages. Their set is *not* the built
+ *   pages' set — the unmigrated ones need `favicon-screenshots.svg` and
+ *   `common-test-data.js`, which `tools/build-pages.ts` does not copy.
  *
  * ## Why it fails loudly rather than publishing what it managed to copy
  *
@@ -55,15 +38,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { findSiblingAssets } from './page-assets.ts';
-
-/**
- * Where the superseded pages live, and the name they are published under.
- *
- * One constant because the two are the same by design: `old/` in the tree is
- * republished as `old/` so that the URLs a reader has open today keep working
- * once the migrated pages take the canonical names.
- */
-export const OLD_DIR = 'old';
 
 /**
  * Committed files a page fetches by relative path but no scanner can see.
@@ -99,9 +73,7 @@ interface Reference {
  *
  * Deliberately broader than `findSiblingAssets`, which answers "what does the
  * build copy" and so ignores `.html`. This answers "what would 404", which
- * includes the page links — `old/index.html` links `green.html` in its markup,
- * and that reference resolving inside `old/` is the whole reason the unmigrated
- * pages are copied there.
+ * includes the page links.
  *
  * Skipped, because none of them name a file in the artifact: absolute URLs and
  * protocol-relative ones, anchors and bare queries, `data:` URIs, and anything
@@ -118,8 +90,7 @@ const REFERENCE = /(?:src|href)="([^"]+)"/g;
  * `fetch('./mochitest-stats-backfill.json')`, so a check that reads only
  * `src=` and `href=` calls the artifact complete with the file absent, and the
  * page quietly draws six months less history. Both `./name` and a bare `name`
- * are matched — the old pages use the first, and a scanner that insisted on the
- * prefix would go blind the day one of them drops it.
+ * are matched, so a page dropping the prefix does not blind the scanner.
  */
 const FETCHED = /fetch\(\s*(["'`])(\.\/)?([\w.-]+\.(?:json|md|js|css|svg))\1\s*\)/g;
 
@@ -127,10 +98,10 @@ const FETCHED = /fetch\(\s*(["'`])(\.\/)?([\w.-]+\.(?:json|md|js|css|svg))\1\s*\
  * Files a page asks the server for that this check knows may be absent.
  *
  * One entry, and it is not a workaround: no xpcshell backfill has ever existed,
- * because only the mochitest history needed repairing. `old/index.html` fetches
- * it anyway and handles the 404, which is the behaviour the migrated page
- * declares with a `build-optional` marker. The old pages have no such marker,
- * so the exemption is named here.
+ * because only the mochitest history needed repairing. The built `index.html`
+ * fetches it anyway and handles the 404, which `site/index.ts` declares with a
+ * `build-optional` marker. This check reads built pages, not their sources, so
+ * the exemption is named here.
  */
 const MAY_BE_ABSENT = new Set(['xpcshell-stats-backfill.json']);
 
@@ -160,9 +131,7 @@ export interface Assembly {
     built: string[];
     /** Unmigrated pages copied from the repository root. */
     unmigrated: string[];
-    /** Superseded pages copied from `old/`. */
-    superseded: string[];
-    /** Shared assets and committed data copied into both trees. */
+    /** Shared assets and committed data copied beside them. */
     assets: string[];
 }
 
@@ -178,33 +147,12 @@ async function pagesIn(dir: string, what: string): Promise<string[]> {
     return pages;
 }
 
-/**
- * The shared files the unmigrated and superseded pages need beside them.
- *
- * Run over both sets at once and unioned, rather than derived per tree. The
- * union is what both trees get: it is about 128 kB, and deriving each tree's
- * set separately would be more precise in a way that fails silently the first
- * time a page starts using an asset the other tree already had.
- *
- * `required: false` entries are dropped. There is one today —
- * `old/index.html` fetches `xpcshell-stats-backfill.json`, which has never
- * existed; only mochitest lost the history that needed repairing. The
- * `build-optional` marker for it lives in `site/index.ts`, which this scan does
- * not read, so the exemption is read from there explicitly.
- */
+/** The shared files the unmigrated pages need beside them. */
 async function findSharedAssets(root: string, pages: readonly string[]): Promise<string[]> {
-    // The markers live in the migrated sources, which is where a human writes
-    // them; the unmigrated pages are frozen and will never grow one.
-    const markerSources = await Promise.all(
-        (await readdir(join(root, 'site')))
-            .filter((name) => name.endsWith('.ts'))
-            .map((name) => readFile(join(root, 'site', name), 'utf8'))
-    );
-
     const assets = new Set<string>();
     for (const page of pages) {
         const html = await readFile(join(root, page), 'utf8');
-        for (const asset of findSiblingAssets(html, markerSources)) {
+        for (const asset of findSiblingAssets(html)) {
             if (asset.required) assets.add(asset.name);
         }
     }
@@ -220,7 +168,7 @@ async function copy(from: string, to: string): Promise<void> {
 }
 
 /**
- * Merges the built pages, the unmigrated pages and `old/` into `outDir`.
+ * Merges the built pages and the unmigrated pages into `outDir`.
  *
  * `outDir` is expected to already hold the output of `npm run pages` and to
  * hold nothing else — see the note on freshness in `docs/DEPLOY.md` §2. This
@@ -230,38 +178,19 @@ async function copy(from: string, to: string): Promise<void> {
 export async function assemble(root: string, outDir: string): Promise<Assembly> {
     const built = await pagesIn(outDir, 'built pages');
     // The root's `*.html` are exactly the unmigrated pages: migrating one moves
-    // its source into `site/` and its previous implementation into `old/`, so
-    // nothing that has been migrated is left here.
+    // its source into `site/`, so nothing that has been migrated is left here.
     const unmigrated = await pagesIn(root, 'unmigrated pages');
-    const superseded = await pagesIn(join(root, OLD_DIR), 'superseded pages');
 
-    const assets = [
-        ...(await findSharedAssets(root, [
-            ...unmigrated,
-            ...superseded.map((name) => join(OLD_DIR, name)),
-        ])),
-        ...EXTRA_DATA,
-    ].sort();
-
-    const oldOut = join(outDir, OLD_DIR);
-    await mkdir(oldOut, { recursive: true });
+    const assets = [...(await findSharedAssets(root, unmigrated)), ...EXTRA_DATA].sort();
 
     for (const page of unmigrated) {
-        // Twice: once at the canonical root, once inside `old/` so that the
-        // superseded pages' relative links to it resolve. Neither copy is
-        // redundant — see the layout table at the top of this file.
         await copy(join(root, page), join(outDir, page));
-        await copy(join(root, page), join(oldOut, page));
-    }
-    for (const page of superseded) {
-        await copy(join(root, OLD_DIR, page), join(oldOut, page));
     }
     for (const asset of assets) {
         // The root already has whatever the built pages needed; this adds the
         // ones only the unmigrated pages reference, and overwrites the rest
         // with identical bytes from the same source.
         await copy(join(root, asset), join(outDir, asset));
-        await copy(join(root, asset), join(oldOut, asset));
     }
 
     // Without it Pages runs the tree through Jekyll, which drops files whose
@@ -269,7 +198,7 @@ export async function assemble(root: string, outDir: string): Promise<Assembly> 
     // does is a silent 404.
     await writeFile(join(outDir, '.nojekyll'), '');
 
-    return { built, unmigrated, superseded, assets };
+    return { built, unmigrated, assets };
 }
 
 /**
@@ -286,16 +215,11 @@ export async function checkArtifact(root: string, outDir: string): Promise<strin
 
     const expectedBuilt = (await pagesIn(join(root, 'site'), 'page sources')).length;
     const expectedUnmigrated = (await pagesIn(root, 'unmigrated pages')).length;
-    const expectedSuperseded = (await pagesIn(join(root, OLD_DIR), 'superseded pages')).length;
 
-    // Reported, not thrown: an assembly that never created `old/` at all is the
-    // most complete version of the failure this function exists to catch, and
-    // it should come out as the same kind of message as a partial one.
-    const listPages = async (dir: string): Promise<string[]> =>
-        (await readdir(dir).catch(() => [])).filter((name) => name.endsWith('.html'));
-
-    const rootPages = await listPages(outDir);
-    const oldPages = await listPages(join(outDir, OLD_DIR));
+    // Reported, not thrown: an assembly that copied no pages at all is the most
+    // complete version of the failure this function exists to catch, and it
+    // should come out as the same kind of message as a partial one.
+    const rootPages = (await readdir(outDir).catch(() => [])).filter((name) => name.endsWith('.html'));
 
     const wantRoot = expectedBuilt + expectedUnmigrated;
     if (rootPages.length !== wantRoot) {
@@ -304,19 +228,10 @@ export async function checkArtifact(root: string, outDir: string): Promise<strin
                 `(${expectedBuilt} built from site/ plus ${expectedUnmigrated} unmigrated)`
         );
     }
-    // Every page the site has, because `old/` is a self-contained snapshot.
-    const wantOld = expectedSuperseded + expectedUnmigrated;
-    if (oldPages.length !== wantOld) {
-        problems.push(
-            `${OLD_DIR}/ has ${oldPages.length} pages, expected ${wantOld} ` +
-                `(${expectedSuperseded} superseded plus ${expectedUnmigrated} unmigrated)`
-        );
-    }
 
     // The check that would have caught the backfill bug, stated as a property
     // rather than as a filename: everything every page asks for must be there.
-    const all = [...rootPages, ...oldPages.map((name) => join(OLD_DIR, name))];
-    for (const page of all) {
+    for (const page of rootPages) {
         const html = await readFile(join(outDir, page), 'utf8');
         for (const { target } of findReferences(page, html)) {
             const resolved = join(outDir, dirname(page), target);
@@ -342,11 +257,10 @@ if (isMain) {
     const root = dirname(dirname(fileURLToPath(import.meta.url)));
     const outDir = process.env['FX_SITE_OUT'] ?? join(root, 'dist-site');
 
-    const { built, unmigrated, superseded, assets } = await assemble(root, outDir);
+    const { built, unmigrated, assets } = await assemble(root, outDir);
     console.log(
         `Assembled ${outDir}: ${built.length} built, ${unmigrated.length} unmigrated, ` +
-            `${superseded.length} superseded in ${OLD_DIR}/, ${assets.length} assets ` +
-            `copied into both trees.`
+            `${assets.length} assets.`
     );
 
     const problems = await checkArtifact(root, outDir);

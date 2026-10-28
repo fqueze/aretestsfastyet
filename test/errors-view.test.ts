@@ -217,10 +217,10 @@ const tiny = (): PreparedErrors => prepareErrors(structuredClone(TINY));
 // =========================================================================
 
 test('there are seven marker kinds, not the six the old comment claims', () => {
-    // `old/errors.html:211`'s comment says "The six fixed marker kinds" above a
+    // The old page's comment said "The six fixed marker kinds" above a
     // table of seven. Counted off the markup rather than off the table: the
-    // seven `id="kind-…"` checkboxes at `old/errors.html:184-190`.
-    const markup = readFileSync(new URL('../old/errors.html', import.meta.url), 'utf8');
+    // seven `id="kind-…"` checkboxes in the page's markup.
+    const markup = readFileSync(new URL('../site/errors.html', import.meta.url), 'utf8');
     const ids = [...markup.matchAll(/id="kind-([a-z+-]+)"/g)].map((m) => m[1]!);
     assert.equal(ids.length, 7, 'the markup has seven kind checkboxes');
     assert.deepEqual(ids, [
@@ -240,7 +240,7 @@ test('there are seven marker kinds, not the six the old comment claims', () => {
 });
 
 test('the default view is message, which is the first option and unselected', () => {
-    const markup = readFileSync(new URL('../old/errors.html', import.meta.url), 'utf8');
+    const markup = readFileSync(new URL('../site/errors.html', import.meta.url), 'utf8');
     const select = /<select id="viewSelect"[^>]*>([\s\S]*?)<\/select>/.exec(markup)![1]!;
     const options = [...select.matchAll(/<option value="([a-z]+)"([^>]*)>/g)];
     assert.equal(options[0]![1], 'message', 'message is the first option');

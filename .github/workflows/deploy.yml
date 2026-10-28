@@ -1,9 +1,7 @@
 # Builds the dashboards and publishes them to GitHub Pages on push to `main`.
 #
-# The published site is a *merge*, not a version swap. Nine of the twenty-six
-# pages have been rewritten onto `lib/` and are built from `site/`; the other
-# seventeen were never migrated and are copied verbatim; the nine each migrated
-# page replaces are republished under `old/` as an escape hatch. What goes where
+# The published site is a *merge*: the pages rewritten onto `lib/` are built
+# from `site/`, and the ones never migrated are copied verbatim. What goes where
 # is `tools/assemble-site.ts`, which also refuses to hand over an artifact whose
 # pages reference files that are not in it. See `docs/DEPLOY.md`.
 #
@@ -17,19 +15,13 @@
 # ROLLBACK
 # ---------------------------------------------------------------------------
 #
-# Three options, cheapest first.
+# Two options, cheapest first.
 #
-# 1. **Use `old/` — no deploy at all.** Every superseded page is live right now
-#    at `/old/<page>.html`, and `old/` is a complete self-contained site: its
-#    links resolve within itself, so you can work entirely inside it. If the
-#    problem is one migrated page, send people there and fix forward. This is
-#    most of the reason `old/` is published.
-#
-# 2. **Re-publish a previous good run.** Actions → this workflow → the run you
+# 1. **Re-publish a previous good run.** Actions → this workflow → the run you
 #    want → "Re-run all jobs". It rebuilds from that commit. Nothing here reads
 #    mutable state, so a re-run of a green commit reproduces it.
 #
-# 3. **Revert and push.** `git revert <sha>` and push to whichever remote serves
+# 2. **Revert and push.** `git revert <sha>` and push to whichever remote serves
 #    the broken site — pushing to the fork does not fix tests.firefox.dev. That
 #    re-runs this workflow and republishes. Use it when the bad commit is a
 #    source change rather than a deploy problem.
@@ -110,7 +102,7 @@ jobs:
         env:
           FX_PAGES_BUILD_OUT: ${{ runner.temp }}/site
 
-      # Merges in the unmigrated pages and `old/`, writes `.nojekyll`, then
+      # Merges in the unmigrated pages, writes `.nojekyll`, then
       # re-reads the finished tree and exits non-zero unless every page and
       # every file any page references is present. A copy step that silently
       # copied nothing fails here instead of publishing a site of 404s.

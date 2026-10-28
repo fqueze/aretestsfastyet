@@ -8,6 +8,12 @@ a fresh session needs to change that.
 Read `docs/PARITY.md` first for why the migration exists, and the header of
 `site/errors.ts` for what a migrated page looks like.
 
+> **`old/` has since been deleted.** The superseded pages served their purpose
+> as an escape hatch and are no longer published. This document still describes
+> them as they were; the `old/<page>.html:NNN` citations throughout the code
+> refer to the last commit that has them, `fb27887`
+> (`git show fb27887:old/test.html`).
+
 ---
 
 ## 0. Do this first: the rename
@@ -286,10 +292,8 @@ person who needs it will be reading that file, not this document.
 - **Deploying to `upstream` / `tests.firefox.dev`.** No longer out of scope —
   the fork works and the browser pass is done, so this is the next step. It is
   `git push upstream main`, a clean fast-forward; the workflow needs no edit.
-- **Deleting the nine superseded pages.** §0 moved them to `old/`; deleting them
-  is the follow-up, once the new pages have been trusted long enough. At that
-  point it is `git rm -r old/` and dropping step 3 of the assembly — which is
-  the whole reason for giving `old/` one unambiguous meaning.
+- **Deleting the nine superseded pages.** Done: `old/` is gone, and so is the
+  assembly step that republished it.
 - **Migrating the remaining seventeen pages.** No CLI command corresponds to
   them, so the argument that justified this programme — that the page and the
   command must agree — does not reach them.

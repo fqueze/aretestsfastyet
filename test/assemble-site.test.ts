@@ -1,6 +1,6 @@
 /**
- * `tools/assemble-site.ts` — the step that merges the built pages, the
- * unmigrated pages and `old/` into the tree the deploy publishes.
+ * `tools/assemble-site.ts` — the step that merges the built pages and the
+ * unmigrated pages into the tree the deploy publishes.
  *
  * ## What is worth testing here, and what is not
  *
@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import test, { after, before, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { EXTRA_DATA, OLD_DIR, checkArtifact, findReferences } from '../tools/assemble-site.ts';
+import { EXTRA_DATA, checkArtifact, findReferences } from '../tools/assemble-site.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -87,9 +87,7 @@ const sourcePages = (dir: string): string[] => pages(join(ROOT, dir));
 
 describe('findReferences', () => {
     test('finds a page linked from markup, not only an asset', () => {
-        // The case that makes assembly step 3 necessary from a second
-        // direction: `old/index.html` links `green.html` in its own markup, so
-        // `old/` needs the unmigrated pages even ignoring dashboards.js.
+        // A link between pages 404s like a missing asset does.
         const refs = findReferences('p.html', '<a href="green.html#mochitest">green</a>');
         assert.deepEqual(refs.map((r) => r.target), ['green.html']);
     });
@@ -138,43 +136,20 @@ describe('the assembled site', () => {
         for (const page of [...built, ...unmigrated]) assert.ok(root.includes(page), page);
     });
 
-    test('old/ is a complete site, not just the nine superseded pages', () => {
-        // The step this deploy is most likely to get wrong: `old/` links resolve
-        // inside `old/`, so a partial `old/` is a directory of 404s.
-        const superseded = sourcePages(OLD_DIR);
-        const unmigrated = pages(ROOT);
-        const old = pages(join(assembled, OLD_DIR));
-        assert.equal(old.length, superseded.length + unmigrated.length);
-        for (const page of [...superseded, ...unmigrated]) assert.ok(old.includes(page), page);
-    });
-
-    test("old/'s copy of a superseded page is the old one, not the rebuilt one", () => {
-        // Both trees have an `index.html` and they must not be the same file:
-        // the point of `old/` is that it is the previous implementation.
-        const fromOld = readFileSync(join(assembled, OLD_DIR, 'index.html'), 'utf8');
-        const fromRoot = readFileSync(join(assembled, 'index.html'), 'utf8');
-        assert.notEqual(fromOld, fromRoot);
-        assert.equal(fromOld, readFileSync(join(ROOT, OLD_DIR, 'index.html'), 'utf8'));
-    });
-
-    test('the assets only unmigrated pages reference are present in both trees', () => {
+    test('the assets only unmigrated pages reference are present', () => {
         // `tools/build-pages.ts` copies what the *migrated* pages need, which is
         // not this set — no migrated page references either of these, so a rule
         // derived from the build's own output would miss both.
         for (const asset of ['common-test-data.js', 'favicon-screenshots.svg']) {
-            for (const dir of [assembled, join(assembled, OLD_DIR)]) {
-                assert.ok(readFileSync(join(dir, asset)).length > 0, `${dir}/${asset}`);
-            }
+            assert.ok(readFileSync(join(assembled, asset)).length > 0, asset);
         }
     });
 
-    test('the committed backfill is in both trees', () => {
-        // Its absence from one tree is invisible at runtime: the page treats a
-        // 404 as "no backfill" and draws a shorter chart.
+    test('the committed backfill is published', () => {
+        // Its absence is invisible at runtime: the page treats a 404 as "no
+        // backfill" and draws a shorter chart.
         const name = 'mochitest-stats-backfill.json';
-        for (const dir of [assembled, join(assembled, OLD_DIR)]) {
-            assert.ok(readFileSync(join(dir, name)).length > 0, `${dir}/${name}`);
-        }
+        assert.ok(readFileSync(join(assembled, name)).length > 0, name);
     });
 
     test('the markdown docs.html fetches are published', () => {
@@ -199,27 +174,17 @@ describe('the assembled site', () => {
 // =========================================================================
 
 describe('checkArtifact rejects an incomplete artifact', () => {
-    test('when old/ has only the superseded pages', async () => {
-        const dir = damaged();
-        const built = new Set(sourcePages('site'));
-        for (const page of pages(join(dir, OLD_DIR))) {
-            if (!built.has(page)) rmSync(join(dir, OLD_DIR, page));
-        }
-        const problems = await checkArtifact(ROOT, dir);
-        assert.match(problems.join('\n'), /old\/ has \d+ pages, expected/);
-    });
-
     test('when an asset copy silently copied nothing', async () => {
         const dir = damaged();
-        rmSync(join(dir, OLD_DIR, 'common-test-data.js'));
+        rmSync(join(dir, 'common-test-data.js'));
         const problems = await checkArtifact(ROOT, dir);
         assert.match(problems.join('\n'), /references common-test-data\.js/);
     });
 
-    test('when the committed backfill is missing from old/', async () => {
+    test('when the committed backfill is missing', async () => {
         // The regression test for the defect this whole guard exists for.
         const dir = damaged();
-        rmSync(join(dir, OLD_DIR, 'mochitest-stats-backfill.json'));
+        rmSync(join(dir, 'mochitest-stats-backfill.json'));
         const problems = await checkArtifact(ROOT, dir);
         assert.match(problems.join('\n'), /references mochitest-stats-backfill\.json/);
     });
@@ -246,6 +211,5 @@ describe('checkArtifact rejects an incomplete artifact', () => {
         writeFileSync(join(dir, 'index.html'), '<html></html>');
         const problems = await checkArtifact(ROOT, dir);
         assert.match(problems.join('\n'), /artifact root has 1 pages/);
-        assert.match(problems.join('\n'), /old\/ has 0 pages/);
     });
 });
