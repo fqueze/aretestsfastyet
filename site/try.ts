@@ -216,6 +216,7 @@
  * `site/try-view.ts`.
  */
 
+import { OLD_RESOURCE_USAGE_PROFILE_PATH, resourceUsageProfilePath } from '../lib/links.ts';
 import { stripChunkSuffix } from '../lib/model/job-name.ts';
 import { el, searchBox } from './drilldown-render.ts';
 import { fetchFlakiness, mitten, paintFlakinessCell } from './flakiness-fetch.ts';
@@ -303,6 +304,7 @@ declare global {
             jobName?: string;
             profile?: string;
             profileName?: string;
+            date?: number | null;
         },
         testName?: string | null
     ): string;
@@ -763,10 +765,13 @@ function processJobsWithWorkers(
                 const job = queue.shift()!;
                 const id = nextId++;
                 inFlight++;
-                const url =
-                    'https://firefoxci.taskcluster-artifacts.net/' +
-                    `${job.taskId}/${job.retryId}/public/test_info/profile_resource-usage.json`;
-                fetch(url, { signal })
+                const url = (path: string): string =>
+                    `https://firefoxci.taskcluster-artifacts.net/${job.taskId}/${job.retryId}/${path}`;
+                // The new path, then the old one on a 404.
+                fetch(url(resourceUsageProfilePath()), { signal })
+                    .then((response) =>
+                        response.status === 404 ? fetch(url(OLD_RESOURCE_USAGE_PROFILE_PATH), { signal }) : response
+                    )
                     .then((response) => (response.ok ? response.arrayBuffer() : null))
                     .then((buffer) => {
                         if (buffer !== null) {
@@ -811,18 +816,24 @@ function processJobsWithWorkers(
 
 // --- Treeherder -----------------------------------------------------------
 
+/**
+ * When the push was made, in ms. Its jobs' start times are not in Treeherder's
+ * job list; this stands in for them to pick their profile's name.
+ */
+let pushTime: number | null = null;
+
 /** `old/try.html:759`. */
 async function fetchPushId(
     repo: string,
     revision: string
-): Promise<{ pushId: number; revisions: PushRevision[]; revisionCount: number }> {
+): Promise<{ pushId: number; pushTimestamp: number; revisions: PushRevision[]; revisionCount: number }> {
     const url = `${TH_BASE}/api/project/${repo}/push/?full=true&count=10&revision=${revision}`;
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to look up revision on Treeherder (HTTP ${response.status})`);
     }
     const data = (await response.json()) as {
-        results?: { id: number; revisions?: PushRevision[]; revision_count?: number }[];
+        results?: { id: number; push_timestamp: number; revisions?: PushRevision[]; revision_count?: number }[];
     };
     const push = data.results?.[0];
     if (push === undefined) {
@@ -831,6 +842,7 @@ async function fetchPushId(
     const revisions = push.revisions ?? [];
     return {
         pushId: push.id,
+        pushTimestamp: push.push_timestamp,
         revisions,
         // Absent on an older Treeherder than the one this was written against;
         // falling back to what arrived reports no unreachable commits, which
@@ -1159,8 +1171,9 @@ async function loadRevision(): Promise<void> {
     try {
         setStatus('Looking up push on Treeherder...');
         setProgress(-1);
-        const { pushId, revisions, revisionCount } = await fetchPushId(repo, revision);
+        const { pushId, pushTimestamp, revisions, revisionCount } = await fetchPushId(repo, revision);
         if (superseded()) return;
+        pushTime = pushTimestamp * 1000;
         revisionsExpanded = false;
         renderRevisions(revisions, revisionCount);
 
@@ -1915,7 +1928,7 @@ function renderJobDetailRow(
     const platform = extractPlatform(job.jobName);
     const builds = extractBuildTypes(job.jobName);
     const profilerUrl = getProfilerUrl(
-        { taskId: job.taskId, retryId: job.retryId, jobName: job.jobName },
+        { taskId: job.taskId, retryId: job.retryId, jobName: job.jobName, date: pushTime },
         test.path.split('/').pop()
     );
 
@@ -2336,7 +2349,7 @@ function renderUnblamedJobRow(job: Job): HTMLTableRowElement {
     header.append(link(taskPageUrl(job.taskId, job.retryId), { text: job.jobName, class: 'job-name' }));
     const links = el('span', { class: 'job-links' });
     links.append(
-        link(getProfilerUrl({ taskId: job.taskId, retryId: job.retryId, jobName: job.jobName }), {
+        link(getProfilerUrl({ taskId: job.taskId, retryId: job.retryId, jobName: job.jobName, date: pushTime }), {
             text: 'Profile',
         })
     );

@@ -1789,7 +1789,7 @@
                 );
 
                 // Create profile link for the latest failure
-                const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${latestJob.taskId}/runs/${latestJob.retryId || 0}/artifacts/public/test_info/profile_resource-usage.json`;
+                const baseUrl = getResourceUsageProfileArtifactUrl(latestJob.taskId, latestJob.retryId || 0, latestJob.time);
                 const encodedUrl = encodeURIComponent(baseUrl);
                 const profileName = `${group.testName} (${latestJob.taskId}.${latestJob.retryId || 0})`;
                 const encodedName = encodeURIComponent(profileName);
@@ -1880,7 +1880,7 @@
             // Create list items for failures
             const listHtml = jobs.map(job => {
                 const formattedTime = new Date(job.time).toLocaleString();
-                const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${job.taskId}/runs/${job.retryId || 0}/artifacts/public/test_info/profile_resource-usage.json`;
+                const baseUrl = getResourceUsageProfileArtifactUrl(job.taskId, job.retryId || 0, job.time);
                 const encodedUrl = encodeURIComponent(baseUrl);
                 const profileName = `${testName} (${job.taskId}.${job.retryId || 0})`;
                 const encodedName = encodeURIComponent(profileName);

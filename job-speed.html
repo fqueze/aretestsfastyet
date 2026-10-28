@@ -1874,7 +1874,8 @@
                         // Build profile URL from taskIdId
                         const taskIdString = currentData.tables.taskIds[job.taskIdId];
                         const [taskId, retryId = '0'] = taskIdString.split('.');
-                        const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+                        // The file's day stands in for the task's start, to pick the artifact name.
+                        const rawProfileUrl = getResourceUsageProfileArtifactUrl(taskId, retryId, currentData.metadata.startTime * 1000);
                         const profileName = `${job.jobName} (${taskIdString})`;
                         const profileUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
 

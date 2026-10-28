@@ -31,6 +31,7 @@ import type { DecodedTimingFile, RunEntry } from '../../lib/formats/decode.ts';
 import { type TestIdentity, normalizeTaskId, parseTaskId } from '../../lib/formats/tables.ts';
 import { otherHarness } from '../../lib/model/harness.ts';
 import { withChunkSuffix } from '../../lib/model/job-name.ts';
+import { dateOfDay } from '../../lib/query/flakiness.ts';
 import { CANDIDATE_LIMIT, resolveTest } from '../../lib/query/test-lookup.ts';
 import {
     type ModeBreakdown,
@@ -1531,6 +1532,12 @@ function buildProfiles(
         if (entry.taskIds === undefined) {
             continue;
         }
+        // The day the runs happened, which picks the resource-usage profile's
+        // name. A daily file's entries have no day: they are on its one date.
+        const date =
+            entry.day === null || file.days === null
+                ? file.endDate
+                : dateOfDay(file.endDate, entry.day - (file.days - 1));
         entry.taskIds.forEach((rawTaskId, i) => {
             const { taskId, retryId } = parseTaskId(rawTaskId);
             const key = `${taskId}.${retryId}`;
@@ -1544,7 +1551,7 @@ function buildProfiles(
                 retryId,
                 jobName:
                     taskIdIndex === undefined ? null : file.jobNameOfTaskIndex(taskIdIndex),
-                resourceUsage: resourceUsageProfileUrl(taskId, retryId),
+                resourceUsage: resourceUsageProfileUrl(taskId, retryId, date),
             };
             const testProfile = uploadedProfileUrl(taskId, retryId, entry.message);
             if (testProfile !== null) {

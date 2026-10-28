@@ -461,11 +461,11 @@
             if (cached) return JSON.parse(cached);
         } catch (e) { /* fall through */ }
 
-        const url = `${TC_BASE}/api/queue/v1/task/${taskId}/runs/${retryId}` +
-                    `/artifacts/public/test_info/profile_resource-usage.json`;
         let profile;
         try {
-            const resp = await fetch(url);
+            // The new path, then the old one on a 404.
+            let resp = await fetch(getResourceUsageProfileArtifactUrl(taskId, retryId));
+            if (resp.status === 404) resp = await fetch(getResourceUsageProfileArtifactUrl(taskId, retryId, 0));
             if (!resp.ok) {
                 warnings.push(`Task ${taskId}.${retryId}: HTTP ${resp.status} fetching profile_resource-usage.json`);
                 return null;

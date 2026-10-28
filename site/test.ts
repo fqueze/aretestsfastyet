@@ -137,6 +137,7 @@ import { bucketFileSuffix, bucketIndexForPath, decodeBucket } from '../lib/forma
 import type { BucketFile } from '../lib/formats/buckets.ts';
 import type { DecodedTimingFile } from '../lib/formats/decode.ts';
 import { parseTaskId } from '../lib/formats/tables.ts';
+import { resourceUsageProfileUrl } from '../lib/links.ts';
 import { detectHarness } from '../lib/model/harness.ts';
 import { classifyStatus } from '../lib/model/status.ts';
 import { displaySkipMessage } from '../lib/model/skips.ts';
@@ -1166,9 +1167,7 @@ function buildRunInfo(
     const { taskId, retryId } = parseTaskId(rawTaskId);
 
     const date = dateOfDay(s.raw.metadata.startTime, day);
-    const profileUrl =
-        `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}` +
-        `/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+    const profileUrl = resourceUsageProfileUrl(taskId, retryId, date);
     const profileName = `${jobName} (${rawTaskId})`;
     const testName = s.testPath.split('/').pop() ?? s.testPath;
     const profileLink =

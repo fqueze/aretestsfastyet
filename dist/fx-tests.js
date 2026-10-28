@@ -1974,8 +1974,12 @@ function taskArtifactUrl(taskId, retryId, artifactPath) {
 function testInfoArtifactUrl(taskId, retryId, filename) {
   return taskArtifactUrl(taskId, retryId, `public/test_info/${filename}`);
 }
-function resourceUsageProfileUrl(taskId, retryId) {
-  return testInfoArtifactUrl(taskId, retryId, "profile_resource-usage.json");
+function resourceUsageProfileUrl(taskId, retryId, started) {
+  return taskArtifactUrl(taskId, retryId, resourceUsageProfilePath(started));
+}
+var OLD_RESOURCE_USAGE_PROFILE_PATH = "public/test_info/profile_resource-usage.json";
+function resourceUsageProfilePath(started) {
+  return started !== void 0 && started !== null && new Date(started).getTime() < Date.UTC(2026, 9, 28) ? OLD_RESOURCE_USAGE_PROFILE_PATH : "public/profile_run-task-resource-usage.json";
 }
 function uploadedProfileName(message) {
   if (!message) {
@@ -10090,6 +10094,7 @@ function buildProfiles(file, entries) {
     if (entry.taskIds === void 0) {
       continue;
     }
+    const date = entry.day === null || file.days === null ? file.endDate : dateOfDay(file.endDate, entry.day - (file.days - 1));
     entry.taskIds.forEach((rawTaskId, i) => {
       const { taskId, retryId } = parseTaskId(rawTaskId);
       const key = `${taskId}.${retryId}`;
@@ -10102,7 +10107,7 @@ function buildProfiles(file, entries) {
         taskId,
         retryId,
         jobName: taskIdIndex === void 0 ? null : file.jobNameOfTaskIndex(taskIdIndex),
-        resourceUsage: resourceUsageProfileUrl(taskId, retryId)
+        resourceUsage: resourceUsageProfileUrl(taskId, retryId, date)
       };
       const testProfile = uploadedProfileUrl(taskId, retryId, entry.message);
       if (testProfile !== null) {
@@ -11069,9 +11074,12 @@ var TaskProfileError = class extends Error {
 async function readTaskProfile(source, taskId, retryId) {
   let bytes2;
   try {
-    bytes2 = await source.fetch(
-      taskArtifactName(taskId, retryId, "public/test_info/profile_resource-usage.json")
-    );
+    try {
+      bytes2 = await source.fetch(taskArtifactName(taskId, retryId, resourceUsageProfilePath()));
+    } catch (error) {
+      if (!(error instanceof DataFileNotFoundError)) throw error;
+      bytes2 = await source.fetch(taskArtifactName(taskId, retryId, OLD_RESOURCE_USAGE_PROFILE_PATH));
+    }
   } catch (error) {
     if (error instanceof DataFileNotFoundError) {
       throw new TaskProfileError("missing", error.message, 404);
@@ -11403,7 +11411,7 @@ async function fetchProfile(source, taskId, retryId, url) {
     switch (error.problem) {
       case "missing":
         throw goneError(
-          `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is not there.`,
+          `task ${taskId}.${retryId} has no resource-usage profile: the artifact is not there.`,
           "Taskcluster expires task artifacts after about a month, so this is permanent and retrying will not help. Check the retry number \u2014 `.0` is assumed \u2014 and get a current task ID from `fx-tests test <path> --task-ids`. A job that is not a test job never uploads one."
         );
       case "not-a-task":
@@ -12076,7 +12084,7 @@ async function collectTimings(context, jobs, fetchUrl, concurrency) {
       const url = resourceUsageProfileUrl(job.taskId, job.retryId);
       let bytes2 = null;
       try {
-        bytes2 = await fetchUrl(url);
+        bytes2 = await fetchUrl(url) ?? await fetchUrl(taskArtifactUrl(job.taskId, job.retryId, OLD_RESOURCE_USAGE_PROFILE_PATH));
       } catch {
         bytes2 = null;
       }

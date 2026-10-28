@@ -76,7 +76,7 @@ import {
     runOutcomes,
     selectTryJobs,
 } from '../../lib/model/try-jobs.ts';
-import { resourceUsageProfileUrl, testInfoArtifactUrl } from '../../lib/links.ts';
+import { OLD_RESOURCE_USAGE_PROFILE_PATH, resourceUsageProfileUrl, taskArtifactUrl, testInfoArtifactUrl } from '../../lib/links.ts';
 import { treeherderPushUrl } from '../../lib/links.ts';
 import { type TreeherderJob } from '../../lib/sources/treeherder.ts';
 import { fetchJson, timingsIndex } from '../../lib/sources/source.ts';
@@ -739,7 +739,9 @@ async function collectTimings(
             const url = resourceUsageProfileUrl(job.taskId, job.retryId);
             let bytes: Uint8Array | null = null;
             try {
-                bytes = await fetchUrl(url);
+                bytes =
+                    (await fetchUrl(url)) ??
+                    (await fetchUrl(taskArtifactUrl(job.taskId, job.retryId, OLD_RESOURCE_USAGE_PROFILE_PATH)));
             } catch {
                 // A single unreachable artifact must not fail the command:
                 // the answer is still useful without one job, and reporting

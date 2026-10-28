@@ -1621,12 +1621,13 @@ function runRows(test: WorklistRow, issue: TestIssue): HTMLElement[] {
             const jobName =
                 taskIdIndex === undefined ? '' : (file.jobNameOfTaskIndex(taskIdIndex) ?? '');
             const minidump = run.minidumps?.[index] ?? null;
+            const date = run.day === null ? null : (dates[run.day] ?? null);
             runs.push({
-                date: run.day === null ? null : (dates[run.day] ?? null),
+                date,
                 jobName,
                 taskUrl: taskPageUrl(taskId, retryId, test.fullPath),
                 profileUrl: getProfilerUrl(
-                    { taskId, retryId: String(retryId), jobName },
+                    { taskId, retryId: String(retryId), jobName, date },
                     test.fullPath
                 ),
                 // `getCrashViewerUrl` returns `''` with no minidump; `|| null`

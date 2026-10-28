@@ -1386,7 +1386,8 @@ function runRows(test: IssueRow, entry: IssueEntry): HTMLElement[] {
                 jobName,
                 taskUrl: taskPageUrl(taskId, retryId, test.fullPath),
                 profileUrl: getProfilerUrl(
-                    { taskId, retryId: String(retryId), jobName },
+                    // A daily file's entries are all on its first (only) day.
+                    { taskId, retryId: String(retryId), jobName, date: dayLabel(startTime, run.day ?? 0) },
                     test.fullPath
                 ),
                 // `getCrashViewerUrl` returns `''` with no minidump

@@ -97,7 +97,7 @@ import { occurrenceRows } from './drilldown-view.ts';
 declare global {
     /** `common-links.js:15` — the Firefox Profiler URL for a run. */
     function getProfilerUrl(
-        instance: { taskId?: string; retryId?: string | number; jobName?: string },
+        instance: { taskId?: string; retryId?: string | number; jobName?: string; date?: string | null },
         testName?: string | null
     ): string;
     /** `common-links.js:31` — the crash viewer URL, or `''` with no minidump. */

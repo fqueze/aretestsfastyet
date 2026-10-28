@@ -8,13 +8,13 @@
 
 /**
  * Generate Firefox Profiler URL for a test run
- * @param {Object} instance - Test run instance with taskId, retryId, jobName, and optional profile URL
+ * @param {Object} instance - Test run instance with taskId, retryId, jobName, optional date, and optional profile URL
  * @param {string} [testName] - Optional test name to filter markers
  * @returns {string} - Firefox Profiler URL
  */
 function getProfilerUrl(instance, testName) {
     const profileUrl = instance.profile ||
-        `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${instance.taskId}/runs/${instance.retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+        getResourceUsageProfileArtifactUrl(instance.taskId, instance.retryId, instance.date);
     const profileName = instance.profileName || `${instance.jobName} (${instance.taskId}.${instance.retryId})`;
     let url = `${getProfilerOrigin()}/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}`;
     if (testName) {

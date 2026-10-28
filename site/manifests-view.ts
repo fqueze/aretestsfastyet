@@ -93,6 +93,7 @@
 
 import type { ManifestsFile } from '../lib/formats/manifests.ts';
 import { parseTaskId } from '../lib/formats/tables.ts';
+import { resourceUsageProfileUrl } from '../lib/links.ts';
 
 // --- the rows -------------------------------------------------------------
 
@@ -771,20 +772,15 @@ export function splitTaskId(taskId: string): { baseTaskId: string; retryId: stri
 }
 
 /**
- * The raw resource-usage profile URL for a run. `old/manifests.html:832`.
+ * The raw resource-usage profile URL for a run on `date`. `old/manifests.html:832`.
  *
  * Built here rather than in the renderer because it is a pure function of the
  * data and is what `test/manifests-view.test.ts` asserts; the renderer only
- * decides *when* to open it. `common-links.js` has no equivalent — its
- * `getProfilerUrl` builds a profiler link for a *test*, from a different
- * artifact — so this is not a duplicated helper.
+ * decides *when* to open it.
  */
-export function resourceProfileArtifactUrl(taskId: string): string {
+export function resourceProfileArtifactUrl(taskId: string, date: string): string {
     const { baseTaskId, retryId } = splitTaskId(taskId);
-    return (
-        `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${baseTaskId}` +
-        `/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`
-    );
+    return resourceUsageProfileUrl(baseTaskId, Number(retryId), date);
 }
 
 /** The error-summary log URL for a run. `old/manifests.html:846`. */
@@ -812,9 +808,10 @@ export function profilerUrl(
     profilerOrigin: string,
     taskId: string,
     manifest: string,
-    jobName: string
+    jobName: string,
+    date: string
 ): string {
-    const raw = resourceProfileArtifactUrl(taskId);
+    const raw = resourceProfileArtifactUrl(taskId, date);
     const profileName = `${jobName} (${taskId})`;
     return (
         `${profilerOrigin}/from-url/${encodeURIComponent(raw)}` +

@@ -7,7 +7,7 @@
  * `lib/model/test-markers.ts` gives about its own parser.
  */
 
-import { treeherderJobUrl, testInfoArtifactUrl } from '../links.ts';
+import { OLD_RESOURCE_USAGE_PROFILE_PATH, resourceUsageProfilePath, treeherderJobUrl, testInfoArtifactUrl } from '../links.ts';
 import { type TestTiming, isStreamedProfile } from '../model/test-markers.ts';
 import { taskArtifactName, taskDefinitionName } from '../sources/http.ts';
 import { DataFetchError, DataFileNotFoundError, type DataSource } from '../sources/source.ts';
@@ -174,7 +174,8 @@ export class TaskProfileError extends Error {
 }
 
 /**
- * A task run's parsed `profile_resource-usage.json`, or a classified error.
+ * A task run's parsed resource-usage profile, or a classified error. Tries the
+ * new path, then the old one on a 404 (see `resourceUsageProfilePath()`).
  *
  * The status split is measured, and is why the classification is shared
  * rather than left to each caller: the queue answers **400** for a string that
@@ -189,9 +190,12 @@ export async function readTaskProfile(
 ): Promise<unknown> {
     let bytes: Uint8Array;
     try {
-        bytes = await source.fetch(
-            taskArtifactName(taskId, retryId, 'public/test_info/profile_resource-usage.json')
-        );
+        try {
+            bytes = await source.fetch(taskArtifactName(taskId, retryId, resourceUsageProfilePath()));
+        } catch (error) {
+            if (!(error instanceof DataFileNotFoundError)) throw error;
+            bytes = await source.fetch(taskArtifactName(taskId, retryId, OLD_RESOURCE_USAGE_PROFILE_PATH));
+        }
     } catch (error) {
         if (error instanceof DataFileNotFoundError) {
             throw new TaskProfileError('missing', error.message, 404);

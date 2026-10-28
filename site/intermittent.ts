@@ -1329,7 +1329,7 @@ function jobListElement(jobs: readonly OccurrenceJob[], key: string): HTMLElemen
             links.append(
                 'View: ',
                 externalLink(
-                    profilerFrontEndUrl(resourceUsageProfileUrl(job.taskId, job.runId), {
+                    profilerFrontEndUrl(resourceUsageProfileUrl(job.taskId, job.runId, job.pushTime.slice(0, 10)), {
                         profileName: `${job.jobName} (${job.taskId}.${job.runId})`,
                         origin: profilerOrigin,
                     }),

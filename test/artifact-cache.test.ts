@@ -774,9 +774,9 @@ async function runTryOnce(
 test('a second fx-tests try run makes zero artifact requests', async () => {
     await withCacheDir(async (directory) => {
         const profiles = {
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
         };
         const http = countingFetcher(profiles);
@@ -797,9 +797,9 @@ test('a second fx-tests try run makes zero artifact requests', async () => {
 test('the run says where its profiles came from', async () => {
     await withCacheDir(async (directory) => {
         const profiles = {
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
         };
         const http = countingFetcher(profiles);
@@ -858,9 +858,9 @@ test('a command that reads no artifacts says nothing about them', async () => {
 test('--no-cache makes fx-tests try re-fetch every artifact', async () => {
     await withCacheDir(async (directory) => {
         const http = countingFetcher({
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
         });
         await runTryOnce(directory, http, ['--no-cache']);
@@ -994,9 +994,9 @@ test('--no-cache re-reads a settled push’s job list', async () => {
 test('fx-tests try caches its artifacts under --cache-dir, not elsewhere', async () => {
     await withCacheDir(async (directory) => {
         const http = countingFetcher({
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
-            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/test_info/profile_resource-usage.json`]:
+            [`https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/profile_run-task-resource-usage.json`]:
                 tinyProfile(E2E_TEST_PATH),
         });
         await runTryOnce(directory, http);
@@ -1011,8 +1011,8 @@ test('fx-tests try caches its artifacts under --cache-dir, not elsewhere', async
         assert.deepEqual(
             artifacts.map((entry) => entry.key).sort(),
             [
-                'https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/test_info/profile_resource-usage.json',
-                'https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/test_info/profile_resource-usage.json',
+                'https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKONE/runs/0/artifacts/public/profile_run-task-resource-usage.json',
+                'https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/TASKTWO/runs/0/artifacts/public/profile_run-task-resource-usage.json',
             ]
         );
     });

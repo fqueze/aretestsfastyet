@@ -30,7 +30,7 @@
  *
  * | kind | filename | derivable from the task ID? |
  * | --- | --- | --- |
- * | resource-usage, one per job | fixed: `profile_resource-usage.json` | **yes** |
+ * | resource-usage, one per job | fixed, by task start date | **yes** |
  * | per-test failure profile | appears only in the failure message | **no** |
  *
  * The second is the trap. A test that fails uploads a profile captured at the
@@ -96,8 +96,22 @@ export function testInfoArtifactUrl(taskId: string, retryId: number, filename: s
  * Returns the artifact URL, not a profiler front-end link — see the module
  * comment. Wrap it in `profilerFrontEndUrl()` for a human.
  */
-export function resourceUsageProfileUrl(taskId: string, retryId: number): string {
-    return testInfoArtifactUrl(taskId, retryId, 'profile_resource-usage.json');
+export function resourceUsageProfileUrl(
+    taskId: string,
+    retryId: number,
+    started?: Date | number | string | null
+): string {
+    return taskArtifactUrl(taskId, retryId, resourceUsageProfilePath(started));
+}
+
+/** Where tasks started before 2026-10-28 (bug 1425785) uploaded it. Can be dropped after 2026-11-18. */
+export const OLD_RESOURCE_USAGE_PROFILE_PATH = 'public/test_info/profile_resource-usage.json';
+
+/** The profile's path for a task started at `started`; without a start date, the new path. */
+export function resourceUsageProfilePath(started?: Date | number | string | null): string {
+    return started !== undefined && started !== null && new Date(started).getTime() < Date.UTC(2026, 9, 28)
+        ? OLD_RESOURCE_USAGE_PROFILE_PATH
+        : 'public/profile_run-task-resource-usage.json';
 }
 
 /**

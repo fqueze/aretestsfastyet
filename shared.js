@@ -44,7 +44,19 @@ function getProfilerOrigin() {
     return profiler.includes('://') ? profiler : `https://${profiler}`;
 }
 
-function createProfileUrl(taskId, retryId, jobName, useTaskClusterTools = false) {
+// Bug 1425785 moved the resource-usage profile in tasks started from 2026-10-28;
+// without a start date, the new path. The old path can be dropped after 2026-11-18.
+function getResourceUsageProfilePath(started) {
+    return started != null && new Date(started).getTime() < Date.UTC(2026, 9, 28)
+        ? 'public/test_info/profile_resource-usage.json'
+        : 'public/profile_run-task-resource-usage.json';
+}
+
+function getResourceUsageProfileArtifactUrl(taskId, retryId, started) {
+    return `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/${getResourceUsageProfilePath(started)}`;
+}
+
+function createProfileUrl(taskId, retryId, jobName, useTaskClusterTools = false, started = null) {
     // Use TaskCluster tools if requested, for decision tasks, or for Android artifact builds
     if (useTaskClusterTools ||
         jobName.includes('Decision Task') ||
@@ -57,10 +69,10 @@ function createProfileUrl(taskId, retryId, jobName, useTaskClusterTools = false)
     const isBuildJob = !jobName.startsWith('test-');
 
     const profilePath = isBuildJob
-        ? 'build/profile_build_resources.json'
-        : 'test_info/profile_resource-usage.json';
+        ? 'public/build/profile_build_resources.json'
+        : getResourceUsageProfilePath(started);
 
-    const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/${profilePath}`;
+    const baseUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/${profilePath}`;
     const encodedUrl = encodeURIComponent(baseUrl);
     const profileName = `${jobName} (${taskId}.${retryId})`;
     const encodedName = encodeURIComponent(profileName);
@@ -222,8 +234,8 @@ function createScatterPlot(container, platformData, platform, currentRepository,
     addClickHandler(container.id);
 }
 
-function openProfile(taskId, retryId, jobName, useTaskClusterTools = false) {
-    const url = createProfileUrl(taskId, retryId, jobName, useTaskClusterTools);
+function openProfile(taskId, retryId, jobName, useTaskClusterTools = false, started = null) {
+    const url = createProfileUrl(taskId, retryId, jobName, useTaskClusterTools, started);
     window.open(url, '_blank');
 }
 
@@ -234,14 +246,14 @@ function addClickHandler(containerId) {
     plotElement.on('plotly_click', function(data) {
         if (data.points.length > 0) {
             const { customdata } = data.points[0];
-            const { taskId, retryId, name } = customdata;
+            const { taskId, retryId, name, date } = customdata;
 
             // Check if alt key was pressed
             const useTaskClusterTools = (data.event && data.event.altKey) ||
                                       (arguments[1] && arguments[1].altKey) ||
                                       (data.altKey);
 
-            openProfile(taskId, retryId, name, useTaskClusterTools);
+            openProfile(taskId, retryId, name, useTaskClusterTools, date);
         }
     });
 

@@ -652,11 +652,11 @@ test('splitTaskId agrees with parseTaskId on the inputs the two used to differ o
 test('the two artifact URLs put the retry in the path, not in the task id', () => {
     const base = 'https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task';
     assert.equal(
-        resourceProfileArtifactUrl('ABC.2'),
-        `${base}/ABC/runs/2/artifacts/public/test_info/profile_resource-usage.json`
+        resourceProfileArtifactUrl('ABC.2', '2026-10-28'),
+        `${base}/ABC/runs/2/artifacts/public/profile_run-task-resource-usage.json`
     );
     assert.equal(
-        resourceProfileArtifactUrl('ABC'),
+        resourceProfileArtifactUrl('ABC', '2026-10-27'),
         `${base}/ABC/runs/0/artifacts/public/test_info/profile_resource-usage.json`
     );
     // The prefix names the harness family, so the log file differs per family.
@@ -671,12 +671,12 @@ test('the two artifact URLs put the retry in the path, not in the task id', () =
 });
 
 test('the profiler URL focuses the profile on the manifest', () => {
-    const url = new URL(profilerUrl('https://profiler.firefox.com', 'ABC', 'dom/media/x.toml', 'linux-opt'));
+    const url = new URL(profilerUrl('https://profiler.firefox.com', 'ABC', 'dom/media/x.toml', 'linux-opt', '2026-10-28'));
     assert.equal(url.origin, 'https://profiler.firefox.com');
     // The raw artifact is the path segment after `/from-url/`, encoded once.
     assert.equal(
         decodeURIComponent(url.pathname.replace('/from-url/', '')),
-        resourceProfileArtifactUrl('ABC')
+        resourceProfileArtifactUrl('ABC', '2026-10-28')
     );
     assert.equal(url.searchParams.get('profileName'), 'linux-opt (ABC)');
     // The whole point of the link: the profile opens with the manifest's
@@ -684,7 +684,7 @@ test('the profiler URL focuses the profile on the manifest', () => {
     assert.equal(url.searchParams.get('markerSearch'), 'dom/media/x.toml');
 
     // `?profiler=` is honoured through the origin the caller passes in.
-    assert.ok(profilerUrl('http://localhost:4242', 'A', 'm', 'j').startsWith('http://localhost:4242/'));
+    assert.ok(profilerUrl('http://localhost:4242', 'A', 'm', 'j', '2026-10-28').startsWith('http://localhost:4242/'));
 });
 
 // =========================================================================

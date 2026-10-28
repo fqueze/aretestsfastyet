@@ -302,7 +302,7 @@ function renderHeader(state: PageState): void {
     const add = (link: Link): void => {
         view.push(externalLink(link.url, link.label), ' ');
     };
-    add({ label: 'Profile', url: jobProfilerUrl(taskId, retryId, jobName, state.origin) });
+    add({ label: 'Profile', url: jobProfilerUrl(taskId, retryId, jobName, state.origin, selectedRun(state)?.started) });
     add({ label: 'Taskcluster', url: taskclusterRunUrl(taskId, retryId) });
     add({ label: 'raw log', url: liveLogUrl(taskId, retryId) });
     if (project !== null && revision !== null) {
@@ -802,7 +802,7 @@ function profileErrorMessage(error: unknown, run: TaskRun | null): string {
                 return `This run is still ${run.state}; the profile is uploaded when it finishes.`;
             }
             return (
-                'This run has no profile_resource-usage.json. Taskcluster expires artifacts after ' +
+                'This run has no resource-usage profile. Taskcluster expires artifacts after ' +
                 'about a month, and a job that is not a test job never uploads one.'
             );
         case 'streamed':
@@ -960,7 +960,7 @@ export async function start(options: { fetch?: Fetch } = {}): Promise<void> {
             { jobName: state.identity.jobName ?? `${taskId}.${retryId}`, taskId, retryId },
             dropped
         );
-        state.result = summarize(taskId, retryId, state.identity, resourceUsageProfileUrl(taskId, retryId), timings);
+        state.result = summarize(taskId, retryId, state.identity, resourceUsageProfileUrl(taskId, retryId, selectedRun(state)?.started), timings);
         state.recordedSizes = artifactSizesFromProfile(profile);
         renderArtifactSizes(state);
         status.textContent = '';

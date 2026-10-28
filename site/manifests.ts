@@ -312,6 +312,8 @@ interface PageModel {
     expandedManifests: Set<string>;
     /** `manifest|||job` keys whose chart is showing. */
     expandedJobs: Set<string>;
+    /** The day the file covers, which picks the runs' resource-usage profile name. */
+    date: string;
 }
 
 let model: PageModel | null = null;
@@ -449,7 +451,7 @@ function chartRowElement(
  * `setTimeout(…, 0)` (`:747`) for the same reason; a microtask is the same
  * guarantee, sooner.
  */
-function drawChart(container: HTMLElement, row: ManifestRow, job: JobStats): void {
+function drawChart(container: HTMLElement, row: ManifestRow, job: JobStats, date: string): void {
     // `newPlot` needs the element in the document to size it. A job collapsed
     // again before the microtask ran leaves an orphan, and drawing into it
     // would be the "chart element that never draws" mistake in reverse.
@@ -494,7 +496,7 @@ function drawChart(container: HTMLElement, row: ManifestRow, job: JobStats): voi
         // `old/manifests.html:817-821`, and the hover template says so.
         const url = data.event.altKey
             ? errorSummaryUrl(taskId, prefix)
-            : profilerUrl(getProfilerOrigin(), taskId, row.manifest, job.jobName);
+            : profilerUrl(getProfilerOrigin(), taskId, row.manifest, job.jobName, date);
         window.open(url, '_blank');
     });
 }
@@ -545,7 +547,7 @@ function renderTable(): void {
     // emitted. The two happen in one place so they cannot drift apart — the
     // "emit an element that never draws" mistake needs them to be separable.
     for (const { container, row, job } of pending) {
-        queueMicrotask(() => drawChart(container, row, job));
+        queueMicrotask(() => drawChart(container, row, job, state.date));
     }
 
     renderPager();
@@ -871,6 +873,7 @@ export async function start(): Promise<void> {
             page: 1,
             expandedManifests: new Set(),
             expandedJobs: new Set(),
+            date: file.metadata.date,
         };
         // Not `onFiltersChanged`: that would push a history entry for a state
         // the reader arrived in. Upstream has the same split.

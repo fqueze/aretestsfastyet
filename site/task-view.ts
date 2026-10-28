@@ -238,8 +238,14 @@ export function liveLogUrl(taskId: string, retryId: number): string {
 }
 
 /** The resource-usage profile in the profiler. */
-export function jobProfilerUrl(taskId: string, retryId: number, jobName: string | null, origin: string): string {
-    return profilerFrontEndUrl(resourceUsageProfileUrl(taskId, retryId), {
+export function jobProfilerUrl(
+    taskId: string,
+    retryId: number,
+    jobName: string | null,
+    origin: string,
+    started?: string
+): string {
+    return profilerFrontEndUrl(resourceUsageProfileUrl(taskId, retryId, started), {
         profileName: `${jobName ?? taskId} (${taskId}.${retryId})`,
         origin,
     });
@@ -894,7 +900,7 @@ export function artifactSizeFromHeaders(get: (name: string) => string | null): A
 /** The minidump-stackwalk output the crash viewer reads. */
 const MINIDUMP_JSON = /^public\/test_info\/([0-9a-fA-F-]{36})\.json$/;
 /** A profile the Firefox Profiler can open. */
-const PROFILE = /^public\/test_info\/(profile_[^/]+\.json(?:\.gz)?)$/;
+const PROFILE = /^public\/(?:test_info\/)?(profile_[^/]+\.json(?:\.gz)?)$/;
 
 /**
  * The run's artifacts, logs first and then by name, each with its viewer.
@@ -924,10 +930,10 @@ export function artifactRows(
             } else if (profile !== null) {
                 viewer = {
                     label: 'Profiler',
-                    url:
-                        profile[1] === 'profile_resource-usage.json'
-                            ? jobProfilerUrl(taskId, retryId, jobName, origin)
-                            : profilerFrontEndUrl(url, { profileName: `${profile[1]} (${taskId}.${retryId})`, origin }),
+                    url: profilerFrontEndUrl(url, {
+                        profileName: `${profile[1]!.endsWith('resource-usage.json') ? (jobName ?? taskId) : profile[1]} (${taskId}.${retryId})`,
+                        origin,
+                    }),
                 };
             }
             return { name: artifact.name, url, viewer };

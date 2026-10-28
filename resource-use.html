@@ -706,7 +706,7 @@
 
                         const jobRow = document.createElement('tr');
                         jobRow.className = 'job-row';
-                        const rawProfileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId.split('.')[0]}/runs/${taskId.includes('.') ? taskId.split('.')[1] : '0'}/artifacts/public/test_info/profile_resource-usage.json`;
+                        const rawProfileUrl = getResourceUsageProfileArtifactUrl(taskId.split('.')[0], taskId.includes('.') ? taskId.split('.')[1] : '0', currentData.jobs.decompressedStartTimes[idx] * 1000);
                         const profileName = `${displayName} (${taskId})`;
                         const profileUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(rawProfileUrl)}?profileName=${encodeURIComponent(profileName)}`;
 

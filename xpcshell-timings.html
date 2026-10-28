@@ -2588,9 +2588,9 @@
             const plotlyClickHandler = function(data) {
                 if (data.points.length > 0) {
                     const point = data.points[0];
-                    const { taskIdString, jobName } = point.customdata;
+                    const { taskIdString, jobName, timestamp } = point.customdata;
                     const [taskId, retryId] = taskIdString.split('.');
-                    const profileUrl = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+                    const profileUrl = getResourceUsageProfileArtifactUrl(taskId, retryId, timestamp);
                     const profileName = `${jobName} (${taskIdString})`;
                     const testName = testPath.split('/').pop();
                     const profilerUrl = `${getProfilerOrigin()}/from-url/${encodeURIComponent(profileUrl)}?profileName=${encodeURIComponent(profileName)}&markerSearch=${encodeURIComponent(testName)}`;

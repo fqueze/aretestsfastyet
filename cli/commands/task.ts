@@ -285,7 +285,7 @@ async function fetchProfile(
         switch (error.problem) {
             case 'missing':
                 throw goneError(
-                    `task ${taskId}.${retryId} has no profile_resource-usage.json: the artifact is ` +
+                    `task ${taskId}.${retryId} has no resource-usage profile: the artifact is ` +
                         `not there.`,
                     'Taskcluster expires task artifacts after about a month, so this is permanent ' +
                         'and retrying will not help. Check the retry number — `.0` is assumed — and ' +

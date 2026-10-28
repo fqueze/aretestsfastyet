@@ -251,10 +251,15 @@ async function fetchResourceProfile(taskId, retryId = 0) {
         }
     }
 
-    const url = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public/test_info/profile_resource-usage.json`;
+    // Bug 1425785 renamed the profile; tasks from before 2026-10-28 only have
+    // the old path. Drop the fallback after 2026-11-18.
+    const base = `https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/${taskId}/runs/${retryId}/artifacts/public`;
 
     try {
-        const response = await fetch(url);
+        let response = await fetch(`${base}/profile_run-task-resource-usage.json`);
+        if (response.status === 404) {
+            response = await fetch(`${base}/test_info/profile_resource-usage.json`);
+        }
         if (!response.ok) {
             return null;
         }

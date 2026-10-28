@@ -65,11 +65,20 @@ test('testInfoArtifactUrl is the test harness upload directory', () => {
 
 // --- profiles: the split -------------------------------------------------
 
-test('resourceUsageProfileUrl is derivable from the task ID alone', () => {
+test('resourceUsageProfileUrl is derivable from the task ID and its start', () => {
     // Fixed path, so it is available for any job whether or not anything
     // failed. This is the raw URL, which is what `profiler-cli` fetches.
     assert.equal(
         resourceUsageProfileUrl(TASK, 0),
+        `${FIREFOX_CI_ROOT}/api/queue/v1/task/${TASK}/runs/0/artifacts/public/profile_run-task-resource-usage.json`
+    );
+    // Bug 1425785 moved it for tasks started from 2026-10-28.
+    assert.equal(
+        resourceUsageProfileUrl(TASK, 0, '2026-10-28'),
+        `${FIREFOX_CI_ROOT}/api/queue/v1/task/${TASK}/runs/0/artifacts/public/profile_run-task-resource-usage.json`
+    );
+    assert.equal(
+        resourceUsageProfileUrl(TASK, 0, '2026-10-27T23:59:59Z'),
         `${FIREFOX_CI_ROOT}/api/queue/v1/task/${TASK}/runs/0/artifacts/public/test_info/profile_resource-usage.json`
     );
     // It is a URL to a JSON artifact, not to a front end.

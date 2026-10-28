@@ -294,12 +294,12 @@ test('the fetched artifact URL matches the one links.ts prints', async () => {
     // that, since neither is wrong in isolation.
     const { fetch, urls } = fakeFetch(() => ({ body: '{}' }));
     await taskArtifactSource({ fetch }).fetch(
-        taskArtifactName('ABC', 2, 'public/test_info/profile_resource-usage.json')
+        taskArtifactName('ABC', 2, 'public/profile_run-task-resource-usage.json')
     );
     assert.equal(urls[0], resourceUsageProfileUrl('ABC', 2));
     assert.equal(
         urls[0],
-        taskArtifactUrl('ABC', 2, 'public/test_info/profile_resource-usage.json')
+        taskArtifactUrl('ABC', 2, 'public/profile_run-task-resource-usage.json')
     );
 });
 

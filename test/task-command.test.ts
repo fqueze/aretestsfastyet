@@ -40,7 +40,7 @@ import { captureStreams } from '../cli/context.ts';
 import { diskCache } from '../cli/cache.ts';
 import { run } from '../cli/main.ts';
 
-const PROFILE_PATH = 'public/test_info/profile_resource-usage.json';
+const PROFILE_PATH = 'public/profile_run-task-resource-usage.json';
 
 /**
  * A minimal Gecko profile with the markers the parser reads.
@@ -236,6 +236,21 @@ test('task resolves <taskId>.<retryId> with .0 implied, and the retry reaches th
         `asked for ${source.requested.join(', ')}`
     );
     assert.match(json(explicit.stdout)['profileUrl'] as string, /\/runs\/3\/artifacts\//);
+});
+
+test('task falls back on the old profile path for a task from before the rename', async () => {
+    // Bug 1425785 moved the profile; a task from before it has only the old path.
+    const oldPath = 'public/test_info/profile_resource-usage.json';
+    const source = artifacts({
+        'TASK1/': definition('test-linux/opt-mochitest', 'autoland', 'a1b2c3d4e5f6'),
+        [`TASK1/runs/0/artifacts/${oldPath}`]: defaultProfile(),
+    });
+    const { code } = await invoke(['task', 'TASK1', '--json'], source);
+    assert.equal(code, ExitCode.Success);
+    assert.deepEqual(source.requested.slice(0, 2), [
+        `TASK1/runs/0/artifacts/${PROFILE_PATH}`,
+        `TASK1/runs/0/artifacts/${oldPath}`,
+    ]);
 });
 
 // --- the identity is presentation only ------------------------------------
@@ -562,7 +577,7 @@ test('--profiles says so when no failing test named one, and stays silent by def
     // "per-test" is load-bearing: the resource-usage profile is in the header
     // two lines above and is a different artifact, so the note must not read as
     // denying it.
-    assert.match(asked.stdout, /^profile https:\/\/\S+profile_resource-usage\.json$/m);
+    assert.match(asked.stdout, /^profile https:\/\/\S+profile_run-task-resource-usage\.json$/m);
 
     // Silent without the flag.
     const plain = await invoke(['task', 'TASK1'], source);
