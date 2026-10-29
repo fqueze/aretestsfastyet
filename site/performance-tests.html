@@ -127,6 +127,7 @@
 .controls select { max-width: 100%; }
 #status { font-size: 13px; color: #888; }
 #status:empty { display: none; }
+#status progress { width: 160px; margin-left: 12px; vertical-align: middle; }
 .methodology { margin-top: 16px; font-size: 13px; color: #666; line-height: 1.6; }
 .methodology summary { cursor: pointer; }
 .resolution-trigger { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 180px; color: inherit; text-decoration: none; font-variant-numeric: tabular-nums; }
@@ -176,17 +177,26 @@
         child rows break down the same totals and are not added to them again.
         Activity shows peak simultaneous running jobs in five-minute buckets over the UTC day.
         Each row is scaled to its own peak, shown in the Peak running column; hover for bucket counts.
-        The total row combines all configurations. Queue time is not plotted.</p>
-        <p>Bugs count distinct bugs linked to Perfherder regression alerts created in the cached 365-day window,
-        excluding improvements but retaining all regression triage statuses. This window applies to alert creation, not bug creation.
-        Bugs found uses cached Bugzilla resolutions from STMO query 128286, a daily-refreshed copy of the Performance Regression Tracker source limited to bugs created in the past 365 days. Hover for the full
-        breakdown, then click a category’s count to open just those bugs in Bugzilla. Duplicate is separate from Fixed.
-        Unknown means resolution data is loading, unavailable, or the bug is absent from that query. The column sorts by total bug count. Its tooltip compares the test’s share of all distinct bugs in the selected worker pool and project
-        with its runtime share; a bug linked to several tests counts for each of them, so bug shares can add up to more than 100%.
-        Exact job labels are mapped to signatures from up to three latest successful runs within 21 days;
-        retired signatures may be missing. Counts describe those signatures’ history, not the historical
-        worker pool. The yearly window does not move with the selected worker date. Aggregate and total
-        rows deduplicate bug IDs. Unmapped jobs show “—”; hover over counts for coverage details.</p>
+        The total row combines all configurations. Queue time is not plotted.
+        Previously loaded days are cached in this browser to speed up revisits.
+        A new version of the source data is downloaded again.</p>
+        <p>Bugs found counts distinct perf-alert bugs created in the past 365 days, using cached mappings and
+        resolutions from <a href="https://sql.telemetry.mozilla.org/queries/129802">STMO query 129802</a>. Like the Performance Regression Tracker, it includes only tests
+        listed in regression tables in each bug’s description, excluding improvement tables and bugs without
+        parsed regressions. Truncated tables are expanded with Treeherder regression alerts where available;
+        otherwise only the tests listed in the description are counted. Reassignment alone cannot include a bug.
+        All bug processing happens in STMO; the browser fetches one cached result.
+        The result refreshes daily at 05:00 UTC, including the tracker’s current job-label cache.
+        Results older than 48 hours are shown as unavailable.
+        Hover for the breakdown, then click a category’s count to open those bugs in Bugzilla.
+        Duplicate is separate from Fixed. The column sorts by total bug count. Its tooltip compares the test’s
+        share of distinct bugs in the selected worker pool and project with its runtime share; a bug linked to
+        several tests counts for each, so bug shares can add up to more than 100%.
+        Job labels use the tracker’s signature cache, with new signatures looked up through their latest jobs
+        within 90 days in the Treeherder database. Tests without a known job label cannot be attributed to this table.
+        Counts describe test history, not historical worker pools. The yearly window does not move with the
+        selected worker date. Group and total rows deduplicate bugs. Zero means no matching bugs were found;
+        “—” means bug data could not be loaded.</p>
     </details>
 </div>
 <script src="task-timeline-profiler.js"></script>

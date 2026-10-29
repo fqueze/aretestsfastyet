@@ -1,51 +1,23 @@
 import type { PerformanceRun } from './performance-view.ts';
 import { element, errorMessage } from './performance-dom.ts';
+import { indexPerformanceBugResults } from './performance-regressions.ts';
+import type { MappingIndex } from './performance-regressions.ts';
 
-interface BugMapping {
-    repository: string; job_label: string; regression_bug_ids: number[];
-    window_start: string; generated_at: string;
-}
-type MappingIndex = Map<string, BugMapping>;
 interface Bug { id: number; resolution?: string | null }
-interface QueryResult<T> { query_result?: { data?: { rows?: T[] } } }
-// STMO query 127887: regression bug IDs per job label and repository.
-const BUG_MAPPING_URL = 'https://sql.telemetry.mozilla.org/api/queries/127887/results.json?api_key=NwMRBaDDKmfnCcnXmcZbJt0Bw8haOT9USrTFat3f';
-// STMO query 128286: Bugzilla resolutions of perf-alert bugs.
-const RESOLUTIONS_URL = 'https://sql.telemetry.mozilla.org/api/queries/128286/results.json?api_key=6QHGJletDNYiwIl8M0F1fN3GhZynhqFnb1Z0MZ8D';
-
-export function indexPerformanceAlerts(rows: unknown): MappingIndex {
-    if (!Array.isArray(rows) || !rows.length) throw new Error('Bug results are empty');
-    const index: MappingIndex = new Map();
-    for (const row of rows as Record<string, unknown>[]) {
-        if (row['schema_version'] !== 3 || typeof row['repository'] !== 'string' ||
-            typeof row['job_label'] !== 'string' || typeof row['window_start'] !== 'string' ||
-            typeof row['generated_at'] !== 'string' || !Array.isArray(row['regression_bug_ids']) ||
-            !row['regression_bug_ids'].every(id => Number.isInteger(id) && id > 0)) {
-            throw new Error('Unsupported bug mapping format');
-        }
-        const mapping: BugMapping = {
-            repository: row['repository'], job_label: row['job_label'],
-            window_start: row['window_start'], generated_at: row['generated_at'],
-            regression_bug_ids: row['regression_bug_ids'] as number[],
-        };
-        const key = JSON.stringify([mapping.repository, mapping.job_label]);
-        if (index.has(key)) throw new Error('Duplicate job mapping in bug results');
-        index.set(key, mapping);
-    }
-    return index;
-}
+interface QueryResult<T> { query_result?: { retrieved_at?: string; data?: { rows?: T[] } } }
+// STMO query 129802: cached regression-only job mappings and bug resolutions.
+// Daily refresh: 129799 (descriptions), 129801 (database), 129837 (tracker labels).
+const BUG_RESULTS_URL = 'https://sql.telemetry.mozilla.org/api/queries/129802/results.json?api_key=NdYG70E9cg5hwu5hOLqeopSSeriuF63xiGQ0KPL8';
 
 export function countPerformanceAlerts(runs: Pick<PerformanceRun, 'project' | 'label'>[], index: MappingIndex) {
     const keys = new Set(runs.map(run => JSON.stringify([run.project, run.label])));
     const ids = new Set<number>();
-    let mapped = 0;
     for (const key of keys) {
         const match = index.get(key);
         if (!match) continue;
-        mapped++;
         match.regression_bug_ids.forEach(id => ids.add(id));
     }
-    return { bugIds: [...ids].sort((a, b) => a - b), total: ids.size, mapped, configurations: keys.size };
+    return { bugIds: [...ids].sort((a, b) => a - b), total: ids.size, mapped: keys.size, configurations: keys.size };
 }
 // Every job label (in any repository) each bug is linked to, built once per index.
 const bugLabelsCache = new WeakMap<MappingIndex, Map<number, Set<string>>>();
@@ -93,25 +65,6 @@ function bugResolution(bug: Bug): Resolution {
     if (!bug || typeof bug.resolution !== 'string') return 'Unknown';
     return ({ FIXED: 'Fixed', WONTFIX: 'Won’t fix', INVALID: 'Invalid', DUPLICATE: 'Duplicate',
         WORKSFORME: 'Works for me', '': 'Open' } as Record<string, Resolution>)[bug.resolution] || 'Other';
-}
-
-async function loadBugResolutions(url: string) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-    try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json() as QueryResult<Bug>;
-        const rows = data.query_result?.data?.rows;
-        if (!Array.isArray(rows)) throw new Error('Unsupported resolution results');
-        for (const bug of rows) {
-            if (Number.isInteger(bug.id)) bugResolutions.set(bug.id, bugResolution(bug));
-        }
-    } catch { /* Missing or inaccessible bugs remain explicitly unknown. */ }
-    finally {
-        clearTimeout(timeout);
-        updatePerformanceAlertCells();
-    }
 }
 
 // A bug count linking to those bugs in Bugzilla; a plain 0 when there are none.
@@ -166,9 +119,9 @@ export function updatePerformanceAlertCells() {
         summary.className = 'resolution-summary';
         for (const parts of [
             [`Runtime share on ${element<HTMLSelectElement>('date').value}: ${runtimeShare.toFixed(1)}%`],
-            ['Bugs from alerts in the past 365 days: ', bugListLink(counts.bugIds), ` of ${bugTotal.toLocaleString()} (${percent(counts.total, bugTotal)})`],
+            ['Regression bugs created in the past 365 days: ', bugListLink(counts.bugIds), ` of ${bugTotal.toLocaleString()} (${percent(counts.total, bugTotal)})`],
             ['Fixed bugs: ', bugListLink(fixedIds), ` of ${fixedTotal.toLocaleString()} (${percent(fixed, fixedTotal)})`],
-            ['Only found by this test: ', bugListLink(exclusive), ' (', bugListLink(exclusive.filter(isFixed)), ' fixed)'],
+            ['Only found by this test: ', bugListLink(exclusive)],
         ]) {
             const line = document.createElement('div');
             line.append(...parts);
@@ -228,17 +181,25 @@ export function updatePerformanceAlertCells() {
 
 export async function loadPerformanceAlerts(onReady: () => void) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-        const response = await fetch(BUG_MAPPING_URL, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Alert results: HTTP ${response.status}`);
+        const response = await fetch(BUG_RESULTS_URL, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Bug results: HTTP ${response.status}`);
         const result = await response.json() as QueryResult<unknown>;
-        const rows = result.query_result?.data?.rows;
-        performanceAlertsState.index = indexPerformanceAlerts(rows);
+        const generatedAt = result.query_result?.retrieved_at;
+        const age = Date.now() - Date.parse(generatedAt || '');
+        // A failed scheduled refresh leaves the last successful result in STMO.
+        // Allow one missed daily refresh, then stop presenting it as current.
+        if (!Number.isFinite(age) || age > 48 * 60 * 60 * 1000 || age < -5 * 60 * 1000) {
+            throw new Error('STMO bug data is stale or has no valid refresh time.');
+        }
+        const { index, resolutions } = indexPerformanceBugResults(result.query_result?.data?.rows);
+        bugResolutions.clear();
+        for (const [id, resolution] of resolutions) bugResolutions.set(id, bugResolution({ id, resolution }));
+        performanceAlertsState.index = index;
+        performanceAlertsState.windowStart = '';
+        performanceAlertsState.generatedAt = generatedAt!;
         performanceAlertsState.status = 'ready';
-        performanceAlertsState.windowStart = performanceAlertsState.index.values().next().value!.window_start;
-        performanceAlertsState.generatedAt = performanceAlertsState.index.values().next().value!.generated_at;
-        loadBugResolutions(RESOLUTIONS_URL);
     } catch (error) {
         performanceAlertsState.status = 'error';
         performanceAlertsState.error = `Bug counts unavailable: ${errorMessage(error)}`;
