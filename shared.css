@@ -135,13 +135,37 @@ button.active {
     }
 }
 
-/* Top-right hover menu of dashboards (injected by dashboards.js). */
-.dash-menu {
+/* Fixed top-right nav (injected by dashboards.js): the dashboards hover menu
+   and the GitHub source button. */
+.dash-nav {
     position: fixed;
     top: 12px;
     right: 12px;
     z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
     font-size: 0.9rem;
+}
+
+.dash-menu {
+    position: relative;
+}
+
+.dash-source {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    color: #333;
+    text-decoration: none;
+}
+
+.dash-source:hover {
+    background: #f0f0f0;
 }
 
 .dash-menu-trigger {
