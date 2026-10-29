@@ -259,6 +259,14 @@ a.dash-menu-item:hover .dash-menu-title {
    exist, so the menu becomes a row of small links at the foot of the page —
    where dashboards.js already appends it. */
 @media (max-width: 600px) {
+    .dash-nav {
+        position: static;
+        display: block;
+    }
+    .dash-source {
+        display: inline-flex;
+        margin-top: 12px;
+    }
     .dash-menu {
         position: static;
         margin-top: 32px;
