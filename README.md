@@ -64,48 +64,6 @@ A number of older or more specialized dashboards (Perma-Fails, Variant Impact,
 Errors & Warnings, Resource Usage, and others) are listed under "Less
 frequently used dashboards" on `help.html`.
 
-## Performance Tests data
-
-`performance-tests.html` shows performance jobs by worker pool, with runtime,
-activity and regression bug resolutions. Its TypeScript sources are in
-`site/performance*.ts`; build and serve it using the dashboard instructions below.
-
-Task timings come from the same Firefox CI worker artifacts as `workers.html`.
-The browser retains three processed days in memory and up to seven in IndexedDB.
-Cache keys include the artifact URL and date, so a new producer run invalidates
-old data. Storage failures fall back to downloading; the first visit to an
-uncached day still downloads the full worker artifact.
-
-Bug data comes from one cached [STMO query, 129802](https://sql.telemetry.mozilla.org/queries/129802).
-It parses regression tables using the Performance Regression Tracker’s rules
-and runs daily at **05:00 UTC**, refreshing three inputs synchronously:
-
-- [129799](https://sql.telemetry.mozilla.org/queries/129799) fetches public
-  `perf-alert` bugs created in the last 365 days, including descriptions and
-  resolutions, through a single server-side Bugzilla request.
-- [129801](https://sql.telemetry.mozilla.org/queries/129801) reads original
-  alert-summary membership and recent job labels directly from Treeherder PostgreSQL.
-- [129837](https://sql.telemetry.mozilla.org/queries/129837) fetches the tracker's
-  current job-label cache from GitHub. The final query decodes the GitHub content
-  response, prefers those mappings (including explicitly unresolved signatures),
-  and uses database labels for new signatures. There is no embedded snapshot.
-
-Only the final query needs a schedule: its `query_` dependencies execute afresh,
-with description parsing included in the final query. If an input fails, publication
-fails and STMO retains the previous successful result. The dashboard rejects
-results older than 48 hours and displays “—”; hover explains the failure.
-Inspect query 129802's execution history in STMO to diagnose refresh failures.
-The browser never calls the Treeherder or Bugzilla APIs, and no GitHub Action
-refreshes this data. STMO still uses Bugzilla's API server-side because the
-available BigQuery tables do not contain bug descriptions.
-
-Only bugs with parsed regression tables qualify. Truncated tables expand using
-original regression alerts; reassigned alerts cannot qualify an improvement-only
-bug. Group totals deduplicate bug IDs, and resolution links open just that
-category's bugs. The rolling year follows the bug-data refresh, independently of
-the selected worker day. Attribution follows the tracker's published label cache;
-unknown labels cannot be assigned to a dashboard row.
-
 ## How it works
 
 The site is a set of static HTML pages with inline CSS and JavaScript, sharing
